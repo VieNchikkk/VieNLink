@@ -249,8 +249,8 @@ powershell -File build\publish-release.ps1
 
 ## Версии и обновления
 
-- Текущая версия: **1.0.4-beta**, сборки — в [Releases](https://github.com/VieNchikkk/VieNLink/releases).
-- В релизе лежат `VieNLink-1.0.4-setup.exe`, портативный ZIP и `SHA256SUMS.txt`.
+- Текущая версия: **1.0.5-beta**, сборки — в [Releases](https://github.com/VieNchikkk/VieNLink/releases).
+- В релизе лежат `setup.exe`, портативный ZIP и `SHA256SUMS.txt`.
 - Что изменилось: [CHANGELOG.md](CHANGELOG.md).
 - Правила версий, схема данных и порядок выпуска: [docs/VERSIONING.md](docs/VERSIONING.md).
 - Настройки, источники и кэш переживают обновление; папки `DomVPN` и `MyrrProxy`
