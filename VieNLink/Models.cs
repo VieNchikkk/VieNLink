@@ -401,9 +401,26 @@ internal enum SiteRouteMode
     AllExceptListed,
 }
 
+/// <summary>
+/// Версии схем файлов данных. Увеличиваются при изменении формата, которое
+/// требует миграции; по ним приложение понимает, что файл от старой или новой версии.
+/// </summary>
+internal static class SchemaVersions
+{
+    public const int Settings = 1;
+    public const int NodeCache = 1;
+    public const int MtProtoCache = 1;
+}
+
 /// <summary>Настройки приложения. Хранятся в settings.json и переживают перезапуск.</summary>
 internal sealed class AppSettings
 {
+    /// <summary>
+    /// Версия схемы настроек. 0 — файл от версии, где поля ещё не было;
+    /// приведение к текущей схеме делает <see cref="SettingsUpgrade"/>.
+    /// </summary>
+    public int SchemaVersion { get; set; }
+
     /// <summary>Локальный mixed-порт (HTTP+SOCKS5), который слушает sing-box.</summary>
     public int MixedPort { get; set; } = 20800;
 
@@ -565,6 +582,9 @@ internal sealed class AppSettings
 /// <summary>Кэш разобранных узлов, чтобы приложение открывалось мгновенно.</summary>
 internal sealed class NodeCache
 {
+    /// <summary>Версия схемы кэша: см. <see cref="SchemaVersions"/>.</summary>
+    public int SchemaVersion { get; set; }
+
     public DateTime SavedAtUtc { get; set; }
     public List<CachedNode> Items { get; set; } = new();
 }
@@ -671,6 +691,9 @@ internal static class MtProtoRetention
 
 internal sealed class MtProtoCache
 {
+    /// <summary>Версия схемы кэша: см. <see cref="SchemaVersions"/>.</summary>
+    public int SchemaVersion { get; set; }
+
     public DateTime SavedAtUtc { get; set; }
     public List<MtProtoProxy> Items { get; set; } = new();
 }

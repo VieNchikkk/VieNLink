@@ -57,6 +57,10 @@ powershell -File build\publish-release.ps1
 powershell -File build\publish-installer.ps1
 ```
 
+Перед релизом поднимите версию в `VieNLink/VieNLink.csproj`, обновите `CHANGELOG.md`
+и следуйте [docs/VERSIONING.md](docs/VERSIONING.md): тег `vX.Y.Z[-beta]`, Pre-release
+для беты, вложения `setup.exe`, ZIP и `SHA256SUMS.txt`.
+
 Первый скрипт собирает self-contained `VieNLink.exe`, ZIP и кладёт рядом `core\`
 и `zapret\`, если они уже скачаны. Второй дополнительно собирает `setup.exe`
 (Inno Setup 6). Подпись Authenticode включается через `-PfxPath`/`-Thumbprint`

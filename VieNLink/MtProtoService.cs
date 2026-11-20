@@ -309,12 +309,27 @@ internal static class MtProtoService
     public static void SaveCache(IEnumerable<MtProtoProxy> proxies) =>
         JsonFileStore.Write(AppPaths.MtProtoPath, new MtProtoCache
         {
+            SchemaVersion = SchemaVersions.MtProtoCache,
             SavedAtUtc = DateTime.UtcNow,
             Items = proxies.ToList(),
         });
 
-    public static List<MtProtoProxy> LoadCache() =>
-        MigrateLegacyStatuses(JsonFileStore.Read<MtProtoCache>(AppPaths.MtProtoPath)?.Items ?? new List<MtProtoProxy>());
+    public static List<MtProtoProxy> LoadCache()
+    {
+        var cache = JsonFileStore.Read<MtProtoCache>(AppPaths.MtProtoPath);
+        if (cache is null)
+        {
+            return new List<MtProtoProxy>();
+        }
+
+        if (cache.SchemaVersion > SchemaVersions.MtProtoCache)
+        {
+            AppLog.Write("mtproto",
+                $"Кэш MTProto новее приложения (схема {cache.SchemaVersion}, поддерживается {SchemaVersions.MtProtoCache}).");
+        }
+
+        return MigrateLegacyStatuses(cache.Items);
+    }
 
     /// <summary>Старый кэш не знал поля Status: выводим его из задержки и даты проверки.</summary>
     private static List<MtProtoProxy> MigrateLegacyStatuses(List<MtProtoProxy> proxies)

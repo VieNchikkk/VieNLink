@@ -55,6 +55,10 @@ public partial class App : Application
         }
 
         Settings = JsonFileStore.Read<AppSettings>(AppPaths.SettingsPath) ?? new AppSettings();
+        if (SettingsUpgrade.Apply(Settings))
+        {
+            JsonFileStore.Write(AppPaths.SettingsPath, Settings);
+        }
         ApplyTheme(Settings.Theme);
 
         DispatcherUnhandledException += OnDispatcherUnhandledException;

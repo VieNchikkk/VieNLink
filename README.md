@@ -247,11 +247,21 @@ powershell -File build\publish-release.ps1
 `%LOCALAPPDATA%\VieNLink\core\sing-box.exe` уже есть ядро, оно кладётся рядом с exe
 в папку `core`, и приложение работает без скачивания.
 
+## Версии и обновления
+
+- Текущая версия: **1.0.4-beta**, сборки — в [Releases](https://github.com/VieNchikkk/VieNLink/releases).
+- В релизе лежат `VieNLink-1.0.4-setup.exe`, портативный ZIP и `SHA256SUMS.txt`.
+- Что изменилось: [CHANGELOG.md](CHANGELOG.md).
+- Правила версий, схема данных и порядок выпуска: [docs/VERSIONING.md](docs/VERSIONING.md).
+- Настройки, источники и кэш переживают обновление; папки `DomVPN` и `MyrrProxy`
+  переносятся автоматически.
+
 ## Участие и обратная связь
 
 - Как собрать и что проверить перед pull request — [CONTRIBUTING.md](CONTRIBUTING.md).
 - Уязвимости и приватность — [SECURITY.md](SECURITY.md).
 - Что изменилось между версиями — [CHANGELOG.md](CHANGELOG.md).
+- Версии и совместимость данных — [docs/VERSIONING.md](docs/VERSIONING.md).
 - Условия использования — [LICENSE](LICENSE).
 
 ## Лицензия

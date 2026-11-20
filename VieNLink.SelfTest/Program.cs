@@ -1863,6 +1863,13 @@ internal static class Program
         Check(SecretStore.Unprotect(new byte[] { 1, 2, 3, 4, 5 }) is null,
             "DPAPI: чужой файл не расшифровывается и не роняет приложение");
 
+        Console.WriteLine("Версии данных:");
+
+        var upgraded = new AppSettings();
+        Check(SettingsUpgrade.Apply(upgraded) && upgraded.SchemaVersion == SchemaVersions.Settings,
+            "настройки: старая схема мигрирует к текущей");
+        Check(!SettingsUpgrade.Apply(upgraded), "настройки: повторная миграция не требуется");
+
         Console.WriteLine("MTProto:");
 
         var mtprotoText = "Прокси для Telegram: tg://proxy?server=1.2.3.4&port=443&secret=abcdef0123456789\n" +

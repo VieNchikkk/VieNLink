@@ -311,6 +311,7 @@ internal static class NodeSourceService
         var now = DateTime.UtcNow;
         JsonFileStore.Write(AppPaths.NodesPath, new NodeCache
         {
+            SchemaVersion = SchemaVersions.NodeCache,
             SavedAtUtc = now,
             Items = nodes.Select(n => new CachedNode
             {
@@ -346,6 +347,13 @@ internal static class NodeSourceService
         if (cache is null)
         {
             return new List<ProxyNode>();
+        }
+
+        if (cache.SchemaVersion > SchemaVersions.NodeCache)
+        {
+            AppLog.Write("cache",
+                $"Кэш узлов новее приложения (схема {cache.SchemaVersion}, поддерживается {SchemaVersions.NodeCache}). " +
+                "Читаю известные поля; полная перезапись произойдёт после следующей проверки.");
         }
 
         var nodes = new List<ProxyNode>(cache.Items.Count);
