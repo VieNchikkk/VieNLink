@@ -2,6 +2,10 @@
 
 <img src="branding/vienlink-wordmark.png" alt="VieNLink" width="720">
 
+![status: beta](https://img.shields.io/badge/status-beta-F2C14E)
+![platform: Windows](https://img.shields.io/badge/platform-Windows-0078D4)
+![.NET 10](https://img.shields.io/badge/.NET-10-512BD4)
+
 > **Статус: бета-версия.** Основные режимы проверены, но возможны сбои и изменения
 > интерфейса. Для постоянной работы надёжнее своя подписка или свой сервер.
 
@@ -241,3 +245,17 @@ powershell -File build\publish-release.ps1
 Релизный скрипт собирает self-contained один exe в `release\`. Если в
 `%LOCALAPPDATA%\VieNLink\core\sing-box.exe` уже есть ядро, оно кладётся рядом с exe
 в папку `core`, и приложение работает без скачивания.
+
+## Участие и обратная связь
+
+- Как собрать и что проверить перед pull request — [CONTRIBUTING.md](CONTRIBUTING.md).
+- Уязвимости и приватность — [SECURITY.md](SECURITY.md).
+- Что изменилось между версиями — [CHANGELOG.md](CHANGELOG.md).
+- Условия использования — [LICENSE](LICENSE).
+
+## Лицензия
+
+© 2026 VieN. Исходный код предоставлен для личного ознакомления и сборки; распространение
+изменённых сборок и публикация кода без разрешения автора запрещены. Сторонние компоненты
+(sing-box, zapret, WinDivert, wintun) распространяются по своим лицензиям.
+

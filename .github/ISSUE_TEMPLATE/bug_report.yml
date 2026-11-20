@@ -1,0 +1,70 @@
+name: Ошибка
+description: Что-то не работает или работает не так, как ожидалось
+title: "[Ошибка]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за отчёт. Не прикладывайте ссылки на личные подписки и токены.
+  - type: input
+    id: version
+    attributes:
+      label: Версия VieNLink
+      description: Из «Общие» или из имени файла
+      placeholder: 1.0.4-beta
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows
+      placeholder: Windows 11 24H2 x64
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Режим
+      options:
+        - Системный прокси
+        - TUN
+        - Обход DPI (zapret)
+        - Свой обход DPI (WinDivert)
+        - TUN-обход
+        - Видео YouTube через узел
+        - Telegram через узел
+        - Другое / не подключено
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги воспроизведения
+      placeholder: |
+        1. Обновил списки
+        2. Нажал «Партия 500»
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемое и фактическое поведение
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Журнал
+      description: Фрагмент из %LOCALAPPDATA%\VieNLink\logs (без токенов подписок)
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Проверено
+      options:
+        - label: Я проверил, что использую последнюю версию
+          required: true
+        - label: В отчёте нет ссылок на личные подписки и токенов
+          required: true

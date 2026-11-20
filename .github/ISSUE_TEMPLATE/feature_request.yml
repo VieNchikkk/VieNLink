@@ -1,0 +1,30 @@
+name: Предложение
+description: Идея новой функции или улучшения
+title: "[Идея]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую задачу решает
+      description: Что сейчас неудобно или чего не хватает
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Предлагаемое решение
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Альтернативы
+      description: Что ещё рассматривали
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Проверено
+      options:
+        - label: Похожего предложения ещё нет в issues
+          required: true
