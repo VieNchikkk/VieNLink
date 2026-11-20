@@ -1,0 +1,438 @@
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Media;
+using System.Windows.Threading;
+
+namespace VieNLink;
+
+public partial class MainWindow : Window
+{
+    /// <summary>Сколько узлов проверяем за один запуск: бесплатные списки большие, но проверка не бесконечная.</summary>
+    private const int TestBatchSize = 500;
+
+    private readonly AppSettings _settings = App.Settings;
+    private readonly ProxyManager _manager;
+    private readonly ZapretService _zapret = new();
+    private readonly DesyncService _desync = new();
+    private readonly TunBypassService _tunBypass = new();
+    private bool _tunBypassStartedDesync;
+    private readonly ObservableCollection<NodeRow> _rows = new();
+    private readonly ObservableCollection<NodeRow> _workingRows = new();
+    private readonly ObservableCollection<SourceRow> _sourceRows = new();
+    private readonly ObservableCollection<MtProtoRow> _mtprotoRows = new();
+    private readonly ObservableCollection<MtProtoRow> _mtprotoDeadRows = new();
+    private List<SourceDefinition> _sources = new();
+    private ICollectionView? _view;
+    private ICollectionView? _workingView;
+    private TrayIconService? _tray;
+    private ZapretWidget? _zapretWidget;
+    private DispatcherTimer? _idleTimer;
+    private CancellationTokenSource? _idleCts;
+    private bool _idleTesting;
+    private DateTime? _lastIdleTestUtc;
+    private DispatcherTimer? _autoTimer;
+    private CancellationTokenSource? _operation;
+    private bool _busy;
+    private bool _exitRequested;
+    private bool _closing;
+    private bool _loadingSettings;
+    private bool _trayHintShown;
+    private readonly HashSet<string> _failedForSession = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, NodeRow> _rowIndex = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, ObservableCollection<NodeRow>> _rowOwner = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Убранные из таблицы узлы: нужны, чтобы откат проверки вернул их обратно.</summary>
+    private readonly List<ProxyNode> _droppedNodes = new();
+    private Task _initialLoad = Task.CompletedTask;
+    private DateTime _lastTestedSummaryUtc;
+    private int _failoverCount;
+    private int _warmSwitchCount;
+    private int _coldSwitchCount;
+    private DateTime? _lastFailoverUtc;
+    private string _lastFailoverNote = "—";
+
+    /// <summary>Сбой узла пришёл во время другой операции: переключимся сразу после неё.</summary>
+    private string? _pendingFailoverName;
+
+    public MainWindow()
+    {
+        InitializeComponent();
+
+        _manager = new ProxyManager(_settings);
+        _manager.StateChanged += OnManagerStateChanged;
+        _manager.NodeUnhealthy += OnNodeUnhealthy;
+        _manager.TrafficUpdated += OnTrafficUpdated;
+        AppLog.LineWritten += OnLogLine;
+
+        _view = CollectionViewSource.GetDefaultView(_rows);
+        _view.Filter = FilterNode;
+        NodesGrid.ItemsSource = _view;
+
+        _workingView = CollectionViewSource.GetDefaultView(_workingRows);
+        _workingView.Filter = FilterWorkingNode;
+        WorkingGrid.ItemsSource = _workingView;
+
+        // По умолчанию — от меньшего пинга к большему; непроверенные (null) в конце.
+        _view.SortDescriptions.Add(new SortDescription(nameof(NodeRow.PingSortValue), ListSortDirection.Ascending));
+        _workingView.SortDescriptions.Add(new SortDescription(nameof(NodeRow.PingSortValue), ListSortDirection.Ascending));
+        SourcesList.ItemsSource = _sourceRows;
+        MtProtoGrid.ItemsSource = _mtprotoRows;
+        MtProtoDeadGrid.ItemsSource = _mtprotoDeadRows;
+
+        // Источники делятся на «Мои подписки» и «Публичные», чтобы не путаться.
+        if (CollectionViewSource.GetDefaultView(_sourceRows) is { } sourcesView)
+        {
+            sourcesView.GroupDescriptions.Add(new PropertyGroupDescription(nameof(SourceRow.GroupName)));
+            sourcesView.SortDescriptions.Add(new SortDescription(nameof(SourceRow.GroupName), ListSortDirection.Ascending));
+            sourcesView.SortDescriptions.Add(new SortDescription(nameof(SourceRow.Name), ListSortDirection.Ascending));
+            SourcesList.ItemsSource = sourcesView;
+        }
+
+        BuildZapretPresetList();
+        BuildDesyncStrategyList();
+        BuildTunBypassStrategyList();
+        LoadSettingsToUi();
+        // Кэш на десятки тысяч узлов читается и разбирается в фоне: окно появляется сразу.
+        _initialLoad = LoadSourcesAndCacheAsync();
+        InitializeTray();
+        _idleTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
+        _idleTimer.Tick += OnIdleTick;
+        _idleTimer.Start();
+        UpdateConnectionUi();
+        UpdateCoreStatus();
+        UpdateZapretUi();
+        UpdateDesyncUi();
+        UpdateTunBypassUi();
+        AppendLog(AppInfo.DisplayName + " запущен. Обновите списки, проверьте узлы и подключитесь.");
+        Loaded += async (_, _) =>
+        {
+            await _initialLoad;
+
+            var arguments = Environment.GetCommandLineArgs();
+
+            // Автозапуск из ключа Run: стартуем в трее, не выкидывая окно поверх работы.
+            if (arguments.Any(arg => arg.Equals("--minimized", StringComparison.OrdinalIgnoreCase)))
+            {
+                Hide();
+            }
+
+            // Запуск после повышения прав из виджета: показываем только виджет,
+            // главное окно остаётся в трее.
+            var widgetRequested = arguments.Any(arg =>
+                arg.Equals("--widget", StringComparison.OrdinalIgnoreCase));
+            if (widgetRequested)
+            {
+                ToggleZapretWidget();
+                Hide();
+            }
+
+            await AutoRefreshIfStaleAsync();
+            await AutoTickAsync();
+
+            // Запуск после повышения прав: включаем обход DPI, свой обход или подключаемся в TUN-режиме.
+            if (arguments.Any(arg => arg.Equals("--store-loopback", StringComparison.OrdinalIgnoreCase)))
+            {
+                var loopback = await WindowsIntegration.EnableStoreAppLoopbackAsync(CancellationToken.None);
+                StoreLoopbackText.Text = loopback.Message;
+                SetStatus("Совместимость с приложениями Магазина", loopback.Message);
+            }
+            else if (arguments.Any(arg => arg.Equals("--tun-bypass-tune", StringComparison.OrdinalIgnoreCase)))
+            {
+                await StartTunBypassAsync(forceTune: true);
+            }
+            else if (arguments.Any(arg => arg.Equals("--tun-bypass", StringComparison.OrdinalIgnoreCase)))
+            {
+                await StartTunBypassAsync();
+            }
+            else if (arguments.Any(arg => arg.Equals("--desync-tune", StringComparison.OrdinalIgnoreCase)))
+            {
+                await StartDesyncAsync(true);
+            }
+            else if (arguments.Any(arg => arg.Equals("--desync", StringComparison.OrdinalIgnoreCase)))
+            {
+                await StartDesyncAsync(false);
+            }
+            else if (_settings.TunBypassAutoStart && IsAdministrator())
+            {
+                await StartTunBypassAsync();
+            }
+            else if (_settings.DesyncAutoStart && DesyncService.IsInstalled && IsAdministrator())
+            {
+                await StartDesyncAsync(false);
+            }
+            else if (arguments.Any(arg => arg.Equals("--zapret-tune", StringComparison.OrdinalIgnoreCase)))
+            {
+                await StartZapretAsync(true);
+            }
+            else if (arguments.Any(arg => arg.Equals("--zapret", StringComparison.OrdinalIgnoreCase)))
+            {
+                await StartZapretAsync(false);
+            }
+            else if (_settings.ZapretAutoStart && ZapretService.IsInstalled && IsAdministrator())
+            {
+                await StartZapretAsync(false);
+            }
+            else if (arguments.Any(arg => arg.Equals("--tunnel", StringComparison.OrdinalIgnoreCase)) &&
+                     !_manager.IsConnected)
+            {
+                var node = PickBestNode();
+                if (node is null)
+                {
+                    SetStatus("Нет узлов для TUN", "Обновите списки и проверьте узлы");
+                }
+                else
+                {
+                    await ConnectAsync(node);
+                }
+            }
+        };
+
+        _autoTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
+        _autoTimer.Tick += async (_, _) => await AutoTickAsync();
+        _autoTimer.Start();
+    }
+
+    /// <summary>Раз в минуту проверяем, не пора ли обновить списки и поискать новые источники.</summary>
+    private async Task AutoTickAsync()
+    {
+        if (_busy || _closing)
+        {
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        var refreshDue = _settings.AutoRefreshMinutes > 0 &&
+                         now - _settings.LastAutoRefreshUtc >= TimeSpan.FromMinutes(_settings.AutoRefreshMinutes);
+        var discoveryDue = _settings.AutoDiscoverSources &&
+                           now - _settings.LastDiscoveryUtc >= TimeSpan.FromHours(Math.Max(1, _settings.AutoDiscoverHours));
+
+        // Список заполнен: не тянем новые узлы и не ищем источники, пока накопленные не проверены.
+        if ((refreshDue || discoveryDue) && AtNodeLimit)
+        {
+            NotifyNodeLimit();
+            return;
+        }
+
+        if ((!refreshDue && !discoveryDue) || !BeginOperation())
+        {
+            return;
+        }
+
+        try
+        {
+            if (refreshDue)
+            {
+                _settings.LastAutoRefreshUtc = now;
+                SaveSettings();
+                AppendLog("Автообновление списков…");
+                var count = await RefreshSourcesCoreAsync(testAfter: _settings.TestAfterRefresh, testLimit: 150);
+                AppendLog($"Автообновление: узлов {count}");
+            }
+
+            if (discoveryDue && !_operation!.IsCancellationRequested)
+            {
+                _settings.LastDiscoveryUtc = now;
+                SaveSettings();
+                await DiscoverSourcesCoreAsync();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            AppendLog("Автоцикл остановлен");
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("auto", "Автоцикл не удался", exception);
+        }
+        finally
+        {
+            EndOperation();
+            UpdateConnectionUi();
+        }
+    }
+
+    private async void OnDiscoverClick(object sender, RoutedEventArgs e)
+    {
+        if (AtNodeLimit)
+        {
+            NotifyNodeLimit();
+            SetStatus("Достигнут лимит узлов",
+                $"В списке {NodeCount} из {_settings.MaxTotalNodes}. Сначала проверьте накопленные: «Узлы» → «Все узлы»");
+            return;
+        }
+
+        if (!BeginOperation())
+        {
+            return;
+        }
+
+        try
+        {
+            await DiscoverSourcesCoreAsync();
+            _settings.LastDiscoveryUtc = DateTime.UtcNow;
+            SaveSettings();
+        }
+        catch (OperationCanceledException)
+        {
+            SetStatus("Поиск источников остановлен", string.Empty);
+        }
+        catch (Exception exception)
+        {
+            ReportError("Не удалось найти новые источники", exception);
+        }
+        finally
+        {
+            EndOperation();
+            UpdateConnectionUi();
+        }
+    }
+
+    private async Task DiscoverSourcesCoreAsync()
+    {
+        if (AtNodeLimit)
+        {
+            NotifyNodeLimit();
+            return;
+        }
+
+        SetStatus("Ищу новые источники", "GitHub и публичные сайты: свежие списки узлов…");
+        var progress = new Progress<string>(line =>
+        {
+            StatusDetail.Text = line;
+            AppendLog(line);
+        });
+
+        var result = await SourceDiscoveryService.DiscoverAsync(_sources, progress, _operation!.Token);
+        foreach (var source in result.Sources)
+        {
+            _sources.Add(source);
+            _sourceRows.Add(new SourceRow(source));
+        }
+
+        if (result.Sources.Count > 0)
+        {
+            MergeNodes(result.Nodes);
+            var removed = PruneAutoSources();
+            NodeSourceService.SaveSources(_sources);
+            AppendLog($"Найдено источников: {result.Sources.Count}, узлов {result.Nodes.Count}" +
+                      (removed > 0 ? $", старых автоисточников удалено: {removed}" : string.Empty));
+            SetStatus("Найдены новые источники", $"Добавлено {result.Sources.Count}, узлов {result.Nodes.Count}");
+            _tray?.ShowBalloon(
+                "Найдены новые источники",
+                string.Join(Environment.NewLine, result.Sources.Select(s => s.Name)) + Environment.NewLine + $"Узлов: {result.Nodes.Count}");
+        }
+        else
+        {
+            var details = $"Проверено файлов: {result.FilesChecked}";
+            if (!string.IsNullOrWhiteSpace(result.Error))
+            {
+                details += " · " + result.Error;
+            }
+
+            SetStatus("Новых источников нет", details);
+        }
+    }
+
+    /// <summary>
+    /// Дневные подписки публичных сайтов меняют адрес каждый день: держим по 5 свежих
+    /// автоисточников на сайт (на GitHub — на репозиторий), иначе список превращается в свалку.
+    /// </summary>
+    private int PruneAutoSources()
+    {
+        const int keepPerSite = 5;
+        var removed = 0;
+        var groups = _sources
+            .Where(s => s.IsAutoDiscovered && !s.IsMine)
+            .GroupBy(SourceGroupKey)
+            .ToList();
+
+        foreach (var group in groups)
+        {
+            foreach (var source in group
+                         .OrderByDescending(s => s.AddedAtUtc)
+                         .ThenByDescending(s => s.LastCheckedUtc)
+                         .Skip(keepPerSite)
+                         .ToList())
+            {
+                _sources.Remove(source);
+                var row = _sourceRows.FirstOrDefault(r => ReferenceEquals(r.Source, source));
+                if (row is not null)
+                {
+                    _sourceRows.Remove(row);
+                }
+
+                removed++;
+            }
+        }
+
+        return removed;
+    }
+
+    /// <summary>Ключ группы источников: сайт, а для GitHub — конкретный репозиторий.</summary>
+    private static string SourceGroupKey(SourceDefinition source)
+    {
+        if (!Uri.TryCreate(source.Url, UriKind.Absolute, out var uri))
+        {
+            return source.Name;
+        }
+
+        var host = uri.Host.ToLowerInvariant();
+        if (host != "raw.githubusercontent.com")
+        {
+            return host;
+        }
+
+        var parts = uri.AbsolutePath.Trim('/').Split('/');
+        return parts.Length >= 2 ? host + "/" + parts[0] + "/" + parts[1] : host;
+    }
+
+    /// <summary>При запуске подтягиваем устаревшие подписки, чтобы список не был «вчерашним».</summary>
+    private async Task AutoRefreshIfStaleAsync()
+    {
+        if (!_settings.AutoUpdateSubscriptions || _busy || _sources.Count == 0)
+        {
+            return;
+        }
+
+        if (AtNodeLimit)
+        {
+            NotifyNodeLimit();
+            return;
+        }
+
+        var threshold = TimeSpan.FromHours(Math.Clamp(_settings.AutoUpdateHours, 1, 168));
+        var stale = _sources.Any(s => s.Enabled && (s.LastCheckedUtc is null || DateTime.UtcNow - s.LastCheckedUtc.Value > threshold));
+        if (!stale || !BeginOperation())
+        {
+            return;
+        }
+
+        try
+        {
+            var count = await RefreshSourcesCoreAsync(testAfter: false, testLimit: 0);
+            _settings.LastAutoRefreshUtc = DateTime.UtcNow;
+            SaveSettings();
+            SetStatus("Подписки обновлены", $"Узлов: {count}, MTProto: {_mtprotoRows.Count}");
+        }
+        catch (OperationCanceledException)
+        {
+            SetStatus("Автообновление отменено", string.Empty);
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("sources", "Автообновление не удалось", exception);
+            StatusDetail.Text = exception.Message;
+        }
+        finally
+        {
+            EndOperation();
+            UpdateConnectionUi();
+        }
+    }
+
+}

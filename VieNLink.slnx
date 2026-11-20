@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="VieNLink/VieNLink.csproj" />
+  <Project Path="VieNLink.SelfTest/VieNLink.SelfTest.csproj" />
+</Solution>

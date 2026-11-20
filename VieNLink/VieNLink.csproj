@@ -1,0 +1,44 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <WindowsSdkPackageVersion>10.0.26100.87</WindowsSdkPackageVersion>
+
+    <Version>1.0.4</Version>
+    <AssemblyVersion>1.0.4.0</AssemblyVersion>
+    <FileVersion>1.0.4.0</FileVersion>
+    <InformationalVersion>1.0.4-beta</InformationalVersion>
+    <AssemblyName>VieNLink</AssemblyName>
+    <RootNamespace>VieNLink</RootNamespace>
+    <Product>VieNLink (бета)</Product>
+    <AssemblyTitle>VieNLink (бета) — клиент свободных узлов</AssemblyTitle>
+    <Description>VieNLink — бета-версия клиента прокси для Windows: собирает публичные узлы VLESS/VMess/Trojan/Shadowsocks, проверяет задержку через sing-box и переключает системный прокси.</Description>
+    <Company>VieN</Company>
+    <Authors>VieN</Authors>
+    <Copyright>© 2026 VieN</Copyright>
+    <NeutralLanguage>ru-RU</NeutralLanguage>
+
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\VieNLink.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\VieNLink.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="VieNLink.SelfTest" />
+  </ItemGroup>
+
+</Project>

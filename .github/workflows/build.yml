@@ -1,0 +1,26 @@
+name: build
+
+# Сборка и быстрые проверки без сети: парсеры, маршрутизация, склейка узлов.
+# Живые прогоны (liveness, checkconfigs) требуют скачивания ядра и узлов — их запускают вручную.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Установить .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Сборка
+        run: dotnet build VieNLink.slnx --nologo
+
+      - name: Тесты парсеров и конфига
+        run: dotnet run --project VieNLink.SelfTest -- parsers

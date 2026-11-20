@@ -1,0 +1,63 @@
+<Window x:Class="VieNLink.ZapretWidget"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="VieNLink — обход"
+        Width="212"
+        SizeToContent="Height"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        Topmost="True"
+        ResizeMode="NoResize"
+        WindowStartupLocation="Manual"
+        FontFamily="Segoe UI"
+        FontSize="11">
+
+    <Border Background="{DynamicResource PanelBrush}"
+            BorderBrush="{DynamicResource BorderBrush}"
+            BorderThickness="1"
+            CornerRadius="10"
+            Padding="9">
+        <StackPanel>
+            <Grid x:Name="Header" Background="Transparent" MouseLeftButtonDown="OnHeaderMouseDown">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse x:Name="WidgetDot" Width="8" Height="8" Fill="{DynamicResource DangerBrush}"
+                             Margin="0,0,6,0" VerticalAlignment="Center" />
+                    <TextBlock x:Name="WidgetTitle" Text="Обход DPI" FontWeight="SemiBold" FontSize="11.5"
+                               Foreground="{DynamicResource TextStrongBrush}" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button x:Name="WidgetCollapseButton" Content="▾" Style="{StaticResource SmallButton}"
+                            Padding="4,0" FontSize="10" Margin="0,0,2,0" Click="OnCollapseClick"
+                            ToolTip="Свернуть или развернуть виджет" />
+                    <Button Content="✕" Style="{StaticResource SmallButton}"
+                            Padding="4,0" FontSize="10" Click="OnCloseClick" ToolTip="Скрыть виджет" />
+                </StackPanel>
+            </Grid>
+
+            <StackPanel x:Name="WidgetBody">
+                <Button x:Name="WidgetZapretButton" Content="Обход запрет" Style="{StaticResource SmallButton}"
+                        Margin="0,7,0,0" HorizontalContentAlignment="Center" Click="OnZapretClick"
+                        ToolTip="Обход DPI (zapret): первый запуск подбирает стратегию сам" />
+
+                <Button x:Name="WidgetDesyncButton" Content="Свой обход DPI" Style="{StaticResource SmallButton}"
+                        Margin="0,4,0,0" HorizontalContentAlignment="Center" Click="OnDesyncClick"
+                        ToolTip="Свой обход на WinDivert: первый запуск подбирает стратегию сам" />
+
+                <Button x:Name="WidgetVideoButton" Content="Видео YouTube" Style="{StaticResource SmallButton}"
+                        Margin="0,4,0,0" HorizontalContentAlignment="Center" Click="OnVideoClick"
+                        ToolTip="YouTube через прокси-узел, остальные сайты — напрямую" />
+
+                <TextBlock x:Name="WidgetStatus" FontSize="9.5"
+                           Foreground="{DynamicResource TextSoftBrush}" TextWrapping="Wrap"
+                           Margin="0,6,0,0" Text="Ничего не включено — выберите способ" />
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>

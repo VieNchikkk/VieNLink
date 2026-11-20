@@ -1,0 +1,60 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Тёмная тема (по умолчанию): графит и приглушённый зелёный, как в DeepSeek. -->
+    <SolidColorBrush x:Key="AppBackgroundBrush" Color="#FF18191B" />
+    <SolidColorBrush x:Key="PanelBrush" Color="#E61E2023" />
+    <SolidColorBrush x:Key="CardBrush" Color="#E626292C" />
+    <SolidColorBrush x:Key="SurfaceBrush" Color="#E62A2D31" />
+    <SolidColorBrush x:Key="ChipBrush" Color="#E62B2F34" />
+    <SolidColorBrush x:Key="InnerBrush" Color="#E6222528" />
+    <SolidColorBrush x:Key="SecondaryButtonBrush" Color="#E62E3236" />
+
+    <SolidColorBrush x:Key="BorderBrush" Color="#FF34383D" />
+    <SolidColorBrush x:Key="BorderSoftBrush" Color="#FF3F444A" />
+    <SolidColorBrush x:Key="BorderStrongBrush" Color="#FF45494E" />
+    <SolidColorBrush x:Key="BorderHoverBrush" Color="#FF6C7278" />
+
+    <SolidColorBrush x:Key="TextBrush" Color="#FFF2F3F5" />
+    <SolidColorBrush x:Key="TextStrongBrush" Color="#FFF7F8F9" />
+    <SolidColorBrush x:Key="TextSoftBrush" Color="#FFE9EBEE" />
+    <SolidColorBrush x:Key="MutedBrush" Color="#FFA3A9AF" />
+    <SolidColorBrush x:Key="MutedStrongBrush" Color="#FFC9CED4" />
+
+    <SolidColorBrush x:Key="AccentBrush" Color="#FF9CCDB0" />
+    <SolidColorBrush x:Key="AccentContrastBrush" Color="#FF09201B" />
+
+    <!-- Подсветка важных действий «второго плана»: тонированная плашка в цвет акцента. -->
+    <SolidColorBrush x:Key="AccentSurfaceBrush" Color="#33224A3A" />
+    <SolidColorBrush x:Key="AccentBorderBrush" Color="#5559A57A" />
+    <SolidColorBrush x:Key="PositiveTextBrush" Color="#FFB3EFCF" />
+
+    <SolidColorBrush x:Key="DangerBrush" Color="#FFF08C9C" />
+    <SolidColorBrush x:Key="DangerSurfaceBrush" Color="#E63A2028" />
+    <SolidColorBrush x:Key="DangerPressedBrush" Color="#FF4A2832" />
+
+    <SolidColorBrush x:Key="PlaceholderBrush" Color="#FF8E949A" />
+    <SolidColorBrush x:Key="PlaceholderIconBrush" Color="#FF5E646B" />
+
+    <SolidColorBrush x:Key="WarningBrush" Color="#FFF2C14E" />
+    <SolidColorBrush x:Key="WarningSurfaceBrush" Color="#4DF2C14E" />
+
+    <SolidColorBrush x:Key="TableBackgroundBrush" Color="#FF1C1E21" />
+    <SolidColorBrush x:Key="TableRowBrush" Color="#FF202327" />
+    <SolidColorBrush x:Key="TableAlternateRowBrush" Color="#FF232629" />
+    <SolidColorBrush x:Key="MaskedRowBrush" Color="#FF4A3D0A" />
+    <SolidColorBrush x:Key="WorkingRowBrush" Color="#FF17301F" />
+    <SolidColorBrush x:Key="UntestedRowBrush" Color="#FF3A1E1E" />
+    <SolidColorBrush x:Key="TableGridLineBrush" Color="#FF2C3035" />
+    <SolidColorBrush x:Key="TableHoverBrush" Color="#FF2B2F33" />
+    <SolidColorBrush x:Key="TableSelectionBrush" Color="#FF353A3F" />
+    <SolidColorBrush x:Key="TableHeaderHoverBrush" Color="#FF26292D" />
+
+    <SolidColorBrush x:Key="TabHoverBrush" Color="#E6272A2E" />
+    <SolidColorBrush x:Key="TabSelectedBrush" Color="#FF2E3237" />
+    <SolidColorBrush x:Key="TabSelectedStrongBrush" Color="#FF32363B" />
+
+    <SolidColorBrush x:Key="ToggleTrackBrush" Color="#FF474B50" />
+    <SolidColorBrush x:Key="ScrollThumbBrush" Color="#FF474C53" />
+    <SolidColorBrush x:Key="ScrollThumbHoverBrush" Color="#FF5C636B" />
+    <SolidColorBrush x:Key="ScrollThumbDragBrush" Color="#FF6C737B" />
+</ResourceDictionary>

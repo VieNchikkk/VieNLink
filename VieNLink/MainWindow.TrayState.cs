@@ -1,0 +1,256 @@
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.IO;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Media;
+using System.Windows.Threading;
+
+namespace VieNLink;
+
+public partial class MainWindow
+{
+    // ---------- состояние и трей ----------
+
+    private bool BeginOperation()
+    {
+        _idleCts?.Cancel();
+
+        if (_busy)
+        {
+            return false;
+        }
+
+        _busy = true;
+        _operation = new CancellationTokenSource();
+        SetBusy(true);
+        return true;
+    }
+
+    private void EndOperation()
+    {
+        _busy = false;
+        _operation?.Dispose();
+        _operation = null;
+        SetBusy(false);
+
+        // Сбой узла, замеченный во время проверки или другой операции, обрабатываем сейчас.
+        if (_pendingFailoverName is { } pending)
+        {
+            _pendingFailoverName = null;
+            Dispatcher.BeginInvoke(new Action(() => _ = HandleUnhealthyNodeAsync(pending)));
+        }
+    }
+
+    private void SetBusy(bool busy)
+    {
+        RefreshButton.IsEnabled = !busy;
+        BypassButton.IsEnabled = !busy;
+        TestSelectedButton.IsEnabled = !busy;
+        TestBatchButton.IsEnabled = !busy;
+        TestAllButton.IsEnabled = !busy;
+        SpeedTestButton.IsEnabled = !busy;
+        ConnectSelectedButton.IsEnabled = !busy;
+        DisconnectButton.IsEnabled = !busy;
+        ConnectButton.IsEnabled = !busy;
+        DesyncToggleButton.IsEnabled = !busy;
+        DesyncInstallButton.IsEnabled = !busy;
+        DesyncTuneButton.IsEnabled = !busy;
+        DesyncProbeButton.IsEnabled = !busy;
+        TunBypassToggleButton.IsEnabled = !busy;
+        TunBypassProbeButton.IsEnabled = !busy;
+        VideoNodeButton.IsEnabled = !busy;
+        BlockDiagnoseButton.IsEnabled = !busy;
+        CancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
+        Cursor = busy ? System.Windows.Input.Cursors.Wait : System.Windows.Input.Cursors.Arrow;
+        ZapretStateChanged?.Invoke();
+    }
+
+    private void OnCancelClick(object sender, RoutedEventArgs e)
+    {
+        _operation?.Cancel();
+        FooterText.Text = "Останавливаю…";
+    }
+
+    private void SetStatus(string status, string detail)
+    {
+        StatusText.Text = status;
+        StatusDetail.Text = detail;
+        if (_manager.IsConnected)
+        {
+            StatusDot.Fill = (Brush)FindResource("AccentBrush");
+        }
+    }
+
+    private void ReportError(string title, Exception exception)
+    {
+        AppLog.Write("ui", title, exception);
+        StatusText.Text = title;
+        StatusDetail.Text = exception.Message;
+        StatusDot.Fill = (Brush)FindResource("DangerBrush");
+        FooterText.Text = exception.Message;
+        _tray?.ShowBalloon(title, exception.Message, warning: true);
+    }
+
+    private void InitializeTray()
+    {
+        _tray = new TrayIconService();
+        _tray.ShowRequested += () =>
+        {
+            _idleCts?.Cancel();
+            Show();
+            WindowState = WindowState.Normal;
+            Activate();
+        };
+        _tray.WidgetRequested += ToggleZapretWidget;
+        _tray.NodeSelected += OnTrayNodeSelected;
+        _tray.ToggleRequested += async () =>
+        {            try
+            {
+                if (_manager.IsConnected || _manager.IsKillSwitchHeld)
+                {
+                    await DisconnectAsync();
+                    return;
+                }
+
+                var node = PickBestNode();
+                if (node is null)
+                {
+                    _tray.ShowBalloon("Нет узлов", "Обновите списки в окне VieNLink.", warning: true);
+                    return;
+                }
+
+                await ConnectAsync(node);
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write("tray", "Ошибка переключения из трея", exception);
+            }
+        };
+        _tray.ExitRequested += () =>
+        {
+            _exitRequested = true;
+            Close();
+        };
+    }
+
+    private static bool IsAdministrator()
+    {
+        using var identity = System.Security.Principal.WindowsIdentity.GetCurrent();
+        var principal = new System.Security.Principal.WindowsPrincipal(identity);
+        return principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+    }
+
+    /// <summary>Перезапуск с повышением прав через UAC. Настройки и списки сохраняются на диск.</summary>
+    private static bool TryRestartElevated(string argument = "--tunnel")
+    {
+        try
+        {
+            var path = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(path))
+            {
+                return false;
+            }
+
+            var arguments = argument;
+            if (Path.GetFileName(path).Equals("dotnet.exe", StringComparison.OrdinalIgnoreCase))
+            {
+                // Запуск через dotnet (dotnet VieNLink.dll / dotnet run): перезапускаем тот же DLL.
+                // Assembly.Location в single-file всегда пуст, поэтому имя берём из GetName(),
+                // а каталог — из AppContext.BaseDirectory.
+                var assemblyName = System.Reflection.Assembly.GetEntryAssembly()?.GetName().Name;
+                if (string.IsNullOrEmpty(assemblyName))
+                {
+                    return false;
+                }
+
+                var assembly = Path.Combine(AppContext.BaseDirectory, assemblyName + ".dll");
+                if (!File.Exists(assembly))
+                {
+                    return false;
+                }
+
+                arguments = "\"" + assembly + "\" " + argument;
+            }
+
+            Process.Start(new ProcessStartInfo(path, arguments)
+            {
+                UseShellExecute = true,
+                Verb = "runas",
+            });
+            return true;
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            // Пользователь отказался от UAC.
+            return false;
+        }
+    }
+
+    private void AskElevation(string? message = null, string argument = "--tunnel")
+    {
+        var owner = _zapretWidget is { IsVisible: true } ? (Window)_zapretWidget : this;
+        var answer = MessageBox.Show(
+            owner,
+            message ?? "TUN-режим перехватывает трафик всех программ и требует прав администратора.\n\n" +
+                       "Перезапустить VieNLink с повышением прав? Списки и настройки сохранятся.",
+            "VieNLink",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        if (answer != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        if (TryRestartElevated(argument))
+        {
+            _exitRequested = true;
+            Close();
+            return;
+        }
+
+        MessageBox.Show(
+            owner,
+            "Не удалось запросить права. Запустите VieNLink.exe от имени администратора вручную.",
+            "VieNLink",
+            MessageBoxButton.OK,
+            MessageBoxImage.Warning);
+    }
+
+    protected override void OnClosing(CancelEventArgs e)
+    {
+        if (!_exitRequested && _settings.MinimizeToTray)
+        {
+            e.Cancel = true;
+            Hide();
+            if (!_trayHintShown)
+            {
+                _trayHintShown = true;
+                _tray?.ShowBalloon("VieNLink свёрнут", "Приложение осталось в трее рядом с часами.");
+            }
+
+            return;
+        }
+
+        _closing = true;
+        _autoTimer?.Stop();
+        base.OnClosing(e);
+    }
+
+    protected override void OnClosed(EventArgs e)
+    {
+        AppLog.LineWritten -= OnLogLine;
+        _idleTimer?.Stop();
+        _zapretWidget?.Close();
+        _tray?.Dispose();
+        // Синхронно: прокси, ядро и обход DPI должны быть сняты до выхода из приложения.
+        _tunBypass.StopNow();
+        _desync.Dispose();
+        _zapret.Stop();
+        _manager.ShutdownSync();
+        base.OnClosed(e);
+    }
+}
