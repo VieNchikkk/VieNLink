@@ -32,6 +32,10 @@ Shadowsocks / Hysteria2 из открытых списков и подписок
   (Android 8.0+, arm64). Отдельной страницы в магазине нет — APK ставится вручную,
   с разрешением установки из этого источника.
 
+**Прямые ссылки:** [Windows setup.exe](https://github.com/VieNchikkk/VieNLink/releases/download/v1.0.10-beta/VieNLink-1.0.10-setup.exe)
+· [Windows ZIP](https://github.com/VieNchikkk/VieNLink/releases/download/v1.0.10-beta/VieNLink-1.0.10-win-x64.zip)
+· [Android APK](https://github.com/VieNchikkk/VieNLink/releases/download/v1.1.1-android/VieNLink-1.1.1-android.apk)
+
 Контрольные суммы — в `SHA256SUMS.txt` рядом с файлами релиза. Android-версия при запуске
 сама проверяет GitHub: если там версия выше, APK скачивается и предлагается установка
 (Android всегда просит подтвердить установку в системном окне).
@@ -157,6 +161,8 @@ powershell -File build\publish-android.ps1
 Скрипт использует долговременный ключ из `%LOCALAPPDATA%\VieNLink\signing` (создаёт его при
 первом запуске) и кладёт в `release\` подписанный APK и файл `.apk.sha256`. Храните этот ключ:
 следующие версии должны быть подписаны им же, иначе Android не установит обновление поверх.
+
+Версия для Windows публикуется отдельно: [VieNLink 1.0.10 (бета)](https://github.com/VieNchikkk/VieNLink/releases/tag/v1.0.10-beta).
 
 ## Сколько узлов живых
 
