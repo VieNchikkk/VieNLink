@@ -7,7 +7,11 @@ namespace VieNLink;
 
 public partial class App : Application
 {
+    private const string ShowWindowEventName = @"Local\VieNLink.ShowWindow";
+
     private Mutex? _mutex;
+    private EventWaitHandle? _showWindowEvent;
+    private CancellationTokenSource? _showWindowCts;
 
     /// <summary>Общие настройки: читаются один раз при старте и сохраняются из окна.</summary>
     internal static AppSettings Settings { get; set; } = new();
@@ -17,6 +21,16 @@ public partial class App : Application
         // Повышение прав запускает новый экземпляр до выхода старого:
         // даём старому до 5 секунд освободить мьютекс, иначе пользователь увидит
         // ложное «VieNLink уже запущен» сразу после UAC.
+        // Обычный повторный запуск (ярлык, закреплённая кнопка на панели задач)
+        // не должен показывать «уже запущен»: будим окно первого экземпляра.
+        // Аргументы повышения прав — отдельный случай: старый экземпляр сейчас
+        // завершится, и новый должен продолжить работу, а не выйти.
+        if (!IsElevationRestart() && NotifyExistingInstance())
+        {
+            Shutdown();
+            return;
+        }
+
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
         while (true)
         {
@@ -37,6 +51,8 @@ public partial class App : Application
 
             Thread.Sleep(150);
         }
+
+        StartShowWindowListener();
 
         AppLog.Initialize();
         AppPaths.EnsureDirectories();
@@ -75,8 +91,89 @@ public partial class App : Application
     protected override void OnExit(ExitEventArgs e)
     {
         AppLog.Write("app", "Выход");
+        _showWindowCts?.Cancel();
+        _showWindowEvent?.Dispose();
         _mutex?.Dispose();
         base.OnExit(e);
+    }
+
+    /// <summary>Показывает и активирует главное окно по сигналу второго экземпляра.</summary>
+    private void StartShowWindowListener()
+    {
+        try
+        {
+            _showWindowEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowWindowEventName);
+            _showWindowCts = new CancellationTokenSource();
+            var token = _showWindowCts.Token;
+            _ = Task.Run(() =>
+            {
+                while (!token.IsCancellationRequested)
+                {
+                    if (!_showWindowEvent.WaitOne(500))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        Dispatcher.Invoke(() =>
+                        {
+                            if (MainWindow is MainWindow window)
+                            {
+                                window.ShowFromTray();
+                            }
+                        });
+                    }
+                    catch (Exception exception)
+                    {
+                        AppLog.Write("app", "Не удалось показать окно по запросу", exception);
+                    }
+                }
+            });
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("app", "Не удалось запустить обработчик повторного запуска", exception);
+        }
+    }
+
+    private static bool NotifyExistingInstance()
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            try
+            {
+                if (EventWaitHandle.TryOpenExisting(ShowWindowEventName, out var existing))
+                {
+                    using (existing)
+                    {
+                        existing.Set();
+                    }
+
+                    return true;
+                }
+            }
+            catch (Exception)
+            {
+                // Первый экземпляр ещё создаёт событие — подождём немного.
+            }
+
+            Thread.Sleep(100);
+        }
+
+        return false;
+    }
+
+    /// <summary>Запуск с аргументом повышения прав: старый экземпляр завершается сам.</summary>
+    private static bool IsElevationRestart()
+    {
+        var arguments = Environment.GetCommandLineArgs();
+        return arguments.Any(argument => argument.Equals("--tunnel", StringComparison.OrdinalIgnoreCase) ||
+                                         argument.Equals("--tun-bypass", StringComparison.OrdinalIgnoreCase) ||
+                                         argument.Equals("--tun-bypass-tune", StringComparison.OrdinalIgnoreCase) ||
+                                         argument.Equals("--store-loopback", StringComparison.OrdinalIgnoreCase) ||
+                                         argument.Equals("--desync", StringComparison.OrdinalIgnoreCase) ||
+                                         argument.Equals("--zapret", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>Подмена словаря темы: стили остаются на месте.</summary>

@@ -139,6 +139,32 @@ public partial class MainWindow
     }
 
     /// <summary>Перезапуск с повышением прав через UAC. Настройки и списки сохраняются на диск.</summary>
+    /// <summary>
+    /// Показать окно по повторному запуску (закреплённая кнопка на панели задач,
+    /// ярлык в «Пуске», второй экземпляр). Приложение обычно висит в трее.
+    /// </summary>
+    internal void ShowFromTray()
+    {
+        if (_exitRequested)
+        {
+            return;
+        }
+
+        Show();
+        ShowInTaskbar = true;
+        if (WindowState == WindowState.Minimized)
+        {
+            WindowState = WindowState.Normal;
+        }
+
+        Activate();
+        // Кратковременный Topmost поднимает окно поверх остальных,
+        // не оставляя его «всегда сверху».
+        Topmost = true;
+        Topmost = false;
+        Focus();
+    }
+
     private static bool TryRestartElevated(string argument = "--tunnel")
     {
         try

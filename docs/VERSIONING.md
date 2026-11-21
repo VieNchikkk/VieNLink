@@ -9,11 +9,11 @@ VieNLink использует Semantic Versioning: `MAJOR.MINOR.PATCH[-beta.N]`.
 - **PATCH** — исправления и небольшие улучшения.
 - **`-beta.N`** — предрелизная сборка. На GitHub такие релизы помечаются как **Pre-release**.
 
-Текущие версии: Windows — **1.0.9-beta**, Android — **1.1.1**.
+Текущие версии: Windows — **1.0.10-beta**, Android — **1.1.1**.
 
 Платформы версионируются отдельно: у Windows- и Android-клиента свои номера, потому что
 объём изменений разный. Тег релиза содержит платформу, если она не Windows:
-`v1.0.9-beta` (Windows) и `v1.1.1-android` (Android). Оба обновлятора различают релизы
+`v1.0.10-beta` (Windows) и `v1.1.1-android` (Android). Оба обновлятора различают релизы
 по вложенным файлам: Windows ищет `setup.exe`/ZIP, Android — APK.
 
 ## Где хранится версия
@@ -32,7 +32,7 @@ VieNLink использует Semantic Versioning: `MAJOR.MINOR.PATCH[-beta.N]`.
 
 | Версия | Поддержка |
 |---|---|
-| Windows 1.0.9-beta (текущая) | Да |
+| Windows 1.0.10-beta (текущая) | Да |
 | Android 1.1.1 (текущая) | Да |
 | Windows 1.0.7-beta и старше | Нет — обновитесь до текущей беты |
 | Android 1.0.x | Нет |
@@ -65,7 +65,7 @@ VieNLink использует Semantic Versioning: `MAJOR.MINOR.PATCH[-beta.N]`.
 ### Windows
 
 1. Обновите `Version`, `AssemblyVersion`, `FileVersion` и `InformationalVersion`
-   в `VieNLink/VieNLink.csproj` (`1.0.9`, `1.0.9-beta` и т.п.).
+   в `VieNLink/VieNLink.csproj` (`1.0.10`, `1.0.10-beta` и т.п.).
 2. Добавьте раздел в `CHANGELOG.md`.
 3. Прогоните `dotnet build VieNLink.slnx`, `SelfTest -- parsers` и `SelfTest -- checkconfigs`.
 4. Соберите поставку: `powershell -File build\publish-installer.ps1`

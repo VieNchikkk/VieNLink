@@ -26,8 +26,8 @@ Shadowsocks / Hysteria2 из открытых списков и подписок
 
 Готовые сборки — в [Releases](https://github.com/VieNchikkk/VieNLink/releases):
 
-- **Windows:** `VieNLink-1.0.9-setup.exe` (установщик в профиль пользователя) или портативный
-  `VieNLink-1.0.9-win-x64.zip`. .NET устанавливать не нужно.
+- **Windows:** `VieNLink-1.0.10-setup.exe` (установщик в профиль пользователя) или портативный
+  `VieNLink-1.0.10-win-x64.zip`. .NET устанавливать не нужно.
 - **Android:** `VieNLink-1.1.1-android.apk` (Android 8.0+, arm64). Отдельной страницы в
   магазине нет — APK ставится вручную, с разрешением установки из этого источника.
 
@@ -301,7 +301,7 @@ powershell -File build\publish-release.ps1
 
 ## Версии и обновления
 
-- Текущие версии: Windows — **1.0.9-beta**, Android — **1.1.1**; сборки —
+- Текущие версии: Windows — **1.0.10-beta**, Android — **1.1.1**; сборки —
   в [Releases](https://github.com/VieNchikkk/VieNLink/releases).
 - В Windows-релизе лежат `setup.exe`, портативный ZIP и `SHA256SUMS.txt`; в Android-релизе —
   APK и файл `.apk.sha256`.
