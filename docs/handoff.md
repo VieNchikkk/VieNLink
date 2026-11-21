@@ -18,8 +18,8 @@
 
 ## Сборка и проверки
 
-Готовый Windows-релиз 1.0.7: `release\VieNLink-1.0.7-win-x64` (+ ZIP 100,8 МБ) и
-`release\VieNLink-1.0.7-setup.exe` (92,9 МБ), exe и установщик подписаны (`CN=VieN`), внутри
+Готовый Windows-релиз 1.0.7: `release\VieNLink-1.0.7-win-x64` (+ ZIP 100,9 МБ) и
+`release\VieNLink-1.0.7-setup.exe` (92,7 МБ), exe и установщик подписаны (`CN=VieN`), внутри
 `core\`, `zapret\`, `LICENSE` и `THIRD-PARTY-NOTICES.md`. Опубликован на GitHub:
 https://github.com/VieNchikkk/VieNLink/releases/tag/v1.0.7-beta (ZIP, установщик,
 `SHA256SUMS.txt`, статус Pre-release).
