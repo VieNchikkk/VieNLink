@@ -28,8 +28,9 @@ Shadowsocks / Hysteria2 из открытых списков и подписок
 
 - **Windows:** `VieNLink-1.0.10-setup.exe` (установщик в профиль пользователя) или портативный
   `VieNLink-1.0.10-win-x64.zip`. .NET устанавливать не нужно.
-- **Android:** `VieNLink-1.1.1-android.apk` (Android 8.0+, arm64). Отдельной страницы в
-  магазине нет — APK ставится вручную, с разрешением установки из этого источника.
+- **Android (отдельный релиз):** [VieNLink-1.1.1-android.apk](https://github.com/VieNchikkk/VieNLink/releases/download/v1.1.1-android/VieNLink-1.1.1-android.apk)
+  (Android 8.0+, arm64). Отдельной страницы в магазине нет — APK ставится вручную,
+  с разрешением установки из этого источника.
 
 Контрольные суммы — в `SHA256SUMS.txt` рядом с файлами релиза. Android-версия при запуске
 сама проверяет GitHub: если там версия выше, APK скачивается и предлагается установка
@@ -133,8 +134,9 @@ Windows-версии без MAUI: VPN-туннель через `VpnService` и 
 в отдельном процессе `:probe`, экраны «Подключение / Обход / Инструменты / Журнал / Общие»,
 виджет и плитка, split-tunnel по приложениям, MTProto для Telegram и TUN-обход (бета).
 
-1. Скачайте `VieNLink-1.1.1-android.apk` из [Releases](https://github.com/VieNchikkk/VieNLink/releases)
-   и откройте файл на телефоне.
+1. Скачайте [VieNLink-1.1.1-android.apk](https://github.com/VieNchikkk/VieNLink/releases/download/v1.1.1-android/VieNLink-1.1.1-android.apk)
+   и откройте файл на телефоне. Android-версия публикуется отдельным релизом
+   `v1.1.1-android`, независимо от Windows-релиза `v1.0.10-beta`.
 2. Разрешите установку из выбранного источника (Android спросит один раз).
 3. В приложении нажмите «Проверить узлы», затем кнопку нужного сервиса — VPN поднимется
    на проверенном узле.
