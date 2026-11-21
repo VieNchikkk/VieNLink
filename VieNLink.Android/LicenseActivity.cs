@@ -1,20 +1,18 @@
 using Android.App;
-using Android.Graphics;
+using Android.Content;
 using Android.OS;
 using Android.Views;
 using Android.Widget;
 
 namespace VieNLink.Mobile;
 
-/// <summary>
-/// Показывает текст лицензии или список сторонних компонентов из assets APK.
-/// </summary>
+/// <summary>Показывает текст лицензии или список сторонних компонентов из assets APK.</summary>
 #if DEBUG
-[Activity(Label = "Лицензия", Theme = "@android:style/Theme.Material.Light.NoActionBar", Exported = true)]
+[Activity(Label = "Лицензия", Theme = "@style/Theme.VieNLink", Exported = true)]
 #else
-[Activity(Label = "Лицензия", Theme = "@android:style/Theme.Material.Light.NoActionBar")]
+[Activity(Label = "Лицензия", Theme = "@style/Theme.VieNLink")]
 #endif
-public sealed class LicenseActivity : Activity
+public sealed class LicenseActivity : BaseActivity
 {
     public const string ExtraAsset = "asset";
     public const string ExtraTitle = "assetTitle";
@@ -25,30 +23,26 @@ public sealed class LicenseActivity : Activity
     {
         base.OnCreate(savedInstanceState);
 
-        var root = new LinearLayout(this) { Orientation = Android.Widget.Orientation.Vertical };
-        root.SetPadding(
-            UiMetrics.Dp(this, 16),
-            UiMetrics.StatusBar(this) + UiMetrics.Dp(this, 8),
-            UiMetrics.Dp(this, 16),
-            UiMetrics.NavigationBar(this) + UiMetrics.Dp(this, 8));
+        var page = ColumnPage();
+        var top = Ui.Row(this);
+        top.AddView(Ui.Pill(this, P, "Назад", UiButtonKind.Ghost, Finish));
+        var title = Ui.Title(this, Intent?.GetStringExtra(ExtraTitle) ?? "Лицензия", P);
+        title.SetPadding(Ui.Dp(this, 10), 0, 0, 0);
+        top.AddView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        page.AddView(top);
 
-        var title = new TextView(this)
+        _view = new TextView(this)
         {
-            Text = Intent?.GetStringExtra(ExtraTitle) ?? "Лицензия",
-            TextSize = 22f,
+            TextSize = 11.5f,
+            Typeface = Android.Graphics.Typeface.Monospace,
         };
-        title.SetTypeface(null, TypefaceStyle.Bold);
-
-        _view = new TextView(this) { TextSize = 12f, Typeface = Typeface.Monospace };
+        _view.SetTextColor(P.MutedStrong);
         _view.SetTextIsSelectable(true);
+        _view.SetBackgroundColor(P.Inner);
+        _view.SetPadding(Ui.Dp(this, 12), Ui.Dp(this, 12), Ui.Dp(this, 12), Ui.Dp(this, 12));
+        Ui.Add(page, _view, 12);
 
-        var scroll = new ScrollView(this);
-        scroll.AddView(_view);
-
-        root.AddView(title);
-        root.AddView(scroll, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
-        SetContentView(root);
-
+        SetPage(page);
         Load();
     }
 

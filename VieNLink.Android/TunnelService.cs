@@ -9,7 +9,11 @@ namespace VieNLink.Mobile;
 public enum TunnelState
 {
     Stopped = 0,
-    Running = 1,
+
+    /// <summary>Служба запущена, ядро поднимается: TUN ещё не готов.</summary>
+    Starting = 1,
+
+    Running = 2,
 }
 
 /// <summary>
@@ -29,6 +33,9 @@ public sealed class TunnelService : VpnService
 
     public const string ActionStart = "com.vienlink.app.START";
     public const string ActionStop = "com.vienlink.app.STOP";
+
+    /// <summary>Выбрать лучший проверенный узел и переключиться без пересоздания TUN.</summary>
+    public const string ActionBest = "com.vienlink.app.BEST";
 
     /// <summary>Автозапуск (загрузка, плитка, восстановление): конфиг собирается внутри службы.</summary>
     public const string ActionAuto = "com.vienlink.app.AUTO";
@@ -87,6 +94,8 @@ public sealed class TunnelService : VpnService
     private Libbox.IInterfaceUpdateListener? _interfaceListener;
     private DefaultNetworkCallback? _networkCallback;
     private bool _bypassMode;
+    private static Timer? _healthTimer;
+    private static int _healthFailures;
 
     /// <summary>Служба поднимает TUN-обход: проверка узлов в отдельном процессе недоступна.</summary>
     public static bool IsBypassMode { get; private set; }
@@ -104,6 +113,12 @@ public sealed class TunnelService : VpnService
 
         // Уведомление обязательно: без foreground-службы Android убивает туннель в фоне.
         StartForegroundNotification();
+
+        if (intent?.Action == ActionBest)
+        {
+            _ = SwitchToBestAsync();
+            return StartCommandResult.Sticky;
+        }
 
         if (intent?.Action == ActionBypass)
         {
@@ -174,7 +189,7 @@ public sealed class TunnelService : VpnService
 
                 if (State == TunnelState.Running)
                 {
-                    _nodeLabel = "TUN-обход: " + strategy.Name;
+                    _nodeLabel = "TUN-обход (бета): " + strategy.Name;
                     RefreshNotification();
                 }
 
@@ -255,12 +270,12 @@ public sealed class TunnelService : VpnService
 
         var text = State == TunnelState.Running
             ? _nodeLabel is null ? "Туннель работает" : "Подключено · " + _nodeLabel
-            : "Подключение…";
+            : "Подключаюсь…";
 
         builder
             .SetContentTitle("VieNLink")
             .SetContentText(text)
-            .SetSmallIcon(Android.Resource.Drawable.SymDefAppIcon)
+            .SetSmallIcon(Resource.Drawable.ic_notification)
             .SetOngoing(true)
             .SetShowWhen(false);
 
@@ -270,6 +285,14 @@ public sealed class TunnelService : VpnService
         if (open is not null)
         {
             builder.SetContentIntent(open);
+        }
+
+        var best = PendingIntent.GetService(
+            this, 4, new Intent(this, typeof(TunnelService)).SetAction(ActionBest),
+            PendingIntentFlags.Immutable | PendingIntentFlags.UpdateCurrent);
+        if (best is not null)
+        {
+            builder.AddAction(0, "Лучший", best);
         }
 
         var nodes = PendingIntent.GetActivity(
@@ -308,7 +331,170 @@ public sealed class TunnelService : VpnService
     public static void UpdateNodeLabel(string? label)
     {
         _nodeLabel = label;
+        NetworkProbe.Invalidate();
         Active?.RefreshNotification();
+        TunnelWidget.Update(Android.App.Application.Context);
+    }
+
+    /// <summary>Действие «Лучший» в уведомлении: проверенный узел с максимальным доступом.</summary>
+    private async Task SwitchToBestAsync()
+    {
+        try
+        {
+            NodeStore.EnsureLoaded();
+            var best = NodeStore.SelectBestWorking();
+            if (best is null)
+            {
+                AppLog.Write("health", "Кнопка «Лучший»: живых проверенных узлов нет");
+                return;
+            }
+
+            if (State == TunnelState.Running && CoreRuntime.IsRunning &&
+                CoreRuntime.LoadedTags.Contains(best.Tag))
+            {
+                using var api = new ClashApiClient(CoreRuntime.ApiPort, CoreRuntime.ApiSecret);
+                await api.SelectAsync(SingBoxConfigBuilder.SelectorTag, best.Tag, CancellationToken.None)
+                    .ConfigureAwait(false);
+                UpdateNodeLabel(best.DisplayDelay);
+                AppLog.Write("health", "Уведомление: выбран лучший узел " + best.Name);
+                return;
+            }
+
+            var config = NodeStore.BuildTunnelConfig(out var error, preferWorking: true);
+            if (config is null)
+            {
+                AppLog.Write("health", "Кнопка «Лучший»: " + error);
+                return;
+            }
+
+            StartCore(config);
+            UpdateNodeLabel(NodeStore.Selected?.DisplayDelay);
+            AppLog.Write("health", "Уведомление: туннель пересобран на лучший узел");
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("health", "Кнопка «Лучший» не сработала", exception);
+        }
+    }
+
+    /// <summary>
+    /// Проверка живости выбранного узла раз в 90 секунд. После двух провалов подряд
+    /// при включённом автопереключении выбирается другой узел, уже загруженный в ядро.
+    /// </summary>
+    private void StartHealthMonitor()
+    {
+        if (_bypassMode || _healthTimer is not null)
+        {
+            return;
+        }
+
+        _healthFailures = 0;
+        _healthTimer = new System.Threading.Timer(_ => _ = HealthTickAsync(), null,
+            TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(45));
+    }
+
+    private void StopHealthMonitor()
+    {
+        _healthTimer?.Dispose();
+        _healthTimer = null;
+        _healthFailures = 0;
+    }
+
+    private static int _healthBusy;
+
+    private async Task HealthTickAsync()
+    {
+        if (Interlocked.CompareExchange(ref _healthBusy, 1, 0) != 0)
+        {
+            return;
+        }
+
+        try
+        {
+            if (State != TunnelState.Running || IsBypassMode || !CoreRuntime.IsRunning)
+            {
+                return;
+            }
+
+            var settings = NodeStore.Settings;
+            if (!settings.AutoFailover)
+            {
+                return;
+            }
+
+            var selected = NodeStore.Selected;
+            if (selected is null)
+            {
+                return;
+            }
+
+            int? delay;
+            using (var api = new ClashApiClient(CoreRuntime.ApiPort, CoreRuntime.ApiSecret))
+            {
+                delay = await api.TestDelayAsync(selected.Tag, 5000, CancellationToken.None,
+                    "https://cp.cloudflare.com/generate_204").ConfigureAwait(false);
+            }
+
+            if (delay is not null)
+            {
+                _healthFailures = 0;
+                return;
+            }
+
+            _healthFailures++;
+            AppLog.Write("health", $"Узел не ответил ({_healthFailures}/2)");
+            if (_healthFailures < 2)
+            {
+                return;
+            }
+
+            _healthFailures = 0;
+            var family = NodeRanking.Family(selected);
+            var loaded = CoreRuntime.LoadedTags;
+            var replacement = NodeStore.Snapshot()
+                .Where(node => node.Id != selected.Id &&
+                               node.Status == NodeStatus.Working &&
+                               node.DelayMs is not null &&
+                               loaded.Contains(node.Tag))
+                .OrderByDescending(node => NodeRanking.Family(node) != family)
+                .ThenByDescending(node => node.OpenDomains)
+                .ThenBy(node => node.DelayMs)
+                .FirstOrDefault();
+            if (replacement is null)
+            {
+                // Запасного узла в текущем конфиге нет: отмечаем провал и пересобираем
+                // конфиг по тем же правилам, что и при обычном подключении.
+                NodeHealth.RegisterFailure(selected);
+                NodeStore.SaveNodes();
+                var rebuilt = NodeStore.BuildTunnelConfig(out var error, preferWorking: true);
+                if (rebuilt is null)
+                {
+                    AppLog.Write("health", "Автопереключение: " + error);
+                    return;
+                }
+
+                StartCore(rebuilt);
+                UpdateNodeLabel(NodeStore.Selected?.DisplayDelay);
+                AppLog.Write("health", "Автопереключение: конфиг пересобран");
+                return;
+            }
+
+            using var switchApi = new ClashApiClient(CoreRuntime.ApiPort, CoreRuntime.ApiSecret);
+            await switchApi.SelectAsync(SingBoxConfigBuilder.SelectorTag, replacement.Tag, CancellationToken.None)
+                .ConfigureAwait(false);
+            NodeStore.Select(replacement);
+            UpdateNodeLabel(replacement.DisplayDelay);
+            AppLog.Write("health",
+                $"Автопереключение: {NodeRanking.Family(selected)} → {NodeRanking.Family(replacement)}");
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("health", "Проверка живости узла не удалась", exception);
+        }
+        finally
+        {
+            Volatile.Write(ref _healthBusy, 0);
+        }
     }
 
     /// <summary>Запуск ядра с конфигом sing-box. TUN ядро попросит само через <see cref="OpenTun"/>.</summary>
@@ -316,6 +502,18 @@ public sealed class TunnelService : VpnService
     {
         try
         {
+            // TUN-обход и прокси-узел взаимоисключающие: при обычном подключении форвардер
+            // должен остановиться, иначе его сокет остаётся занятым до следующего отключения.
+            if (!_bypassMode)
+            {
+                _ = ForwarderHost.StopAsync();
+            }
+
+            // Пока ядро поднимает TUN, состояние «Подключаюсь…», а не «VPN не подключён».
+            State = TunnelState.Starting;
+            RefreshNotification();
+            TunnelWidget.Update(this);
+
             CoreRuntime.EnsureSetup(this);
 
             // Конфиг сохраняем рядом с данными: по нему видно, что реально ушло в ядро.
@@ -335,6 +533,8 @@ public sealed class TunnelService : VpnService
 
             if (!CoreRuntime.Start(configJson))
             {
+                State = TunnelState.Stopped;
+                TunnelWidget.Update(this);
                 return;
             }
 
@@ -348,6 +548,8 @@ public sealed class TunnelService : VpnService
                 var selected = NodeStore.Selected;
                 _nodeLabel = selected is null ? null : selected.DisplayDelay;
                 RefreshNotification();
+                StartHealthMonitor();
+                TunnelWidget.Update(this);
             }
 
             Android.Util.Log.Info("VieNLink", "Ядро запущено, состояние: " + State);
@@ -404,35 +606,69 @@ public sealed class TunnelService : VpnService
                 .SetSession(SessionName)
                 .SetMtu(options.MTU > 0 ? options.MTU : 1500);
 
-            // Split-tunnel: если выбраны приложения, через VPN идут только они.
-            // Список разрешённых и «не наш процесс» взаимоисключающие — Android не даёт
-            // вызвать AddAllowedApplication и AddDisallowedApplication одновременно.
-            var split = _bypassMode ? null : AndroidSettingsStore.Current;
-            var allowed = 0;
-            if (split is { SplitTunnel: true } && split.AllowedPackages.Count > 0)
+            // Маршрутизация приложений: VpnService умеет либо «только список»
+            // (AddAllowedApplication), либо «все, кроме списка» (AddDisallowedApplication).
+            // Оба способа одновременно вызывать нельзя.
+            var routing = _bypassMode ? null : AndroidSettingsStore.Current;
+            var mode = routing?.AppRouteMode ?? AppRouteMode.All;
+            var selected = routing?.AllowedPackages.ToList() ?? new List<string>();
+            var applied = 0;
+
+            if (mode == AppRouteMode.OnlyListed && selected.Count > 0)
             {
-                foreach (var package in split.AllowedPackages.ToList())
+                foreach (var package in selected)
                 {
+                    // Свой процесс в туннель не пускаем: ядро ушло бы в собственный VPN.
+                    if (package.Equals(PackageName, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
                     try
                     {
                         builder.AddAllowedApplication(package);
-                        allowed++;
+                        applied++;
                     }
                     catch (Java.Lang.Exception exception)
                     {
                         // Приложение удалили после настройки — просто пропускаем.
-                        Android.Util.Log.Warn("VieNLink", "split: " + package + ": " + exception.Message);
+                        Android.Util.Log.Warn("VieNLink", "apps: " + package + ": " + exception.Message);
+                    }
+                }
+            }
+            else if (mode == AppRouteMode.AllExceptListed && selected.Count > 0)
+            {
+                foreach (var package in selected)
+                {
+                    if (package.Equals(PackageName, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        builder.AddDisallowedApplication(package);
+                        applied++;
+                    }
+                    catch (Java.Lang.Exception exception)
+                    {
+                        Android.Util.Log.Warn("VieNLink", "apps: " + package + ": " + exception.Message);
                     }
                 }
             }
 
-            if (allowed > 0)
+            if (applied > 0)
             {
-                Android.Util.Log.Info("VieNLink", "split-tunnel: приложений " + allowed);
+                Android.Util.Log.Info("VieNLink", $"apps: режим {mode}, приложений {applied}");
+                if (mode == AppRouteMode.AllExceptListed)
+                {
+                    // Свой процесс вне туннеля: иначе запросы ядра уйдут в него же.
+                    builder.AddDisallowedApplication(PackageName!);
+                }
             }
             else
             {
-                // Свой процесс вне туннеля: иначе запросы ядра уйдут в него же.
+                // «Все приложения» (или список пуст) — туннелируем всех, кроме себя.
                 builder.AddDisallowedApplication(PackageName!);
             }
 
@@ -696,6 +932,7 @@ public sealed class TunnelService : VpnService
     private void StopTunnel()
     {
         _bypassMode = false; IsBypassMode = false;
+        StopHealthMonitor();
 
         // Ядро закрываем через CoreRuntime: у процесса один CommandServer.
         CoreRuntime.Stop();
@@ -715,6 +952,7 @@ public sealed class TunnelService : VpnService
         _tunDescriptor = null;
         State = TunnelState.Stopped;
         _nodeLabel = null;
+        TunnelWidget.Update(this);
 
         try
         {

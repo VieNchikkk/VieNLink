@@ -1,6 +1,5 @@
 using Android.App;
 using Android.Content;
-using Android.Graphics;
 using Android.OS;
 using Android.Views;
 using Android.Widget;
@@ -8,77 +7,124 @@ using Android.Widget;
 namespace VieNLink.Mobile;
 
 /// <summary>
-/// «О программе»: версия, лицензия GPL-3.0, ссылка на исходники sing-box и сторонние
-/// компоненты. Тексты лицензий лежат в APK как assets (см. VieNLink.Android.csproj).
+/// «О программе»: версия, бета-статус, лицензия GPL-3.0, исходники sing-box,
+/// сторонние компоненты и проверка обновлений на GitHub.
 /// </summary>
 #if DEBUG
-[Activity(Label = "О программе", Theme = "@android:style/Theme.Material.Light.NoActionBar", Exported = true)]
+[Activity(Label = "О программе", Theme = "@style/Theme.VieNLink", Exported = true)]
 #else
-[Activity(Label = "О программе", Theme = "@android:style/Theme.Material.Light.NoActionBar")]
+[Activity(Label = "О программе", Theme = "@style/Theme.VieNLink")]
 #endif
-public sealed class AboutActivity : Activity
+public sealed class AboutActivity : BaseActivity
 {
     private const string SingBoxSource = "https://github.com/SagerNet/sing-box";
     private const string GplUrl = "https://www.gnu.org/licenses/gpl-3.0.html";
+    private const string Repository = "https://github.com/VieNchikkk/VieNLink";
+
+    private TextView? _updateStatus;
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
         base.OnCreate(savedInstanceState);
 
-        var root = new LinearLayout(this) { Orientation = Android.Widget.Orientation.Vertical };
-        root.SetPadding(
-            UiMetrics.Dp(this, 16),
-            UiMetrics.StatusBar(this) + UiMetrics.Dp(this, 8),
-            UiMetrics.Dp(this, 16),
-            UiMetrics.NavigationBar(this) + UiMetrics.Dp(this, 8));
+        var page = ColumnPage();
+        var top = Ui.Row(this);
+        top.AddView(Ui.Pill(this, P, "Назад", UiButtonKind.Ghost, Finish));
+        var title = Ui.Title(this, "О программе", P);
+        title.SetPadding(Ui.Dp(this, 10), 0, 0, 0);
+        top.AddView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        page.AddView(top);
 
-        var title = new TextView(this) { Text = "О программе", TextSize = 24f };
-        title.SetTypeface(null, TypefaceStyle.Bold);
+        var hero = Ui.HeaderCard(P, this);
+        var logo = new ImageView(this);
+        logo.SetScaleType(ImageView.ScaleType.CenterCrop);
+        logo.SetImageResource(Resource.Mipmap.ic_launcher);
+        logo.Background = Ui.Rounded(P.Inner, 20, this, P.Border);
+        logo.ClipToOutline = true;
+        var logoLayout = new LinearLayout.LayoutParams(Ui.Dp(this, 84), Ui.Dp(this, 84));
+        logoLayout.Gravity = GravityFlags.CenterHorizontal;
+        hero.AddView(logo, logoLayout);
 
-        var version = new TextView(this) { TextSize = 14f };
-        version.SetTextColor(Color.DarkGray);
-        version.Text = "VieNLink · версия " + ReadVersion();
+        var name = Ui.Text(this, "VieNLink", 24f, P.TextStrong, bold: true);
+        name.Gravity = GravityFlags.Center;
+        name.SetPadding(0, Ui.Dp(this, 12), 0, 0);
+        hero.AddView(name);
+        var version = Ui.Text(this, "Android · версия " + ReadVersion(), 13f, P.Muted);
+        version.Gravity = GravityFlags.Center;
+        hero.AddView(version);
+        var beta = Ui.Badge(this, P, "БЕТА", P.Warning);
+        var betaLayout = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent);
+        betaLayout.Gravity = GravityFlags.CenterHorizontal;
+        betaLayout.TopMargin = Ui.Dp(this, 8);
+        hero.AddView(beta, betaLayout);
+        Ui.Add(page, hero, 12);
 
-        var body = new TextView(this) { TextSize = 14f };
-        body.Text = "Клиент для сбора, проверки и подключения прокси-узлов. " +
-                    "Android-версия использует ядро sing-box (libbox) через JNI.\n\n" +
-                    "Проект распространяется по лицензии GNU GPL-3.0: исходный код открыт, " +
-                    "потому что libbox (sing-box) распространяется под GPL-3.0.";
+        var body = Ui.Card(P, this,
+            Ui.Text(this, "Назначение", 14.5f, P.TextStrong, bold: true),
+            Ui.Hint(this,
+                "Клиент для сбора, проверки и подключения прокси-узлов из открытых списков, " +
+                "подписок и каналов Telegram. Ядро — sing-box через libbox (JNI).", P),
+            Ui.Text(this, "Лицензия", 14.5f, P.TextStrong, bold: true),
+            Ui.Hint(this,
+                "Проект распространяется по GNU GPL-3.0: libbox (sing-box) тоже под GPL-3.0, " +
+                "поэтому исходный код открыт. Тексты лицензий лежат в APK.", P),
+            Ui.Text(this, "Безопасность", 14.5f, P.TextStrong, bold: true),
+            Ui.Hint(this,
+                "Бесплатные узлы никем не проверяются: владелец сервера видит ваш трафик. " +
+                "Не входите через них в банки и почту, если не доверяете узлу.", P));
+        page.AddView(body);
 
-        var gpl = new Button(this) { Text = "Текст GPL-3.0" };
-        gpl.Click += (_, _) => OpenLicense("LICENSE.txt", "GPL-3.0");
+        page.AddView(Ui.Section(this, "Обновления", P));
+        _updateStatus = Ui.Hint(this,
+            "Проверка идёт автоматически при запуске. Кнопка проверяет вручную, скачивает более новую версию и предлагает установку.",
+            P);
+        var update = Ui.Pill(this, P, "Проверить обновление", UiButtonKind.Accent,
+            () => _ = CheckUpdateAsync(), Resource.Drawable.ic_download);
+        page.AddView(update);
+        page.AddView(_updateStatus);
 
-        var notices = new Button(this) { Text = "Сторонние компоненты" };
-        notices.Click += (_, _) => OpenLicense("THIRD-PARTY-NOTICES.md", "Сторонние компоненты");
+        page.AddView(Ui.Section(this, "Документы и исходники", P));
+        page.AddView(Ui.Pill(this, P, "Текст GPL-3.0", UiButtonKind.Secondary,
+            () => OpenLicense("LICENSE.txt", "GPL-3.0"), Resource.Drawable.ic_info));
+        page.AddView(Ui.Pill(this, P, "Сторонние компоненты", UiButtonKind.Secondary,
+            () => OpenLicense("THIRD-PARTY-NOTICES.md", "Сторонние компоненты"), Resource.Drawable.ic_info));
+        page.AddView(Ui.Pill(this, P, "Исходники sing-box", UiButtonKind.Ghost,
+            () => OpenUrl(SingBoxSource), Resource.Drawable.ic_open));
+        page.AddView(Ui.Pill(this, P, "Репозиторий VieNLink", UiButtonKind.Ghost,
+            () => OpenUrl(Repository), Resource.Drawable.ic_open));
+        page.AddView(Ui.Pill(this, P, "Лицензия GPL-3.0 на сайте GNU", UiButtonKind.Ghost,
+            () => OpenUrl(GplUrl), Resource.Drawable.ic_open));
 
-        var source = new Button(this) { Text = "Исходники sing-box" };
-        source.Click += (_, _) => OpenUrl(SingBoxSource);
+        var paths = Ui.Card(P, this,
+            Ui.Text(this, "Служебные папки", 14f, P.TextStrong, bold: true),
+            Ui.Hint(this, "Данные: " + AppPaths.DataDirectory + "\nЖурналы: " + AppPaths.LogsDirectory, P));
+        Ui.Add(page, paths, 14);
 
-        var license = new Button(this) { Text = "Лицензия GPL-3.0 на сайте GNU" };
-        license.Click += (_, _) => OpenUrl(GplUrl);
-
-        root.AddView(title);
-        root.AddView(version);
-        root.AddView(body);
-        root.AddView(gpl);
-        root.AddView(notices);
-        root.AddView(source);
-        root.AddView(license);
-
-        SetContentView(root);
+        SetPage(page);
     }
 
     private string ReadVersion()
     {
         try
         {
-            var info = PackageManager!.GetPackageInfo(PackageName!, 0);
-            return info?.VersionName ?? "1.0.5";
+            return PackageManager?.GetPackageInfo(PackageName!, 0)?.VersionName ?? AppInfo.Version;
         }
         catch (Exception)
         {
-            return "1.0.5";
+            return AppInfo.Version;
         }
+    }
+
+    private async Task CheckUpdateAsync()
+    {
+        if (_updateStatus is null)
+        {
+            return;
+        }
+
+        _updateStatus.Text = "Проверяю GitHub…";
+        await UpdateCenter.CheckInteractiveAsync(this, text => _updateStatus.Text = text);
     }
 
     private void OpenLicense(string asset, string title)
@@ -99,7 +145,7 @@ public sealed class AboutActivity : Activity
         }
         catch (Exception exception)
         {
-            Toast.MakeText(this, "Не удалось открыть ссылку: " + exception.Message, ToastLength.Short)?.Show();
+            Ui.Toast(this, "Не удалось открыть ссылку: " + exception.Message);
         }
     }
 }

@@ -8,17 +8,17 @@ using Android.Widget;
 namespace VieNLink.Mobile;
 
 /// <summary>
-/// TUN-обход без прокси-узла: трафик идёт в TUN, ядро отправляет TCP в наш форвардер,
-/// который режет TLS ClientHello. Работает без root только user-space методами.
-/// Лучший результат на SNI-блоках даёт «Разрез TLS-записей» (аналог tlsrec из ByeDPI):
-/// страница YouTube открывается, но видео с googlevideo требует узел (блок по IP).
+/// TUN-обход без прокси-узла: TUN → встроенный SOCKS5-форвардер, который режет TLS ClientHello.
+/// Стратегии те же, что в общем ядре; удачный выбор запоминается в bypass-profiles.json.
+/// Автоподбор из Android-версии недоступен: процесс приложения исключён из TUN, поэтому
+/// проверить результат можно только из другого приложения или после отключения.
 /// </summary>
 #if DEBUG
-[Activity(Label = "TUN-обход", Theme = "@android:style/Theme.Material.Light.NoActionBar", Exported = true)]
+[Activity(Label = "TUN-обход", Theme = "@style/Theme.VieNLink", Exported = true)]
 #else
-[Activity(Label = "TUN-обход", Theme = "@android:style/Theme.Material.Light.NoActionBar")]
+[Activity(Label = "TUN-обход", Theme = "@style/Theme.VieNLink")]
 #endif
-public sealed class BypassActivity : Activity
+public sealed class BypassActivity : BaseActivity
 {
     private const int VpnRequestCode = 3003;
     private const int StatusIntervalMs = 2000;
@@ -26,9 +26,8 @@ public sealed class BypassActivity : Activity
     private readonly List<StreamFragmentStrategy> _strategies = TlsFragmentForwarder.Strategies
         .OrderByDescending(strategy => strategy.Mode == StreamFragmentMode.RecordSplit)
         .ToList();
-    private readonly List<string> _labels = new();
 
-    private ListView? _list;
+    private LinearLayout? _list;
     private TextView? _status;
     private TextView? _forwarder;
     private Button? _start;
@@ -40,70 +39,171 @@ public sealed class BypassActivity : Activity
     protected override void OnCreate(Bundle? savedInstanceState)
     {
         base.OnCreate(savedInstanceState);
+        BuildUi();
 
-        var root = new LinearLayout(this) { Orientation = Android.Widget.Orientation.Vertical };
-        root.SetPadding(
-            UiMetrics.Dp(this, 16),
-            UiMetrics.StatusBar(this) + UiMetrics.Dp(this, 8),
-            UiMetrics.Dp(this, 16),
-            UiMetrics.NavigationBar(this) + UiMetrics.Dp(this, 8));
+        var saved = AndroidSettingsStore.Current.TunBypassStrategy;
+        _selected = Math.Max(0, _strategies.FindIndex(strategy =>
+            strategy.Mode.ToString().Equals(saved, StringComparison.OrdinalIgnoreCase)));
 
-        var title = new TextView(this) { Text = "TUN-обход (без узла)", TextSize = 24f };
-        title.SetTypeface(null, TypefaceStyle.Bold);
-
-        var info = new TextView(this) { TextSize = 13f };
-        info.SetTextColor(Color.DarkGray);
-        info.Text = "Трафик идёт в TUN, ядро отправляет TCP в локальный форвардер, " +
-                    "который режет TLS. Прокси-узел не нужен. Лучше всего работает «Разрез " +
-                    "TLS-записей»: страница YouTube открывается, видео с googlevideo требует узел.";
-
-        _status = new TextView(this) { TextSize = 14f };
-        _forwarder = new TextView(this) { TextSize = 13f };
-        _forwarder.SetTextColor(Color.DarkGray);
-
-        foreach (var strategy in _strategies)
+        if (Intent?.GetBooleanExtra("start", false) == true)
         {
-            var note = strategy.Mode == StreamFragmentMode.RecordSplit ? " · рекомендуется" : string.Empty;
-            _labels.Add(strategy.Name + note + "\n" + strategy.Description);
+            _ = new Handler(Looper.MainLooper!).Post(StartBypass);
         }
 
-        _list = new ListView(this) { ChoiceMode = ChoiceMode.Single };
-        _list.Adapter = new ArrayAdapter<string>(
-            this, Android.Resource.Layout.SimpleListItem1, _labels.ToList());
-        _list.ItemClick += (_, args) =>
-        {
-            _selected = args.Position;
-            RefreshStatus();
-        };
-
-        var actions = new LinearLayout(this) { Orientation = Android.Widget.Orientation.Horizontal };
-        _start = new Button(this) { Text = "Включить", TextSize = 13f };
-        _start.Click += (_, _) => StartBypass();
-        _stop = new Button(this) { Text = "Выключить", TextSize = 13f };
-        _stop.Click += (_, _) => VpnStarter.Stop(this);
-        actions.AddView(_start, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        actions.AddView(_stop, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-
-        root.AddView(title);
-        root.AddView(info);
-        root.AddView(_status);
-        root.AddView(_forwarder);
-        root.AddView(_list, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
-        root.AddView(actions);
-
-        SetContentView(root);
-
-        // Автозапуск для проверки с adb: --ez start true -e strategy RecordSplit
-        var autoStart = Intent?.GetBooleanExtra("start", false) ?? false;
-        _selected = Math.Clamp(Intent?.GetIntExtra("strategy", 0) ?? 0, 0, _strategies.Count - 1);
-        _list.SetItemChecked(_selected, true);
-
-        if (autoStart)
-        {
-            _ = _list.Post(StartBypass);
-        }
-
+        RenderStrategies();
         UpdateButtons();
+    }
+
+    private void BuildUi()
+    {
+        var page = ColumnPage();
+
+        var top = Ui.Row(this);
+        top.AddView(Ui.Pill(this, P, "Назад", UiButtonKind.Ghost, Finish));
+        var title = Ui.Title(this, "TUN-обход", P);
+        title.SetPadding(Ui.Dp(this, 10), 0, 0, 0);
+        top.AddView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        top.AddView(Ui.Badge(this, P, "БЕТА", P.Warning));
+        page.AddView(top);
+
+        var info = Ui.Banner(P, this, P.Accent, "Без узла и без root",
+            "sing-box поднимает TUN, TCP идёт в собственный SOCKS5-форвардер, который режет TLS " +
+            "ClientHello. На SNI-блоке страницы открываются; при блоке по IP (часто видео YouTube) " +
+            "нужен прокси-узел.");
+        page.AddView(info);
+
+        var state = Ui.HeaderCard(P, this);
+        _status = Ui.Text(this, VpnStarter.StateLabel, 16f, P.TextStrong, bold: true);
+        state.AddView(_status);
+        _forwarder = Ui.Hint(this, "Форвардер не запущен", P);
+        _forwarder.SetPadding(0, Ui.Dp(this, 6), 0, 0);
+        state.AddView(_forwarder);
+        page.AddView(state);
+
+        var actions = Ui.Row(this);
+        _start = MakePrimary("Включить обход", StartBypass);
+        _stop = MakeSecondary("Выключить", () => VpnStarter.Stop(this));
+        actions.AddView(_start, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        actions.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 8), 1));
+        actions.AddView(_stop, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        Ui.Add(page, actions, 12);
+
+        var quic = new CheckBox(this)
+        {
+            Text = "Блокировать QUIC (UDP/443), чтобы браузер шёл по TCP",
+            Checked = SettingsStore.Current.TunBypassBlockQuic,
+        };
+        quic.SetTextColor(P.TextSoft());
+        quic.CheckedChange += (_, args) =>
+        {
+            SettingsStore.Current.TunBypassBlockQuic = args.IsChecked;
+            SettingsStore.Save();
+        };
+        page.AddView(quic);
+        var quicHint = Ui.Hint(this,
+            "QUIC обходит TCP-фрагментацию. Блокировка заставляет Chrome и YouTube перейти на TCP.", P);
+        quicHint.SetPadding(Ui.Dp(this, 28), 0, 0, Ui.Dp(this, 8));
+        page.AddView(quicHint);
+
+        page.AddView(Ui.Section(this, "Стратегия фрагментации", P));
+        _list = Ui.Column(this);
+        page.AddView(_list);
+
+        var dev = Ui.Card(P, this);
+        var devTop = Ui.Row(this);
+        devTop.AddView(Ui.Text(this, "Автоподбор стратегии", 14.5f, P.TextStrong, bold: true),
+            new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        devTop.AddView(Ui.Badge(this, P, "В РАЗРАБОТКЕ", P.Warning));
+        dev.AddView(devTop);
+        dev.AddView(Ui.Hint(this,
+            "В Windows автоподбор перезапускает TUN и проверяет сайты через curl.exe. На Android " +
+            "сам процесс приложения исключён из TUN (иначе запросы ядра ушли бы в него же), поэтому " +
+            "проверить результат изнутри нельзя. В разработке: отдельный процесс проверки, как :probe " +
+            "для узлов. Пока выберите стратегию вручную — «Разрез TLS-записей» обычно лучший.", P));
+        Ui.Add(page, dev, 14);
+
+        var profile = BypassProfileStore.Ranked("tun").FirstOrDefault();
+        if (profile is not null)
+        {
+            var last = Ui.Card(P, this,
+                Ui.Text(this, "Последний удачный профиль", 14f, P.TextStrong, bold: true),
+                Ui.Hint(this, $"{profile.Name} · качество {profile.Quality}/100 · использован {profile.Uses} раз · " +
+                               profile.LastSuccessUtc.ToLocalTime().ToString("dd.MM HH:mm"), P));
+            Ui.Add(page, last, 8);
+        }
+
+        SetPage(page);
+    }
+
+    private Button MakePrimary(string text, Action click)
+    {
+        var button = new Button(this) { Text = text };
+        button.SetTextColor(P.AccentContrast);
+        button.SetTextSize(Android.Util.ComplexUnitType.Sp, 13.5f);
+        button.SetTypeface(Typeface.Create("sans-serif-medium", TypefaceStyle.Normal), TypefaceStyle.Normal);
+        button.Background = Ui.Pressable(this, P.Accent, Ui.Blend(P.Accent, P.White, 0.15f), 14);
+        button.Click += (_, _) => click();
+        return button;
+    }
+
+    private Button MakeSecondary(string text, Action click)
+    {
+        var button = new Button(this) { Text = text };
+        button.SetTextColor(P.Text);
+        button.SetTextSize(Android.Util.ComplexUnitType.Sp, 13.5f);
+        button.Background = Ui.Pressable(this, P.Surface, P.Inner, 14, P.Border);
+        button.Click += (_, _) => click();
+        return button;
+    }
+
+    private void RenderStrategies()
+    {
+        if (_list is null)
+        {
+            return;
+        }
+
+        _list.RemoveAllViews();
+        for (var index = 0; index < _strategies.Count; index++)
+        {
+            var strategy = _strategies[index];
+            var selected = index == _selected;
+            var card = Ui.Column(this);
+            card.SetPadding(Ui.Dp(this, 14), Ui.Dp(this, 11), Ui.Dp(this, 14), Ui.Dp(this, 11));
+            card.Background = Ui.Rounded(selected ? P.AccentSurface : P.Card, 14, this,
+                selected ? P.AccentBorder : P.Border);
+            card.Clickable = true;
+            card.Click += (_, _) =>
+            {
+                _selected = index;
+                AndroidSettingsStore.Current.TunBypassStrategy = strategy.Mode.ToString();
+                AndroidSettingsStore.Save();
+                RenderStrategies();
+            };
+
+            var row = Ui.Row(this);
+            row.AddView(Ui.Text(this, strategy.Name, 14f, selected ? P.Accent : P.TextStrong, bold: true),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            if (strategy.Mode == StreamFragmentMode.RecordSplit)
+            {
+                row.AddView(Ui.Badge(this, P, "РЕКОМЕНДУЕТСЯ", P.Positive));
+            }
+
+            if (selected)
+            {
+                row.AddView(Ui.Badge(this, P, "ВЫБРАНО", P.Accent));
+            }
+
+            card.AddView(row);
+            var description = Ui.Hint(this, strategy.Description, P);
+            description.SetPadding(0, Ui.Dp(this, 3), 0, 0);
+            card.AddView(description);
+
+            var layout = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+            layout.BottomMargin = Ui.Dp(this, 7);
+            _list.AddView(card, layout);
+        }
     }
 
     protected override void OnResume()
@@ -134,6 +234,10 @@ public sealed class BypassActivity : Activity
 
     private void StartBypass()
     {
+        var strategy = _strategies[_selected];
+        AndroidSettingsStore.Current.TunBypassStrategy = strategy.Mode.ToString();
+        AndroidSettingsStore.Save();
+
         var request = VpnStarter.PrepareRequest(this);
         if (request is not null)
         {
@@ -141,8 +245,24 @@ public sealed class BypassActivity : Activity
             return;
         }
 
-        VpnStarter.StartBypass(this, _strategies[_selected].Mode);
-        Toast.MakeText(this, "Запускаю TUN-обход…", ToastLength.Short)?.Show();
+        Launch(strategy);
+    }
+
+    private void Launch(StreamFragmentStrategy strategy)
+    {
+        VpnStarter.StartBypass(this, strategy.Mode);
+
+        BypassProfileStore.Record(new BypassProfile
+        {
+            Mode = "tun",
+            StrategyIndex = _selected,
+            Name = strategy.Name,
+            Quality = 30,
+            BlockQuic = SettingsStore.Current.TunBypassBlockQuic,
+            Uses = 1,
+        });
+
+        Ui.Toast(this, "Запускаю TUN-обход: " + strategy.Name);
     }
 
     protected override void OnActivityResult(int requestCode, Result resultCode, Intent? data)
@@ -155,12 +275,11 @@ public sealed class BypassActivity : Activity
 
         if (resultCode == Result.Ok)
         {
-            VpnStarter.StartBypass(this, _strategies[_selected].Mode);
-            Toast.MakeText(this, "Запускаю TUN-обход…", ToastLength.Short)?.Show();
+            Launch(_strategies[_selected]);
         }
         else
         {
-            Toast.MakeText(this, "Разрешение VPN не выдано", ToastLength.Long)?.Show();
+            Ui.Toast(this, "Разрешение VPN не выдано");
         }
     }
 
@@ -172,8 +291,9 @@ public sealed class BypassActivity : Activity
         }
 
         var running = TunnelService.State == TunnelState.Running;
-        _status.Text = (running ? "Туннель работает" : "VPN не подключён") +
-                       " · выбрано: " + _strategies[_selected].Name;
+        var bypass = TunnelService.IsBypassMode;
+        _status.Text = bypass ? "TUN-обход (бета) работает" : running ? "Подключён прокси-узел" : "VPN не подключён";
+        _status.SetTextColor(bypass || running ? P.Positive : P.TextStrong);
 
         if (_forwarder is not null)
         {
@@ -188,15 +308,17 @@ public sealed class BypassActivity : Activity
 
     private void UpdateButtons()
     {
-        var running = TunnelService.State == TunnelState.Running;
+        var bypass = TunnelService.IsBypassMode;
         if (_start is not null)
         {
-            _start.Enabled = !running;
+            _start.Enabled = !bypass;
+            _start.Alpha = bypass ? 0.5f : 1f;
         }
 
         if (_stop is not null)
         {
-            _stop.Enabled = running;
+            _stop.Enabled = TunnelService.State == TunnelState.Running;
+            _stop.Alpha = _stop.Enabled ? 1f : 0.5f;
         }
     }
 }

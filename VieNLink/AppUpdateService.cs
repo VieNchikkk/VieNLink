@@ -118,6 +118,13 @@ internal static class AppUpdateService
                         }
                     }
 
+                    // Релиз только для Android (в нём один APK) не должен предлагаться
+                    // Windows-версии: у такого релиза нет ни setup.exe, ни ZIP.
+                    if (setupUrl is null && zipUrl is null)
+                    {
+                        continue;
+                    }
+
                     var published = item.TryGetProperty("published_at", out var publishedElement) &&
                                     publishedElement.TryGetDateTimeOffset(out var publishedAt)
                         ? publishedAt.UtcDateTime

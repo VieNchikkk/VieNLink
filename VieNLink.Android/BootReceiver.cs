@@ -19,6 +19,8 @@ public sealed class BootReceiver : BroadcastReceiver
             return;
         }
 
+        Maintenance.EnsureScheduled(context);
+
         if (!AndroidSettingsStore.Current.AutoConnectOnBoot)
         {
             return;

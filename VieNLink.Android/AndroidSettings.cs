@@ -9,11 +9,35 @@ internal sealed class AndroidSettings
     /// <summary>Поднимать туннель после загрузки устройства (нужно разрешение VPN).</summary>
     public bool AutoConnectOnBoot { get; set; }
 
-    /// <summary>Через туннель идут только выбранные приложения.</summary>
+    /// <summary>Через туннель идут только выбранные приложения (устарело: см. <see cref="AppRouteMode"/>).</summary>
     public bool SplitTunnel { get; set; }
+
+    /// <summary>
+    /// Что делать с приложениями: все, только из списка или все, кроме списка.
+    /// Управляется на экране «Туннелирование», применяется в VpnService.
+    /// </summary>
+    public AppRouteMode AppRouteMode { get; set; } = AppRouteMode.All;
 
     /// <summary>Пакеты выбранных приложений (split-tunnel).</summary>
     public List<string> AllowedPackages { get; set; } = new();
+
+    /// <summary>Последнее обновление источников (автоматика в фоне).</summary>
+    public DateTime LastSourceRefreshUtc { get; set; }
+
+    /// <summary>Последний сбор MTProto-прокси.</summary>
+    public DateTime LastMtProtoCollectUtc { get; set; }
+
+    /// <summary>Последняя проверка MTProto-прокси.</summary>
+    public DateTime LastMtProtoTestUtc { get; set; }
+
+    /// <summary>Стратегия TUN-обхода, выбранная пользователем (имя <see cref="StreamFragmentMode"/>).</summary>
+    public string TunBypassStrategy { get; set; } = "RecordSplit";
+
+    /// <summary>Автоматически собирать MTProto из каналов.</summary>
+    public bool AutoMtProto { get; set; } = true;
+
+    /// <summary>Автоматически проверять узлы в фоне (в дополнение к :probe в процессе).</summary>
+    public bool AutoProbe { get; set; } = true;
 }
 
 internal static class AndroidSettingsStore
@@ -35,7 +59,24 @@ internal static class AndroidSettingsStore
                 }
 
                 AppPaths.EnsureDirectories();
-                _current = JsonFileStore.Read<AndroidSettings>(Path) ?? new AndroidSettings();
+                var loaded = JsonFileStore.Read<AndroidSettings>(Path) ?? new AndroidSettings();
+                // Старый файл знал только «только выбранные» — переносим в новый режим.
+                if (loaded.SplitTunnel && loaded.AppRouteMode == AppRouteMode.All)
+                {
+                    loaded.AppRouteMode = AppRouteMode.OnlyListed;
+                }
+
+                // Автоматика убрана из «Настроек»: значения всегда по умолчанию.
+                // Автоподключение после загрузки не нужно, фоновая проверка и MTProto — нужны.
+                if (!loaded.AutoProbe || !loaded.AutoMtProto || loaded.AutoConnectOnBoot)
+                {
+                    loaded.AutoProbe = true;
+                    loaded.AutoMtProto = true;
+                    loaded.AutoConnectOnBoot = false;
+                    JsonFileStore.Write(Path, loaded);
+                }
+
+                _current = loaded;
                 return _current;
             }
         }

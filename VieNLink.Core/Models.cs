@@ -40,6 +40,12 @@ internal sealed class ProxyNode
     public DateTime? CheckedAtUtc { get; set; }
 
     /// <summary>
+    /// Когда узел последний раз пытались проверить. Нужна, чтобы партия, где ничего
+    /// не открылось (откат), не проверялась заново теми же узлами по кругу.
+    /// </summary>
+    public DateTime? TriedAtUtc { get; set; }
+
+    /// <summary>
     /// Когда узел последний раз встречался в источниках. Узлы, которые давно
     /// не приходят из списков, удаляются — в кэше остаются только свежие данные.
     /// </summary>
@@ -243,6 +249,12 @@ internal static class NodeDedup
         target.IsMine |= source.IsMine;
         target.FailCount = Math.Max(target.FailCount, source.FailCount);
         target.OpenDomains = Math.Max(target.OpenDomains, source.OpenDomains);
+        if (source.TriedAtUtc is { } tried &&
+            (target.TriedAtUtc is null || tried > target.TriedAtUtc))
+        {
+            target.TriedAtUtc = tried;
+        }
+
         if (source.LastSeenUtc is { } seen &&
             (target.LastSeenUtc is null || seen > target.LastSeenUtc))
         {
@@ -632,6 +644,12 @@ internal sealed class AppSettings
     /// <summary>Виджет свёрнут в компактную строку с названием режима.</summary>
     public bool WidgetCollapsed { get; set; }
 
+    /// <summary>
+    /// Виджет остаётся поверх всех окон (игр, браузера). Можно отключить кнопкой-закрепом
+    /// в самом виджете или галочкой в «Общих»; выбор запоминается.
+    /// </summary>
+    public bool WidgetTopmost { get; set; } = true;
+
     /// <summary>Ограничение числа узлов, попадающих в конфиг ядра.</summary>
     public int MaxNodesInConfig { get; set; } = 400;
 
@@ -661,6 +679,10 @@ internal sealed class CachedNode
     public string SourceName { get; set; } = string.Empty;
     public int? DelayMs { get; set; }
     public DateTime? CheckedAtUtc { get; set; }
+
+    /// <summary>Последняя попытка проверки (в том числе неудачная партия с откатом).</summary>
+    public DateTime? TriedAtUtc { get; set; }
+
     public DateTime? LastSeenUtc { get; set; }
     public bool IsMine { get; set; }
 

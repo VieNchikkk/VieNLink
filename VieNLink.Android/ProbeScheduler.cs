@@ -7,6 +7,10 @@ namespace VieNLink.Mobile;
 internal static class ProbeScheduler
 {
     private static readonly TimeSpan Interval = TimeSpan.FromMinutes(2);
+
+    /// <summary>Сколько партий по 150 узлов проверять за такт, пока нет узла для YouTube.</summary>
+    private const int YouTubeBatches = 2;
+
     private static Timer? _timer;
 
     public static void Start(Android.Content.Context context)
@@ -44,7 +48,9 @@ internal static class ProbeScheduler
             }
 
             NodeStore.EnsureLoaded();
-            if (!NodeStore.Settings.IdleTestEnabled || NodeStore.Nodes.Count == 0)
+            if (!NodeStore.Settings.IdleTestEnabled ||
+                !AndroidSettingsStore.Current.AutoProbe ||
+                NodeStore.Nodes.Count == 0)
             {
                 return;
             }
@@ -56,6 +62,20 @@ internal static class ProbeScheduler
                 AppLog.Write("probe",
                     $"Фон :probe: рабочих {summary.Working} из {summary.Tested}, " +
                     $"лучший открывает доменов {summary.BestDomains}");
+            }
+
+            // Кнопка YouTube всегда должна иметь живой узел: если его нет, проверяем
+            // партии дальше сами, не дожидаясь, пока человек нажмёт «Проверить узлы».
+            if (NodeStore.PickForService(NodeStore.QuickService.YouTube) is null)
+            {
+                var found = await ProbeClient
+                    .EnsureServiceNodeAsync(NodeStore.QuickService.YouTube, YouTubeBatches,
+                        CancellationToken.None)
+                    .ConfigureAwait(false);
+                if (found is null)
+                {
+                    AppLog.Write("probe", "YouTube: рабочего узла пока нет, проверка продолжится позже");
+                }
             }
         }
         catch (Exception exception)

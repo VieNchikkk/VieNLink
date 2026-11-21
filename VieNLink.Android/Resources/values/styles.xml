@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Базовая тема приложения: тёмная, без ActionBar, с нашими цветами. -->
+    <style name="Theme.VieNLink" parent="@android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/app_background</item>
+        <item name="android:statusBarColor">@color/app_background</item>
+        <item name="android:navigationBarColor">@color/app_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:colorPrimary">@color/accent</item>
+        <item name="android:colorPrimaryDark">@color/app_background</item>
+        <item name="android:colorControlNormal">@color/muted</item>
+        <item name="android:colorControlActivated">@color/accent</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColorSecondary">@color/muted</item>
+        <item name="android:textColorHint">@color/muted</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:forceDarkAllowed">false</item>
+    </style>
+
+    <!-- Светлая тема: тот же макет, но бумажный фон. -->
+    <style name="Theme.VieNLink.Light" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#FFF4F6F5</item>
+        <item name="android:statusBarColor">#FFF4F6F5</item>
+        <item name="android:navigationBarColor">#FFF4F6F5</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:colorAccent">#FF2E7D52</item>
+        <item name="android:colorPrimary">#FF2E7D52</item>
+        <item name="android:colorPrimaryDark">#FFF4F6F5</item>
+        <item name="android:colorControlNormal">#FF5F6662</item>
+        <item name="android:colorControlActivated">#FF2E7D52</item>
+        <item name="android:textColorPrimary">#FF1A1D1B</item>
+        <item name="android:textColorSecondary">#FF5F6662</item>
+        <item name="android:textColorHint">#FF7A817D</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:forceDarkAllowed">false</item>
+    </style>
+
+    <!-- Диалоги наследуют тему окна, но заголовок и кнопки задаём явно. -->
+    <style name="VieNLinkDialog" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:colorAccent">@color/accent</item>
+    </style>
+</resources>

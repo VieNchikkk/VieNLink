@@ -9,8 +9,11 @@ release/
 # Сертификаты и локальные настройки подписи — не публикуются
 *.pfx
 *.p12
+*.jks
+*.keystore
 *.snk
 build/signing.thumbprint
+build/android-signing.*
 
 # Локальные тестовые данные и журналы
 clash-with-secret.txt

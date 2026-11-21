@@ -71,6 +71,9 @@ internal sealed class LocalDnsTransport : Java.Lang.Object, Libbox.ILocalDNSTran
             var servers = tunnel?.GetUpstreamDnsServers() ?? new List<string> { UpstreamServer };
             foreach (var server in servers)
             {
+                // Отмена по таймауту обязательна: без неё зависший ReceiveAsync жил бы
+                // до закрытия сокета и завершался необработанным исключением в фоне.
+                using var timeout = new CancellationTokenSource(Timeout);
                 try
                 {
                     using var client = new UdpClient();
@@ -89,17 +92,14 @@ internal sealed class LocalDnsTransport : Java.Lang.Object, Libbox.ILocalDNSTran
                         // Protect недоступен до установки туннеля — пробуем отправить как есть.
                     }
 
-                    await client.SendAsync(query, query.Length, server, UpstreamPort).ConfigureAwait(false);
-
-                    var receive = client.ReceiveAsync();
-                    var completed = await Task.WhenAny(receive, Task.Delay(Timeout)).ConfigureAwait(false);
-                    if (completed != receive)
-                    {
-                        continue;
-                    }
-
-                    context.RawSuccess(receive.Result.Buffer);
+                    await client.SendAsync(query, server, UpstreamPort, timeout.Token).ConfigureAwait(false);
+                    var receive = await client.ReceiveAsync(timeout.Token).ConfigureAwait(false);
+                    context.RawSuccess(receive.Buffer);
                     return;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Сервер не ответил за отведённое время — пробуем следующий.
                 }
                 catch (Exception exception)
                 {

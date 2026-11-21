@@ -8,114 +8,90 @@ using Android.Widget;
 namespace VieNLink.Mobile;
 
 /// <summary>
-/// Настройки Android-версии: автозапуск, плитка и split-tunnel (какие приложения
-/// пускать через туннель). Общие настройки ядра остаются в settings.json.
+/// Настройки Android-версии: оформление (тема), памятка про плитку и служебные ссылки.
+/// Поведение приложения всегда автоматическое — значения по умолчанию задаёт SettingsStore.
 /// </summary>
 #if DEBUG
-// В отладочной сборке экран открыт наружу: так его запускают adb-команды из §0 плана.
-[Activity(Label = "Настройки", Theme = "@android:style/Theme.Material.Light.NoActionBar", Exported = true)]
+[Activity(Label = "Настройки", Theme = "@style/Theme.VieNLink", Exported = true)]
 #else
-[Activity(Label = "Настройки", Theme = "@android:style/Theme.Material.Light.NoActionBar")]
+[Activity(Label = "Настройки", Theme = "@style/Theme.VieNLink")]
 #endif
-public sealed class SettingsActivity : Activity
+public sealed class SettingsActivity : BaseActivity
 {
-    private CheckBox? _boot;
-    private CheckBox? _split;
-    private Button? _apps;
-    private TextView? _hint;
+    private TextView? _status;
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
         base.OnCreate(savedInstanceState);
-
-        var root = new LinearLayout(this) { Orientation = Android.Widget.Orientation.Vertical };
-        root.SetPadding(
-            UiMetrics.Dp(this, 16),
-            UiMetrics.StatusBar(this) + UiMetrics.Dp(this, 8),
-            UiMetrics.Dp(this, 16),
-            UiMetrics.NavigationBar(this) + UiMetrics.Dp(this, 8));
-
-        var title = new TextView(this) { Text = "Настройки", TextSize = 24f };
-        title.SetTypeface(null, TypefaceStyle.Bold);
-
-        var settings = AndroidSettingsStore.Current;
-
-        _boot = new CheckBox(this)
-        {
-            Text = "Подключаться после загрузки устройства",
-            Checked = settings.AutoConnectOnBoot,
-        };
-        _boot.CheckedChange += (_, args) =>
-        {
-            AndroidSettingsStore.Current.AutoConnectOnBoot = args.IsChecked;
-            AndroidSettingsStore.Save();
-        };
-
-        _split = new CheckBox(this)
-        {
-            Text = "Туннель только для выбранных приложений",
-            Checked = settings.SplitTunnel,
-        };
-        _split.CheckedChange += (_, args) =>
-        {
-            AndroidSettingsStore.Current.SplitTunnel = args.IsChecked;
-            AndroidSettingsStore.Save();
-            UpdateHint();
-        };
-
-        _apps = new Button(this) { Text = "Приложения" };
-        _apps.Click += (_, _) => StartActivity(typeof(AppPickerActivity));
-
-        _hint = new TextView(this) { TextSize = 13f };
-        _hint.SetTextColor(Color.DarkGray);
-
-        var tileHint = new TextView(this) { TextSize = 13f };
-        tileHint.SetTextColor(Color.DarkGray);
-        tileHint.Text = "Плитка VieNLink: добавьте её в шторку быстрых настроек " +
-                        "через меню редактирования плиток Android.";
-
-        var about = new Button(this) { Text = "О программе и лицензии" };
-        about.Click += (_, _) => StartActivity(typeof(AboutActivity));
-
-        root.AddView(title);
-        root.AddView(_boot);
-        root.AddView(_split);
-        root.AddView(_apps);
-        root.AddView(_hint);
-        root.AddView(tileHint);
-        root.AddView(about);
-
-        SetContentView(root);
-        UpdateHint();
+        BuildPage();
     }
 
-    protected override void OnResume()
+    private void BuildPage()
     {
-        base.OnResume();
-        UpdateHint();
+        var page = ColumnPage();
+
+        var top = Ui.Row(this);
+        top.AddView(Ui.Pill(this, P, "Назад", UiButtonKind.Ghost, Finish));
+        var title = Ui.Title(this, "Настройки", P);
+        title.SetPadding(Ui.Dp(this, 10), 0, 0, 0);
+        top.AddView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        page.AddView(top);
+
+        _status = Ui.Hint(this, "Изменения сохраняются сразу", P);
+        _status.SetPadding(0, Ui.Dp(this, 6), 0, 0);
+        page.AddView(_status);
+
+        // Настройки поведения убраны: приложение работает автоматически со значениями
+        // по умолчанию (см. SettingsStore.Load). Здесь остаются только оформление,
+        // памятка про плитку и служебные ссылки.
+
+        // ------------------------------------------------------------------ тема
+        page.AddView(Ui.Section(this, "Оформление", P));
+        var theme = new CheckBox(this)
+        {
+            Text = "Светлая тема",
+            Checked = ThemeManager.IsLight,
+        };
+        theme.SetTextColor(P.TextSoft());
+        theme.CheckedChange += (_, args) =>
+        {
+            if (SettingsStore.Current.Theme.Equals(args.IsChecked ? "Light" : "Dark", StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            SettingsStore.Current.Theme = args.IsChecked ? "Light" : "Dark";
+            SettingsStore.Save();
+            Recreate();
+        };
+        page.AddView(theme);
+
+        // -------------------------------------------------------------- уведомление
+        page.AddView(Ui.Section(this, "Плитка и уведомление", P));
+        var tile = Ui.Card(P, this,
+            Ui.Text(this, "Плитка VieNLink", 14.5f, P.TextStrong, bold: true),
+            Ui.Hint(this,
+                "Плитка добавляется вручную: откройте редактор плиток Android и перетащите VieNLink. " +
+                "Уведомление туннеля содержит действия «Лучший», «Узлы» и «Отключить».", P));
+        page.AddView(tile);
+
+        // ------------------------------------------------------------------ прочее
+        page.AddView(Ui.Section(this, "Прочее", P));
+        var about = Ui.Pill(this, P, "О программе и лицензии", UiButtonKind.Secondary,
+            () => StartActivity(new Intent(this, typeof(AboutActivity))), Resource.Drawable.ic_info);
+        page.AddView(about);
+        var log = Ui.Pill(this, P, "Открыть журнал", UiButtonKind.Secondary,
+            () => StartActivity(new Intent(this, typeof(LogActivity))), Resource.Drawable.ic_tab_log);
+        Ui.Add(page, log, 8);
+
+        SetPage(page);
     }
 
-    private void UpdateHint()
+    private void SetStatus(string text) => RunOnUiThread(() =>
     {
-        if (_hint is null || _apps is null)
+        if (_status is not null)
         {
-            return;
+            _status.Text = text;
         }
-
-        var settings = AndroidSettingsStore.Current;
-        var count = settings.AllowedPackages.Count;
-        _apps.Text = "Приложения: " + count;
-
-        if (!settings.SplitTunnel)
-        {
-            _hint.Text = "Сейчас через туннель идут все приложения, кроме самого VieNLink.";
-            _apps.Enabled = false;
-            return;
-        }
-
-        _apps.Enabled = true;
-        _hint.Text = count == 0
-            ? "Ни одно приложение не выбрано — через туннель пойдут все."
-            : $"Через туннель пойдут только выбранные приложения ({count}).";
-    }
+    });
 }

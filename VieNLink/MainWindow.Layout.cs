@@ -107,6 +107,37 @@ public partial class MainWindow
     internal (double? Left, double? Top, bool Collapsed) GetWidgetPlacement() =>
         (_settings.WidgetLeft, _settings.WidgetTop, _settings.WidgetCollapsed);
 
+    /// <summary>Виджет поверх всех окон (по умолчанию включено).</summary>
+    internal bool GetWidgetTopmost() => _settings.WidgetTopmost;
+
+    /// <summary>
+    /// Сохраняет режим «поверх всех окон» и синхронизирует галочку в «Общих»:
+    /// переключать можно и из виджета, и из настроек.
+    /// </summary>
+    internal void SaveWidgetTopmost(bool topmost)
+    {
+        _settings.WidgetTopmost = topmost;
+        JsonFileStore.Write(AppPaths.SettingsPath, _settings);
+        if (WidgetTopmostCheck is not null && WidgetTopmostCheck.IsChecked != topmost)
+        {
+            _loadingSettings = true;
+            try
+            {
+                WidgetTopmostCheck.IsChecked = topmost;
+            }
+            finally
+            {
+                _loadingSettings = false;
+            }
+        }
+
+        if (_zapretWidget is not null)
+        {
+            _zapretWidget.Topmost = topmost;
+            _zapretWidget.RefreshTopmostState();
+        }
+    }
+
     internal static double ClampToScreen(double coordinate, double screenStart, double screenSize, double windowSize) =>
         ClampCoordinate(coordinate, screenStart, screenSize, windowSize);
 }

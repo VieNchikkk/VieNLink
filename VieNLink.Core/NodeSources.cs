@@ -323,6 +323,7 @@ internal static class NodeSourceService
                 SourceName = n.SourceName,
                 DelayMs = n.DelayMs,
                 CheckedAtUtc = n.CheckedAtUtc,
+                TriedAtUtc = n.TriedAtUtc,
                 LastSeenUtc = n.LastSeenUtc ?? now,
                 IsMine = n.IsMine,
                 SpeedMbps = n.SpeedMbps,
@@ -405,6 +406,7 @@ internal static class NodeSourceService
 
             node.DelayMs = item.DelayMs;
             node.CheckedAtUtc = item.CheckedAtUtc;
+            node.TriedAtUtc = item.TriedAtUtc;
             node.LastSeenUtc = lastSeen;
             node.IsMine = item.IsMine;
             node.SpeedMbps = item.SpeedMbps;

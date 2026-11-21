@@ -8,22 +8,17 @@ using Android.Widget;
 namespace VieNLink.Mobile;
 
 /// <summary>
-/// Экран источников: список с количеством узлов, включение/выключение, добавление
-/// подписки или одиночной ссылки и обновление. Формат хранения — общий с Windows
-/// (<c>sources.dat</c>, шифруется ключом Keystore).
+/// Источники: подписки, открытые списки и каналы Telegram. Включение, обновление,
+/// добавление одиночной ссылки, личные подписки и автопоиск — как в Windows-версии.
 /// </summary>
 #if DEBUG
-// В отладочной сборке экран открыт наружу: так его запускают adb-команды из §0 плана.
-[Activity(Label = "Источники", Theme = "@android:style/Theme.Material.Light.NoActionBar", Exported = true)]
+[Activity(Label = "Источники", Theme = "@style/Theme.VieNLink", Exported = true)]
 #else
-[Activity(Label = "Источники", Theme = "@android:style/Theme.Material.Light.NoActionBar")]
+[Activity(Label = "Источники", Theme = "@style/Theme.VieNLink")]
 #endif
-public sealed class SourcesActivity : Activity
+public sealed class SourcesActivity : BaseActivity
 {
-    private readonly List<SourceDefinition> _rows = new();
-    private readonly List<string> _labels = new();
-    private ArrayAdapter<string>? _adapter;
-    private ListView? _list;
+    private LinearLayout? _list;
     private TextView? _summary;
     private TextView? _progress;
     private bool _busy;
@@ -37,49 +32,45 @@ public sealed class SourcesActivity : Activity
 
     private void BuildUi()
     {
-        var root = new LinearLayout(this) { Orientation = Android.Widget.Orientation.Vertical };
-        root.SetPadding(
-            UiMetrics.Dp(this, 16),
-            UiMetrics.StatusBar(this) + UiMetrics.Dp(this, 8),
-            UiMetrics.Dp(this, 16),
-            UiMetrics.NavigationBar(this) + UiMetrics.Dp(this, 8));
+        var page = ColumnPage();
 
-        var title = new TextView(this) { Text = "Источники", TextSize = 24f };
-        title.SetTypeface(null, TypefaceStyle.Bold);
-        root.AddView(title);
+        var top = Ui.Row(this);
+        top.AddView(Ui.Pill(this, P, "Назад", UiButtonKind.Ghost, Finish));
+        var title = Ui.Title(this, "Источники", P);
+        title.SetPadding(Ui.Dp(this, 10), 0, 0, 0);
+        top.AddView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        page.AddView(top);
 
-        _summary = new TextView(this) { TextSize = 16f };
-        _summary.SetTypeface(null, TypefaceStyle.Bold);
-        _progress = new TextView(this) { TextSize = 13f };
-        _progress.SetTextColor(Color.DarkGray);
+        _summary = Ui.Text(this, "Читаю…", 16f, P.TextStrong, bold: true);
+        _summary.SetPadding(0, Ui.Dp(this, 12), 0, 0);
+        page.AddView(_summary);
+        _progress = Ui.Hint(this, "Готово", P);
+        _progress.SetPadding(0, Ui.Dp(this, 4), 0, 0);
+        page.AddView(_progress);
 
-        var actions = new LinearLayout(this) { Orientation = Android.Widget.Orientation.Horizontal };
-        var add = new Button(this) { Text = "Добавить", TextSize = 13f };
-        add.Click += (_, _) => ShowAddDialog();
-        var refresh = new Button(this) { Text = "Обновить все", TextSize = 13f };
-        refresh.Click += async (_, _) => await RunRefreshAsync();
+        var actions = Ui.Row(this);
+        var add = Ui.Pill(this, P, "Добавить", UiButtonKind.Primary, ShowAddDialog, Resource.Drawable.ic_add);
+        var refresh = Ui.Pill(this, P, "Обновить все", UiButtonKind.Accent,
+            () => _ = RunRefreshAsync(), Resource.Drawable.ic_refresh);
         actions.AddView(add, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        actions.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 8), 1));
         actions.AddView(refresh, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        Ui.Add(page, actions, 12);
 
-        var list = new ListView(this);
-        _list = list;
-        list.ItemClick += (_, args) => ToggleSource(args.Position);
-        list.ItemLongClick += (_, args) => ConfirmRemove(args.Position);
+        var discover = Ui.Pill(this, P, "Найти новые источники", UiButtonKind.Secondary,
+            () => _ = RunDiscoveryAsync(), Resource.Drawable.ic_globe);
+        Ui.Add(page, discover, 8);
 
-        var hint = new TextView(this)
-        {
-            Text = "Короткий тап — включить или выключить. Долгий — удалить.",
-            TextSize = 12f,
-        };
-        hint.SetTextColor(Color.Gray);
+        var hint = Ui.Banner(P, this, P.Accent, "Какие бывают источники",
+            "Подписка (base64, Clash/YAML, JSON), открытый список ссылок, канал Telegram и одна " +
+            "ссылка на узел. Ссылки подписок содержат токены и хранятся в sources.dat, " +
+            "зашифрованном ключом Keystore.");
+        Ui.Add(page, hint, 12);
 
-        root.AddView(_summary);
-        root.AddView(_progress);
-        root.AddView(actions);
-        root.AddView(list, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, 0, 1f));
-        root.AddView(hint);
+        _list = Ui.Column(this);
+        page.AddView(_list);
 
-        SetContentView(root);
+        SetPage(page);
     }
 
     private async Task LoadAsync()
@@ -99,88 +90,129 @@ public sealed class SourcesActivity : Activity
 
     private void Reload()
     {
-        _rows.Clear();
-        _rows.AddRange(NodeStore.SnapshotSources());
-
-        _labels.Clear();
-        foreach (var source in _rows)
+        if (_list is null || _summary is null)
         {
-            var mark = source.Enabled ? "☑" : "☐";
-            var count = source.LastNodeCount > 0 ? source.LastNodeCount + " узлов" : "—";
+            return;
+        }
+
+        _list.RemoveAllViews();
+        var sources = NodeStore.SnapshotSources();
+        var enabled = sources.Count(source => source.Enabled);
+
+        _summary.Text = $"Источников: {sources.Count} · включено: {enabled}";
+        if (sources.Count == 0)
+        {
+            _list.AddView(Ui.Card(P, this,
+                Ui.Text(this, "Источников нет", 15f, P.MutedStrong, bold: true),
+                Ui.Hint(this, "Нажмите «Добавить» и вставьте ссылку на подписку, список или канал.", P)));
+            return;
+        }
+
+        foreach (var source in sources.OrderByDescending(item => item.IsMine).ThenBy(item => item.Name))
+        {
+            var card = Ui.Column(this);
+            card.SetPadding(Ui.Dp(this, 14), Ui.Dp(this, 12), Ui.Dp(this, 14), Ui.Dp(this, 12));
+            card.Background = Ui.Rounded(source.Enabled ? P.Card : P.Inner, 14, this,
+                source.Enabled ? P.Border : P.BorderSoft);
+
+            var row = Ui.Row(this);
+            var name = Ui.Text(this, source.Name, 14.5f,
+                source.Enabled ? P.TextStrong : P.Muted, bold: true);
+            name.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+            name.SetSingleLine(true);
+            row.AddView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            if (source.IsMine)
+            {
+                row.AddView(Ui.Badge(this, P, "★ МОЯ", P.Accent));
+            }
+
+            row.AddView(Ui.Badge(this, P, source.Enabled ? "ВКЛ" : "ВЫКЛ",
+                source.Enabled ? P.Positive : P.Muted));
+            card.AddView(row);
+
+            var url = Ui.Text(this, source.Url, 11f, P.Muted);
+            url.SetSingleLine(true);
+            url.Ellipsize = Android.Text.TextUtils.TruncateAt.Middle;
+            url.SetPadding(0, Ui.Dp(this, 4), 0, 0);
+            card.AddView(url);
+
+            var count = source.LastNodeCount > 0 ? source.LastNodeCount + " узлов" : "узлов пока нет";
             var status = source.LastError is not null
                 ? "ошибка: " + source.LastError
                 : source.LastCheckedUtc is null
                     ? "не проверялся"
-                    : "обновлён " + source.LastCheckedUtc.Value.ToLocalTime().ToString("HH:mm");
-            var mine = source.IsMine ? " ★" : string.Empty;
+                    : "обновлён " + source.LastCheckedUtc.Value.ToLocalTime().ToString("dd.MM HH:mm");
+            var stats = Ui.Hint(this, count + " · " + status, P,
+                source.LastError is null ? P.Muted : P.Danger);
+            stats.SetPadding(0, Ui.Dp(this, 2), 0, 0);
+            card.AddView(stats);
 
-            _labels.Add($"{mark} {source.Name}{mine}\n{count} · {status}");
-        }
-
-        // ArrayAdapter создаётся заново: с пустым списком он не подхватывает добавленные строки.
-        if (_list is not null)
-        {
-            _adapter = new ArrayAdapter<string>(
-                this,
-                Android.Resource.Layout.SimpleListItem1,
-                _labels.ToList());
-            _list.Adapter = _adapter;
-        }
-
-        if (_summary is not null)
-        {
-            var enabled = _rows.Count(source => source.Enabled);
-            _summary.Text = $"Источников: {_rows.Count} · включено: {enabled}";
-        }
-    }
-
-    private void ToggleSource(int position)
-    {
-        if (position < 0 || position >= _rows.Count)
-        {
-            return;
-        }
-
-        var source = _rows[position];
-        NodeStore.SetSourceEnabled(source, !source.Enabled);
-        Reload();
-        SetProgress((source.Enabled ? "Включён: " : "Выключен: ") + source.Name);
-    }
-
-    private void ConfirmRemove(int position)
-    {
-        if (position < 0 || position >= _rows.Count)
-        {
-            return;
-        }
-
-        var source = _rows[position];
-        using var dialog = new AlertDialog.Builder(this)
-            .SetMessage("Удалить источник «" + source.Name + "»?")
-            .SetPositiveButton("Удалить", (_, _) =>
+            if (!string.IsNullOrWhiteSpace(source.SubscriptionInfo))
             {
-                NodeStore.RemoveSource(source);
-                Reload();
-                SetProgress("Источник удалён: " + source.Name);
-            })
-            .SetNegativeButton("Отмена", (_, _) => { })
-            .Create();
+                var info = Ui.Hint(this, "Подписка: " + source.SubscriptionInfo, P, P.Accent);
+                info.SetPadding(0, Ui.Dp(this, 2), 0, 0);
+                card.AddView(info);
+            }
 
-        dialog.Show();
+            var buttons = Ui.Row(this);
+            var toggle = Ui.Pill(this, P, source.Enabled ? "Выключить" : "Включить",
+                UiButtonKind.Ghost, () =>
+                {
+                    NodeStore.SetSourceEnabled(source, !source.Enabled);
+                    Reload();
+                    SetProgress((source.Enabled ? "Включён: " : "Выключен: ") + source.Name);
+                });
+            var update = Ui.Pill(this, P, "Обновить", UiButtonKind.Ghost,
+                () => _ = UpdateOneAsync(source), Resource.Drawable.ic_refresh);
+            var delete = Ui.Pill(this, P, "Удалить", UiButtonKind.Ghost,
+                () => ConfirmRemove(source), Resource.Drawable.ic_delete);
+            delete.SetTextColor(P.Danger);
+            buttons.AddView(toggle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            buttons.AddView(update, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            buttons.AddView(delete, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            var buttonsLayout = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+            buttonsLayout.TopMargin = Ui.Dp(this, 8);
+            card.AddView(buttons, buttonsLayout);
+
+            var outer = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+            outer.BottomMargin = Ui.Dp(this, 8);
+            _list.AddView(card, outer);
+        }
     }
 
     private void ShowAddDialog()
     {
         var layout = new LinearLayout(this) { Orientation = Android.Widget.Orientation.Vertical };
-        layout.SetPadding(Dp(20), Dp(10), Dp(20), Dp(10));
+        layout.SetPadding(Ui.Dp(this, 20), Ui.Dp(this, 10), Ui.Dp(this, 20), Ui.Dp(this, 10));
 
-        var url = new EditText(this) { Hint = "https://…/sub или vless://…" };
-        var name = new EditText(this) { Hint = "Название (необязательно)" };
+        var url = Ui.Input(this, P, "https://…/sub, vless://… или https://t.me/канал");
+        var name = Ui.Input(this, P, "Название (необязательно)");
         var mine = new CheckBox(this) { Text = "Моя подписка" };
+        mine.SetTextColor(P.TextSoft());
+
+        var paste = Ui.Pill(this, P, "Вставить из буфера", UiButtonKind.Ghost, () =>
+        {
+            try
+            {
+                var clipboard = (ClipboardManager?)GetSystemService(ClipboardService);
+                var text = clipboard?.PrimaryClip?.GetItemAt(0)?.Text;
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    url.Text = text;
+                }
+            }
+            catch (Exception exception)
+            {
+                SetProgress("Не удалось прочитать буфер: " + exception.Message);
+            }
+        }, Resource.Drawable.ic_copy);
 
         layout.AddView(url);
         layout.AddView(name);
         layout.AddView(mine);
+        layout.AddView(paste);
 
         using var dialog = new AlertDialog.Builder(this)
             .SetTitle("Добавить источник")
@@ -230,6 +262,48 @@ public sealed class SourcesActivity : Activity
         }
     }
 
+    private void ConfirmRemove(SourceDefinition source)
+    {
+        using var dialog = new AlertDialog.Builder(this)
+            .SetMessage("Удалить источник «" + source.Name + "»? Узлы из него останутся в кэше до чистки.")
+            .SetPositiveButton("Удалить", (_, _) =>
+            {
+                NodeStore.RemoveSource(source);
+                Reload();
+                SetProgress("Источник удалён: " + source.Name);
+            })
+            .SetNegativeButton("Отмена", (_, _) => { })
+            .Create();
+        dialog.Show();
+    }
+
+    private async Task UpdateOneAsync(SourceDefinition source)
+    {
+        if (_busy)
+        {
+            SetProgress("Дождитесь окончания загрузки");
+            return;
+        }
+
+        _busy = true;
+        SetProgress("Обновляю: " + source.Name);
+        try
+        {
+            var progress = new Progress<string>(SetProgress);
+            var result = await NodeStore.ImportSourceAsync(source, progress, CancellationToken.None);
+            SetProgress(result);
+        }
+        catch (Exception exception)
+        {
+            SetProgress("Ошибка: " + exception.Message);
+        }
+        finally
+        {
+            _busy = false;
+            Reload();
+        }
+    }
+
     private async Task RunRefreshAsync()
     {
         if (_busy)
@@ -245,6 +319,16 @@ public sealed class SourcesActivity : Activity
             var progress = new Progress<string>(SetProgress);
             var summary = await NodeStore.RefreshAsync(progress, CancellationToken.None);
             SetProgress(summary);
+            AndroidSettingsStore.Current.LastSourceRefreshUtc = DateTime.UtcNow;
+            AndroidSettingsStore.Save();
+
+            if (NodeStore.Settings.TestAfterRefresh)
+            {
+                SetProgress("Проверяю новые узлы в :probe…");
+                var tested = await ProbeClient.RunBatchAsync(NodeTester.MaxBatch, CancellationToken.None);
+                SetProgress(tested.Error ?? $"Источники обновлены; проверено {tested.Tested}, " +
+                                            $"рабочих {tested.Working}");
+            }
         }
         catch (Exception exception)
         {
@@ -258,6 +342,37 @@ public sealed class SourcesActivity : Activity
         }
     }
 
+    private async Task RunDiscoveryAsync()
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        _busy = true;
+        SetProgress("Ищу новые источники…");
+        try
+        {
+            var progress = new Progress<string>(SetProgress);
+            var result = await SourceDiscoveryService.DiscoverAsync(
+                NodeStore.SnapshotSources(), progress, CancellationToken.None);
+            var added = NodeStore.AddDiscovered(result);
+            var mtproto = MtProtoStore.AddDiscovered(result.MtProto);
+            SetProgress($"Новых источников {added}, узлов {result.Nodes.Count}, MTProto {mtproto}." +
+                        (result.Error is null ? string.Empty : " Ошибка: " + result.Error));
+            Reload();
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("discover", "Автопоиск не удался", exception);
+            SetProgress("Автопоиск не удался: " + exception.Message);
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
     private void SetProgress(string text) => RunOnUiThread(() =>
     {
         if (_progress is not null)
@@ -265,6 +380,4 @@ public sealed class SourcesActivity : Activity
             _progress.Text = text;
         }
     });
-
-    private int Dp(int value) => (int)Math.Round(value * Resources!.DisplayMetrics!.Density);
 }

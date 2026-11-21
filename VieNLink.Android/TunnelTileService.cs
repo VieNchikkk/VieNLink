@@ -72,7 +72,7 @@ public sealed class TunnelTileService : TileService
         var running = TunnelService.State == TunnelState.Running;
         tile.State = running ? TileState.Active : TileState.Inactive;
         tile.Label = running ? "VieNLink: включён" : "VieNLink";
-        tile.Icon = Icon.CreateWithResource(this, Android.Resource.Drawable.SymDefAppIcon);
+        tile.Icon = Icon.CreateWithResource(this, Resource.Drawable.ic_notification);
         tile.UpdateTile();
     }
 }

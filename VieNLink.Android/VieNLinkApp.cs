@@ -26,6 +26,11 @@ public sealed class VieNLinkApp : Application
         RedirectStandardError();
         RegisterSecretProtector();
         ProbeScheduler.Start(this);
+        MtProtoScheduler.Start(this);
+        if (!ProbeScheduler.IsProbeProcess())
+        {
+            Maintenance.EnsureScheduled(this);
+        }
     }
 
     /// <summary>

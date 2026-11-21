@@ -5,8 +5,12 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <!-- Android 14+ требует тип foreground-сервиса; для VPN это specialUse. -->
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+  <!-- Проверка узлов в :probe идёт как короткая foreground-служба. -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+  <!-- Обновление APK с GitHub через PackageInstaller (подтверждение ставит пользователь). -->
+  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
   <!-- Android 11+ скрывает пакеты без явного <queries>: без этого список приложений
        для split-tunnel показывал бы только несколько системных. -->
@@ -18,6 +22,18 @@
   </queries>
 
   <application android:label="VieNLink"
+               android:icon="@mipmap/ic_launcher"
+               android:roundIcon="@mipmap/ic_launcher"
                android:allowBackup="false"
-               android:usesCleartextTraffic="false" />
+               android:supportsRtl="true"
+               android:usesCleartextTraffic="false">
+
+    <!-- Виджет главного экрана: состояние и кнопки «Лучший»/«Отключить». -->
+    <receiver android:name="com.vienlink.app.TunnelWidget" android:exported="false">
+      <intent-filter>
+        <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+      </intent-filter>
+      <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_info" />
+    </receiver>
+  </application>
 </manifest>

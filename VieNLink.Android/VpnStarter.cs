@@ -58,7 +58,10 @@ internal static class VpnStarter
     }
 
     /// <summary>Человеческое описание состояния службы для экранов.</summary>
-    public static string StateLabel => TunnelService.State == TunnelState.Running
-        ? "Туннель работает"
-        : "VPN не подключён";
+    public static string StateLabel => TunnelService.State switch
+    {
+        TunnelState.Running => "Туннель работает",
+        TunnelState.Starting => "Подключаюсь…",
+        _ => "VPN не подключён",
+    };
 }

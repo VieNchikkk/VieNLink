@@ -1,6 +1,5 @@
 using Android.App;
 using Android.Content;
-using Android.Graphics;
 using Android.OS;
 using Android.Views;
 using Android.Widget;
@@ -8,34 +7,26 @@ using Android.Widget;
 namespace VieNLink.Mobile;
 
 /// <summary>
-/// Экран узлов без списка: только сводка (сколько всего, рабочих, доступ по сервисам)
-/// и действия «Обновить», «Проверить», «Подключить лучший». Сам узел выбирается скрыто.
+/// Экран узлов без списка: сводка (всего, рабочих, доступ по сервисам), обновление
+/// и проверка в отдельном процессе. Подключение — с главного экрана и из шапки.
 /// </summary>
 #if DEBUG
-// В отладочной сборке экран открыт наружу: так его запускают adb-команды из §0 плана.
-[Activity(Label = "Узлы", Theme = "@android:style/Theme.Material.Light.NoActionBar", Exported = true)]
+[Activity(Label = "Узлы", Theme = "@style/Theme.VieNLink", Exported = true)]
 #else
-[Activity(Label = "Узлы", Theme = "@android:style/Theme.Material.Light.NoActionBar")]
+[Activity(Label = "Узлы", Theme = "@style/Theme.VieNLink")]
 #endif
-public sealed class NodesActivity : Activity
+public sealed class NodesActivity : BaseActivity
 {
-    private const int VpnRequestCode = 2002;
-
     private TextView? _summary;
     private TextView? _detail;
     private TextView? _progress;
-    private Button? _refresh;
-    private Button? _test;
-    private Button? _connect;
+    private ProgressBar? _bar;
 
     private CancellationTokenSource? _work;
     private bool _busy;
-    private string? _pendingConfig;
 
-    // Автозапуск для проверки через adb (см. §0 плана): -e refresh true -e test true.
     private bool _autoRefresh;
     private bool _autoTest;
-    private bool _autoConnect;
     private string? _autoSelect;
 
     protected override void OnCreate(Bundle? savedInstanceState)
@@ -44,7 +35,6 @@ public sealed class NodesActivity : Activity
 
         _autoRefresh = Intent?.GetBooleanExtra("refresh", false) ?? false;
         _autoTest = Intent?.GetBooleanExtra("test", false) ?? false;
-        _autoConnect = Intent?.GetBooleanExtra("connect", false) ?? false;
         _autoSelect = Intent?.GetStringExtra("selectTag");
 
         BuildUi();
@@ -65,55 +55,82 @@ public sealed class NodesActivity : Activity
 
     private void BuildUi()
     {
-        var root = new LinearLayout(this) { Orientation = Android.Widget.Orientation.Vertical };
-        root.SetPadding(
-            UiMetrics.Dp(this, 16),
-            UiMetrics.StatusBar(this) + UiMetrics.Dp(this, 8),
-            UiMetrics.Dp(this, 16),
-            UiMetrics.NavigationBar(this) + UiMetrics.Dp(this, 8));
+        var page = ColumnPage();
 
-        var title = new TextView(this) { Text = "Узлы", TextSize = 24f };
-        title.SetTypeface(null, TypefaceStyle.Bold);
-        root.AddView(title);
+        var top = Ui.Row(this);
+        top.AddView(Ui.Pill(this, P, "Назад", UiButtonKind.Ghost, Finish));
+        var title = Ui.Title(this, "Узлы", P);
+        title.SetPadding(Ui.Dp(this, 10), 0, 0, 0);
+        top.AddView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        top.AddView(Ui.Badge(this, P, "СПИСОК СКРЫТ", P.Accent));
+        page.AddView(top);
 
-        _summary = new TextView(this) { TextSize = 16f };
-        _summary.SetTypeface(null, TypefaceStyle.Bold);
-        _detail = new TextView(this) { TextSize = 14f };
-        _detail.SetTextColor(Color.DarkGray);
-        _progress = new TextView(this) { TextSize = 13f };
-        _progress.SetTextColor(Color.DarkGray);
+        var card = Ui.HeaderCard(P, this);
+        _summary = Ui.Text(this, "Читаю кэш…", 18f, P.TextStrong, bold: true);
+        card.AddView(_summary);
+        _detail = Ui.Hint(this, string.Empty, P);
+        _detail.SetPadding(0, Ui.Dp(this, 8), 0, 0);
+        card.AddView(_detail);
+        page.AddView(card);
 
-        var actions = new LinearLayout(this) { Orientation = Android.Widget.Orientation.Horizontal };
-        _refresh = MakeButton("Обновить", async () => await RunRefreshAsync());
-        _test = MakeButton("Проверить", async () => await RunTestAsync());
-        var sources = MakeButton("Источники", () => StartActivity(typeof(SourcesActivity)));
-        actions.AddView(_refresh, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        actions.AddView(_test, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        actions.AddView(sources, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        _progress = Ui.Hint(this, "Готово", P);
+        _progress.SetPadding(0, Ui.Dp(this, 10), 0, 0);
+        page.AddView(_progress);
 
-        _connect = new Button(this) { Text = "Подключить лучший узел" };
-        _connect.Click += (_, _) => ConnectSelected();
-
-        root.AddView(_summary);
-        root.AddView(_detail);
-        root.AddView(_progress);
-        root.AddView(actions);
-        root.AddView(new TextView(this)
+        _bar = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal)
         {
-            Text = "Список узлов скрыт: приложение само выбирает проверенный узел " +
-                   "по доступу к сервисам и задержке.",
-            TextSize = 13f,
-        });
-        root.AddView(_connect);
+            Visibility = ViewStates.Gone,
+            Indeterminate = false,
+            Max = 1,
+            Progress = 0,
+        };
+        var barLayout = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, Ui.Dp(this, 8));
+        barLayout.TopMargin = Ui.Dp(this, 6);
+        page.AddView(_bar, barLayout);
 
-        SetContentView(root);
+        var actions = Ui.Row(this);
+        var refresh = Ui.Pill(this, P, "Обновить", UiButtonKind.Accent,
+            () => _ = RunRefreshAsync(), Resource.Drawable.ic_refresh);
+        var test = Ui.Pill(this, P, "Проверить", UiButtonKind.Accent,
+            () => _ = RunTestAsync(), Resource.Drawable.ic_check);
+        actions.AddView(refresh, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        actions.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 8), 1));
+        actions.AddView(test, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        Ui.Add(page, actions, 12);
+
+        var quick = Ui.Row(this);
+        var measure = Ui.Pill(this, P, "Замер скорости", UiButtonKind.Ghost,
+            () => _ = MeasureAsync(), Resource.Drawable.ic_speed);
+        var export = Ui.Pill(this, P, "Экспорт", UiButtonKind.Ghost,
+            ExportSelected, Resource.Drawable.ic_export);
+        quick.AddView(measure, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        quick.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 8), 1));
+        quick.AddView(export, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        Ui.Add(page, quick, 8);
+
+        page.AddView(Ui.Section(this, "Как выбирается узел", P));
+        var how = Ui.Card(P, this,
+            Bullet("Сначала личные подписки, затем маскированные (REALITY, Vision, WS/TLS), затем быстрые."),
+            Bullet("Рабочий узел — тот, через который реально открылся хотя бы один проверочный сайт."),
+            Bullet("Лучший открывает больше заблокированных доменов; при равенстве — меньшая задержка."),
+            Bullet("Узел с 5 провалами подряд удаляется; успешная проверка обнуляет счётчик."));
+        page.AddView(how);
+
+        var hint = Ui.Banner(P, this, P.Accent, "Почему списка нет",
+            "В Windows таблица узлов скрыта так же: имена серверов не показываются. Приложение берёт " +
+            "проверенный узел по доступу к сервису и задержке, а вы видите только результат.");
+        Ui.Add(page, hint, 12);
+
+        SetPage(page);
     }
 
-    private Button MakeButton(string text, Action action)
+    private TextView Bullet(string text)
     {
-        var button = new Button(this) { Text = text, TextSize = 13f };
-        button.Click += (_, _) => action();
-        return button;
+        var view = Ui.Text(this, "•  " + text, 12.5f, P.MutedStrong);
+        view.SetLineSpacing(0, 1.15f);
+        view.SetPadding(0, Ui.Dp(this, 3), 0, Ui.Dp(this, 3));
+        return view;
     }
 
     private async Task LoadAsync()
@@ -140,14 +157,8 @@ public sealed class NodesActivity : Activity
         {
             await RunTestAsync();
         }
-
-        if (_autoConnect)
-        {
-            ConnectSelected();
-        }
     }
 
-    /// <summary>Отладочный выбор узла по тегу: только через adb, в интерфейсе списка нет.</summary>
     private void ApplyAutoSelect()
     {
         if (string.IsNullOrWhiteSpace(_autoSelect))
@@ -177,8 +188,7 @@ public sealed class NodesActivity : Activity
         var discord = nodes.Count(node => node.DiscordOk == true);
         var bestDomains = working == 0
             ? 0
-            : nodes.Where(node => node.Status == NodeStatus.Working)
-                   .Max(node => node.OpenDomains);
+            : nodes.Where(node => node.Status == NodeStatus.Working).Max(node => node.OpenDomains);
 
         var lastChecked = nodes
             .Where(node => node.CheckedAtUtc is not null)
@@ -188,7 +198,7 @@ public sealed class NodesActivity : Activity
 
         if (_summary is not null)
         {
-            _summary.Text = $"В списке: {nodes.Count} узлов · рабочих: {working}";
+            _summary.Text = $"{nodes.Count} узлов · рабочих {working}";
         }
 
         if (_detail is not null)
@@ -196,15 +206,9 @@ public sealed class NodesActivity : Activity
             var checkedText = lastChecked == default
                 ? "проверок ещё не было"
                 : "проверено " + lastChecked.ToLocalTime().ToString("dd.MM HH:mm");
-            _detail.Text = $"Доступ: универс. {universal}, YouTube {youtube}, " +
-                           $"Telegram {telegram}, Discord {discord}\n" +
+            _detail.Text = $"Доступ: универсальный {universal}, YouTube {youtube}, Telegram {telegram}, Discord {discord}\n" +
                            $"Мои подписки: {mine} · лимит {NodeStore.Settings.MaxTotalNodes} · " +
                            $"макс. доменов {bestDomains} · {checkedText}";
-        }
-
-        if (_connect is not null)
-        {
-            _connect.Text = "Подключить лучший узел";
         }
     }
 
@@ -212,7 +216,7 @@ public sealed class NodesActivity : Activity
     {
         if (_busy)
         {
-            Toast.MakeText(this, "Дождитесь окончания операции", ToastLength.Short)?.Show();
+            Ui.Toast(this, "Дождитесь окончания операции");
             return;
         }
 
@@ -220,25 +224,35 @@ public sealed class NodesActivity : Activity
         _work = new CancellationTokenSource();
         SetProgress("Обновляю источники…");
 
+        var testAfterRefresh = NodeStore.Settings.TestAfterRefresh;
         try
         {
             var progress = new Progress<string>(SetProgress);
             var summary = await NodeStore.RefreshAsync(progress, _work.Token);
             SetProgress(summary);
+            AndroidSettingsStore.Current.LastSourceRefreshUtc = DateTime.UtcNow;
+            AndroidSettingsStore.Save();
         }
         catch (System.OperationCanceledException)
         {
             SetProgress("Обновление отменено");
+            testAfterRefresh = false;
         }
         catch (Exception exception)
         {
             AppLog.Write("sources", "Ошибка обновления источников", exception);
             SetProgress("Ошибка обновления: " + exception.Message);
+            testAfterRefresh = false;
         }
         finally
         {
             _busy = false;
             UpdateSummary();
+        }
+
+        if (testAfterRefresh)
+        {
+            await RunTestAsync();
         }
     }
 
@@ -246,25 +260,27 @@ public sealed class NodesActivity : Activity
     {
         if (_busy)
         {
-            Toast.MakeText(this, "Дождитесь окончания операции", ToastLength.Short)?.Show();
+            Ui.Toast(this, "Дождитесь окончания операции");
+            return;
+        }
+
+        if (ProbeClient.IsRunning)
+        {
+            Ui.Toast(this, "Проверка узлов уже идёт — дождитесь окончания");
             return;
         }
 
         _busy = true;
         _work = new CancellationTokenSource();
-        SetProgress("Проверяю узлы в отдельном процессе…");
+        ShowTestProgress(new ProbeProgress("Запускаю проверку узлов…", 0, 0, 0));
 
         try
         {
-            // Отдельный процесс :probe: основное ядро и VPN не перезапускаются.
-            var summary = await ProbeClient.RunBatchAsync(NodeTester.MaxBatch, _work.Token);
-
-            SetProgress(summary.Error is null
-                ? $"Проверено {summary.Tested}: рабочих {summary.Working} " +
-                  $"(универс. {summary.Universal}, YouTube {summary.Youtube}, " +
-                  $"Telegram {summary.Telegram}, Discord {summary.Discord}), " +
-                  $"лучший открывает доменов {summary.BestDomains}, удалено {summary.Removed}"
-                : summary.Error);
+            var progress = new Progress<ProbeProgress>(ShowTestProgress);
+            // Ручная проверка перепроверяет и рабочие узлы, иначе счётчики не менялись бы.
+            var summary = await ProbeClient.RunBatchAsync(
+                NodeTester.MaxBatch, _work.Token, progress, recheckWorking: true);
+            SetProgress(MainActivity.DescribeTestResult(summary));
         }
         catch (Exception exception)
         {
@@ -274,89 +290,79 @@ public sealed class NodesActivity : Activity
         finally
         {
             _busy = false;
+            HideTestProgress();
             UpdateSummary();
         }
     }
 
-    private void ConnectSelected()
+    /// <summary>Ход проверки: текст и полоска прогресса.</summary>
+    private void ShowTestProgress(ProbeProgress progress) => RunOnUiThread(() =>
     {
-        var selected = NodeStore.Selected;
-        if (selected is not null &&
-            TunnelService.State == TunnelState.Running &&
-            CoreRuntime.IsRunning)
+        if (_progress is not null)
         {
-            // Туннель уже поднят: узел из его конфига переключаем через Clash selector —
-            // без перезапуска ядра и без пересоздания TUN.
-            if (CoreRuntime.LoadedTags.Contains(selected.Tag))
+            _progress.Text = progress.Describe();
+        }
+
+        if (_bar is not null)
+        {
+            _bar.Visibility = ViewStates.Visible;
+            if (progress.Total > 0)
             {
-                _ = SwitchNodeAsync(selected);
-                return;
+                _bar.Indeterminate = false;
+                _bar.Max = progress.Total;
+                _bar.Progress = Math.Clamp(progress.Tested, 0, progress.Total);
             }
-
-            SetProgress("Проверенный узел не в текущем конфиге — переподключаю туннель");
+            else
+            {
+                _bar.Indeterminate = true;
+            }
         }
+    });
 
-        var config = NodeStore.BuildTunnelConfig(out var error);
-        if (config is null)
+    private void HideTestProgress() => RunOnUiThread(() =>
+    {
+        if (_bar is not null)
         {
-            Toast.MakeText(this, error ?? "Нет узлов для подключения", ToastLength.Long)?.Show();
-            SetProgress(error ?? "Нет узлов для подключения");
+            _bar.Indeterminate = false;
+            _bar.Visibility = ViewStates.Gone;
+        }
+    });
+
+    private async Task MeasureAsync()
+    {
+        if (TunnelService.State != TunnelState.Running)
+        {
+            SetProgress("Сначала подключитесь к узлу: скорость меряется через туннель");
             return;
         }
 
-        var request = VpnStarter.PrepareRequest(this);
-        if (request is not null)
-        {
-            _pendingConfig = config;
-            StartActivityForResult(request, VpnRequestCode);
-            return;
-        }
-
-        VpnStarter.Start(this, config);
-        Toast.MakeText(this, "Туннель запускается", ToastLength.Short)?.Show();
-        Finish();
+        SetProgress("Замеряю скорость через узел…");
+        var speed = await NetworkProbe.MeasureSpeedAsync(CancellationToken.None);
+        SetProgress(speed is null ? "Замер не удался" : $"Скорость: {speed:0.#} Мбит/с");
+        UpdateSummary();
     }
 
-    /// <summary>Переключение на уже загруженный узел: соединение не рвётся, ядро не перезапускается.</summary>
-    private async Task SwitchNodeAsync(ProxyNode node)
+    private void ExportSelected()
     {
-        SetProgress("Переключаюсь на проверенный узел…");
+        var node = NodeStore.Selected ?? NodeStore.Snapshot().FirstOrDefault();
+        if (node is null)
+        {
+            SetProgress("Нет узла для экспорта");
+            return;
+        }
+
         try
         {
-            using var api = new ClashApiClient(CoreRuntime.ApiPort, CoreRuntime.ApiSecret);
-            await api.SelectAsync(SingBoxConfigBuilder.SelectorTag, node.Tag, CancellationToken.None);
-            TunnelService.UpdateNodeLabel(node.DisplayDelay);
-            SetProgress("Подключено · " + node.DisplayDelay);
-            Toast.MakeText(this, "Подключено · " + node.DisplayDelay, ToastLength.Short)?.Show();
-            Finish();
+            var send = new Intent(Intent.ActionSend)
+                .SetType("text/plain")
+                .PutExtra(Intent.ExtraText, ProfileExport.BuildShareLink(node))
+                .PutExtra(Intent.ExtraSubject, "Узел VieNLink");
+            StartActivity(Intent.CreateChooser(send, "Поделиться узлом"));
         }
         catch (Exception exception)
         {
-            AppLog.Write("nodes", "Не удалось переключить узел", exception);
-            SetProgress("Ядро не приняло узел: " + exception.Message);
+            SetProgress("Не удалось поделиться: " + exception.Message);
         }
-    }
-
-    protected override void OnActivityResult(int requestCode, Result resultCode, Intent? data)
-    {
-        base.OnActivityResult(requestCode, resultCode, data);
-        if (requestCode != VpnRequestCode)
-        {
-            return;
-        }
-
-        if (resultCode == Result.Ok && _pendingConfig is not null)
-        {
-            VpnStarter.Start(this, _pendingConfig);
-            Toast.MakeText(this, "Туннель запускается", ToastLength.Short)?.Show();
-            Finish();
-        }
-        else
-        {
-            SetProgress("Разрешение VPN не выдано");
-        }
-
-        _pendingConfig = null;
     }
 
     private void SetProgress(string text) => RunOnUiThread(() =>

@@ -45,6 +45,7 @@ public partial class MainWindow
         _settings.IdleTestIntervalMinutes = ParseInt(IdleIntervalBox, _settings.IdleTestIntervalMinutes, 1, 1440);
         _settings.IdleRecheckHours = ParseInt(IdleRecheckBox, _settings.IdleRecheckHours, 1, 168);
         _settings.MinimizeToTray = MinimizeTrayCheck.IsChecked == true;
+        _settings.WidgetTopmost = WidgetTopmostCheck.IsChecked == true;
         _settings.KillSwitch = KillSwitchCheck.IsChecked == true;
         _settings.ShowTraffic = ShowTrafficCheck.IsChecked == true;
         _settings.ShowExitInfo = ShowExitInfoCheck.IsChecked == true;
@@ -59,6 +60,7 @@ public partial class MainWindow
 
         LoadSettingsToUi();
         SaveSettings();
+        _zapretWidget?.RefreshTopmostState();
         UpdateHeaderState();
         FooterText.Text = "Настройки сохранены";
 
@@ -88,6 +90,19 @@ public partial class MainWindow
         int.TryParse(box.Text.Trim(), out var value) ? Math.Clamp(value, minimum, maximum) : fallback;
 
     private void SaveSettings() => JsonFileStore.Write(AppPaths.SettingsPath, _settings);
+
+    /// <summary>Галочка «Виджет поверх всех окон» применяется сразу, без «Сохранить».</summary>
+    private void OnWidgetTopmostChanged(object sender, RoutedEventArgs e)
+    {
+        if (_loadingSettings)
+        {
+            return;
+        }
+
+        _settings.WidgetTopmost = WidgetTopmostCheck.IsChecked == true;
+        SaveSettings();
+        _zapretWidget?.RefreshTopmostState();
+    }
 
     private void OnThemeChanged(object sender, RoutedEventArgs e)
     {

@@ -46,6 +46,9 @@
                                Visibility="Collapsed" TextTrimming="CharacterEllipsis" />
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button x:Name="WidgetPinButton" Content="📌" Style="{StaticResource WidgetButton}"
+                            Padding="3,0" FontSize="9.5" Margin="0,0,1,0" Click="OnPinClick"
+                            ToolTip="Виджет поверх всех окон: включено. Нажмите, чтобы отключить" />
                     <Button x:Name="WidgetCollapseButton" Content="▾" Style="{StaticResource WidgetButton}"
                             Padding="3,0" FontSize="9.5" Margin="0,0,1,0" Click="OnCollapseClick"
                             ToolTip="Свернуть или развернуть виджет" />

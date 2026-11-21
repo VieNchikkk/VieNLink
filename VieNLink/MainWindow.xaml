@@ -1103,6 +1103,9 @@
                                                Foreground="{DynamicResource WarningBrush}"
                                                Text="Статус: бета-версия. Основные режимы проверены, но возможны сбои." />
                                     <CheckBox x:Name="MinimizeTrayCheck" Content="Сворачивать в трей вместо закрытия" Style="{StaticResource AppCheckBox}" Margin="0,4" />
+                                    <CheckBox x:Name="WidgetTopmostCheck" Content="Виджет поверх всех окон" Style="{StaticResource AppCheckBox}" Margin="0,4"
+                                              Checked="OnWidgetTopmostChanged" Unchecked="OnWidgetTopmostChanged"
+                                              ToolTip="Виджет остаётся видимым поверх игр и браузера. Отключите, если он закрывает нужное окно; то же переключается кнопкой-закрепом в самом виджете." />
                                     <CheckBox x:Name="LightThemeCheck" Content="Светлая тема" Style="{StaticResource AppCheckBox}" Margin="0,4" Checked="OnThemeChanged" Unchecked="OnThemeChanged" />
                                     <CheckBox x:Name="AutostartCheck" Content="Запускать VieNLink при входе в Windows (в трее)" Style="{StaticResource AppCheckBox}" Margin="0,4"
                                               Checked="OnAutostartChanged" Unchecked="OnAutostartChanged"

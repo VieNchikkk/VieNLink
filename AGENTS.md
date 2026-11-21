@@ -26,7 +26,7 @@
 
 ## Карта файлов
 - `VieNLink.Core/` — общее ядро (`net10.0`, без Windows): `Models`, `LinkParser`, `SubscriptionParser`, `NodeSources`, `NodeRanking`, `SingBoxConfigBuilder`, `ClashApiClient`, `TlsHello`, `TlsFragmentForwarder`, `MtProtoService`, `SourceDiscoveryService`, `JsonFileStore`, `AppLog`, `AppPaths`, `SecretProtector`. Используется Windows- и Android-версиями.
-- `VieNLink.Android/` — Android-клиент (`net10.0-android`, без MAUI): `MainActivity` (сводка, быстрое подключение по сервису), `NodesActivity` (сводка узлов без списка: обновление, проверка, подключение лучшего), `SourcesActivity` (подписки и ссылки), `SettingsActivity` (автозапуск, split-tunnel), `AppPickerActivity` (приложения через VPN), `DiagnosticsActivity`, `LogActivity`, `ForwarderHost`, `BypassActivity`, `TunnelService : VpnService`, `CoreRuntime` (единый `CommandServer` на процесс), `ProbeService` (проверка узлов в отдельном процессе `:probe`), `ProbeClient`, `ProbeScheduler`, `NodeStore`, `NodeTester` (Clash API 20801), `AndroidSettings`, `BootReceiver`, `TunnelTileService`, `VpnStarter`, `SettingsStore`, `UiMetrics`, `LibBoxPlatform`, `LibBoxServerHandler`, `LocalDnsTransport`, `KeystoreSecretStore`; ядро подключается как `Libs\libbox.aar`.
+- `VieNLink.Android/` — Android-клиент (`net10.0-android`, без MAUI): `MainActivity` (+ `MainActivity.Pages`) — шапка и вкладки «Подключение / Обход / Инструменты / Журнал / Общие»; `ThemeManager` + `Ui` — палитра Windows, карточки и кнопки; `TelegramActivity` + `MtProtoStore` — MTProto через RSS; `TunnelActivity` — «Туннелирование», только маршрутизация по доменам; `NodesActivity` (сводка узлов без списка), `SourcesActivity` (подписки и ссылки), `SettingsActivity`, `AppPickerActivity` (список приложений с иконками), `LogActivity`, `AboutActivity`, `LicenseActivity` (тексты GPL-3.0 и сторонних компонентов из assets), `ForwarderHost`, `BypassActivity`, `TunnelService : VpnService` (автопереключение, действия уведомления «Лучший»/«Узлы»/«Отключить»), `TunnelWidget` (виджет), `Maintenance` + `MaintenanceReceiver` (фон каждые 30 минут), `MtProtoScheduler` (сбор/проверка MTProto каждые 2 минуты в процессе), `NetworkProbe` (выход/скорость), `AndroidUpdate` (поиск релиза с APK, загрузка и SHA-256), `UpdateCenter` (автопроверка, диалог установки), `UpdateNotifier` (уведомления), `ApkInstaller` + `UpdateInstallReceiver` (`PackageInstaller`), `LogReader`, `CoreRuntime` (единый `CommandServer` на процесс), `ProbeService` (проверка узлов в отдельном процессе `:probe`), `ProbeClient`, `ProbeScheduler`, `ProbeModels` (схемы запроса/результата/хода `:probe`), `NodeStore` (в т.ч. `PickVerifiedAsync`), `NodeTester` (Clash API 20801), `AndroidSettings`, `BootReceiver`, `TunnelTileService`, `VpnStarter`, `SettingsStore`, `UiMetrics`, `VieNLinkApp` (точка входа Application: регистрация Keystore, перенаправление stderr ядра, запуск планировщиков), `LibBoxPlatform`, `LibBoxServerHandler`, `LocalDnsTransport`, `DefaultNetworkCallback` + `NetworkInterfaceIterator` (смена сети и список интерфейсов для ядра), `KeystoreSecretStore`; ресурсы — `Resources/values`, `Resources/drawable`, `Resources/mipmap-*`, `Resources/layout/widget.xml`, `Resources/xml/widget_info.xml`; ядро подключается как `Libs\libbox.aar`.
 - `VieNLink.slnx` — решение: `VieNLink.Core`, `VieNLink`, `VieNLink.SelfTest`, `VieNLink.Android`.
 - `VieNLink/App.xaml(.cs)` — запуск, один экземпляр, тема, журнал, перехват ошибок.
 - `VieNLink/app.manifest` — запуск без прав администратора, Windows 10/11, длинные пути.
@@ -59,13 +59,23 @@
 - `VieNLink/ProxyManager.cs` — оркестрация: проверка узлов по списку заблокированных доменов (`TlsHello.TargetDomains`) и `OpenDomains`, выбор узла, системный прокси, health-check. Есть `TestLoadedNodesAsync` — проверка только уже загруженных узлов без перезапуска ядра (для простоя).
 - `VieNLink/SystemProxy.cs` — включение/восстановление системного прокси и список исключений.
 - `VieNLink/TrayIconService.cs` — значок в трее; в меню только «Подключить лучший» без списка адресов.
-- `VieNLink/ZapretWidget.xaml(.cs)` — плавающий виджет с тремя способами: «Zapret», «Свой обход DPI» (WinDivert) и «Видео YouTube» (через узел). Работающий режим подсвечен, ниже мелко подписаны режим и стратегия; в свёрнутом виде — точка состояния (зелёная/красная) и название включённого режима. Место и свёрнутое состояние запоминаются в `settings.json`.
+- `VieNLink/ZapretWidget.xaml(.cs)` — плавающий виджет с тремя способами: «Zapret», «Свой обход DPI» (WinDivert) и «Видео YouTube» (через узел). Работающий режим подсвечен, ниже мелко подписаны режим и стратегия; в свёрнутом виде — точка состояния (зелёная/красная) и название включённого режима. Место и свёрнутое состояние запоминаются в `settings.json`. Виджет по умолчанию **поверх всех окон**; закреп «📌» в шапке и галочка «Виджет поверх всех окон» в «Общих» переключают `AppSettings.WidgetTopmost` (по умолчанию `true`).
 - `VieNLink/WindowChromeTheme.cs` — цвет системного заголовка окна под текущую тему через `DwmSetWindowAttribute` (Windows 10/11).
 - `VieNLink/ProcessPickerWindow.xaml(.cs)` — выбор приложений из запущенных процессов для правила «только для приложений из списка».
 - `VieNLink/Themes/*.xaml` — палитры тёмной/светлой темы и стили контролов.
 - `VieNLink.SelfTest/Program.cs` — self-test: `parsers`, `liveness`, `seed`, `desync`, `forwarder`.
+- Автообновление Android: `AndroidUpdate.FindLatestAsync` читает `releases?per_page=30`
+  (не `releases/latest`: тот игнорирует Pre-release), выбирает релиз с максимальной версией
+  **среди содержащих APK**, скачивает файл, сверяет SHA-256 из `*.apk.sha256` и отдаёт
+  `ApkInstaller` (`PackageInstaller`, `REQUEST_INSTALL_PACKAGES`). `UpdateCenter` проверяет
+  при запуске (не чаще 6 ч) и в фоне, `UpdateNotifier` показывает ход/готовность. Совсем
+  без подтверждения Android APK не ставит — системное окно установки обязательно.
+- Windows-обновлятор (`AppUpdateService`) пропускает релизы без `setup.exe` и ZIP:
+  Android-релиз с одним APK не должен предлагаться Windows-версии.
 - `build/publish-release.ps1` — релиз: self-contained один exe, опционально ядро в `core\`, zapret в `zapret\`, ZIP.
 - `build/publish-installer.ps1` — оба варианта поставки: портативный ZIP + `setup.exe` (Inno Setup).
+- `build/publish-android.ps1` — подписанный Release APK и `.apk.sha256`; долговременный ключ
+  в `%LOCALAPPDATA%\VieNLink\signing` (в репозиторий не попадает).
 - `build/installer.iss` — сценарий Inno Setup: установка в профиль пользователя, ярлыки, деинсталлятор.
 - `docs/plan-2026.md` — план работ 2026–2027 и журнал прогресса: фазы, чек-боксы, решения, грабли.
 - `docs/handoff.md` — передача контекста новому агенту: состояние, следующий шаг, грабли.
@@ -79,7 +89,7 @@
 
 **Текущая точка остановки — `docs/plan-2026.md` §0 «Точка остановки»**: Android-версия
 работает (VPN → узел → YouTube), сделаны узлы, источники, настройки, автозапуск, плитка,
-deep link, split-tunnel, журнал, диагностика, уведомление и TUN-обход (бета; страница
+deep link, split-tunnel (маршрутизация по приложениям в «Туннелировании»), журнал, уведомление и TUN-обход (бета; страница
 YouTube открывается без узла, видео требует узел). Правовые задачи 0.4–0.5 закрыты
 (лицензии и поставка, проверка на секреты). Дальше — тест на втором операторе, ручное
 добавление плитки и улучшение обхода DPI.

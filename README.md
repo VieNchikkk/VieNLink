@@ -4,6 +4,7 @@
 
 ![status: beta](https://img.shields.io/badge/status-beta-F2C14E)
 ![platform: Windows](https://img.shields.io/badge/platform-Windows-0078D4)
+![platform: Android](https://img.shields.io/badge/platform-Android-3DDC84)
 ![.NET 10](https://img.shields.io/badge/.NET-10-512BD4)
 [![release](https://img.shields.io/github/v/release/VieNchikkk/VieNLink?include_prereleases&label=release)](https://github.com/VieNchikkk/VieNLink/releases)
 [![license: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-2E7D52)](LICENSE)
@@ -11,9 +12,10 @@
 > **Статус: бета-версия.** Основные режимы проверены, но возможны сбои и изменения
 > интерфейса. Для постоянной работы надёжнее своя подписка или свой сервер.
 
-Клиент прокси для Windows: собирает публичные узлы VLESS / VMess / Trojan / Shadowsocks / Hysteria2
-из открытых списков и подписок, проверяет их через [sing-box](https://github.com/SagerNet/sing-box)
-и в одно нажатие включает системный прокси Windows, чтобы открывались заблокированные сайты.
+Клиент прокси для **Windows и Android**: собирает публичные узлы VLESS / VMess / Trojan /
+Shadowsocks / Hysteria2 из открытых списков и подписок, проверяет их через
+[sing-box](https://github.com/SagerNet/sing-box) и в одно нажатие включает системный прокси
+(Windows) или VPN-туннель (Android), чтобы открывались заблокированные сайты.
 
 Приложение не продаёт и не раздаёт доступ: узлы берутся из открытых источников, которые
 поддерживают другие люди. Работоспособность и безопасность этих узлов никто не гарантирует.
@@ -23,9 +25,15 @@
 ## Скачать
 
 Готовые сборки — в [Releases](https://github.com/VieNchikkk/VieNLink/releases):
-`VieNLink-1.0.7-setup.exe` (установщик в профиль пользователя) или портативный
-`VieNLink-1.0.7-win-x64.zip`. .NET устанавливать не нужно. Для проверки скачанного
-файла рядом лежит `SHA256SUMS.txt`.
+
+- **Windows:** `VieNLink-1.0.8-setup.exe` (установщик в профиль пользователя) или портативный
+  `VieNLink-1.0.8-win-x64.zip`. .NET устанавливать не нужно.
+- **Android:** `VieNLink-1.1.0-android.apk` (Android 8.0+, arm64). Отдельной страницы в
+  магазине нет — APK ставится вручную, с разрешением установки из этого источника.
+
+Контрольные суммы — в `SHA256SUMS.txt` рядом с файлами релиза. Android-версия при запуске
+сама проверяет GitHub: если там версия выше, APK скачивается и предлагается установка
+(Android всегда просит подтвердить установку в системном окне).
 
 ## Возможности
 
@@ -59,6 +67,8 @@
 - Автозапуск при входе в Windows, kill switch (не выпускать трафик напрямую при падении ядра),
   проверка и обновление ядра sing-box, снятие loopback-изоляции для приложений Магазина.
 - Быстрые наборы доменов на вкладке «Туннель»: YouTube, Telegram, Discord, Instagram, Facebook, X.
+- Плавающий виджет обхода: кнопки сервисов и обходов, перетаскивание, сворачивание
+  и режим «поверх всех окон» (отключается закрепом в виджете или галочкой в «Общих»).
 - Тёмная и светлая темы, значок в трее, журнал.
 
 ## Быстрый старт
@@ -115,6 +125,36 @@
 
 Такие прокси работают только внутри Telegram: sing-box не умеет MTProto, поэтому браузер
 через них не пойдёт.
+
+## Android
+
+Android-клиент (`VieNLink.Android`, `com.vienlink.app`) повторяет основные возможности
+Windows-версии без MAUI: VPN-туннель через `VpnService` и `libbox` (sing-box), проверка узлов
+в отдельном процессе `:probe`, экраны «Подключение / Обход / Инструменты / Журнал / Общие»,
+виджет и плитка, split-tunnel по приложениям, MTProto для Telegram и TUN-обход (бета).
+
+1. Скачайте `VieNLink-1.1.0-android.apk` из [Releases](https://github.com/VieNchikkk/VieNLink/releases)
+   и откройте файл на телефоне.
+2. Разрешите установку из выбранного источника (Android спросит один раз).
+3. В приложении нажмите «Проверить узлы», затем кнопку нужного сервиса — VPN поднимется
+   на проверенном узле.
+
+**Обновления.** При каждом запуске приложение сверяет свою версию с GitHub Releases
+(не чаще раза в 6 часов; в фоне — раз в сутки). Если на GitHub версия выше, APK скачивается
+сам, проверяется по SHA-256 и предлагается установка поверх текущей. Настройки, источники
+и кэш узлов сохраняются. Кнопка «Проверить обновление» в «Общих» и «О программе» запускает
+проверку вручную. Android не позволяет ставить APK совсем без подтверждения: последний шаг —
+системное окно «Установить».
+
+Сборка APK для релиза:
+
+```powershell
+powershell -File build\publish-android.ps1
+```
+
+Скрипт использует долговременный ключ из `%LOCALAPPDATA%\VieNLink\signing` (создаёт его при
+первом запуске) и кладёт в `release\` подписанный APK и файл `.apk.sha256`. Храните этот ключ:
+следующие версии должны быть подписаны им же, иначе Android не установит обновление поверх.
 
 ## Сколько узлов живых
 
@@ -261,8 +301,10 @@ powershell -File build\publish-release.ps1
 
 ## Версии и обновления
 
-- Текущая версия: **1.0.7-beta**, сборки — в [Releases](https://github.com/VieNchikkk/VieNLink/releases).
-- В релизе лежат `setup.exe`, портативный ZIP и `SHA256SUMS.txt`.
+- Текущие версии: Windows — **1.0.8-beta**, Android — **1.1.0**; сборки —
+  в [Releases](https://github.com/VieNchikkk/VieNLink/releases).
+- В Windows-релизе лежат `setup.exe`, портативный ZIP и `SHA256SUMS.txt`; в Android-релизе —
+  APK и файл `.apk.sha256`.
 - Что изменилось: [CHANGELOG.md](CHANGELOG.md).
 - Правила версий, схема данных и порядок выпуска: [docs/VERSIONING.md](docs/VERSIONING.md).
 - Настройки, источники и кэш переживают обновление; папки `DomVPN` и `MyrrProxy`

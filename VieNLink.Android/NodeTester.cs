@@ -113,6 +113,8 @@ internal static class NodeTester
                     TunnelMode = TunnelMode.SystemProxy,
                     SiteRouteMode = SiteRouteMode.All,
                     OnlySelectedApps = false,
+                    AppRouteMode = AppRouteMode.All,
+                    AppList = string.Empty,
                 };
 
                 var config = SingBoxConfigBuilder.Build(
@@ -186,6 +188,7 @@ internal static class NodeTester
                         .FirstOrDefault(result => result.Service == "Cloudflare").delay;
 
                     node.CheckedAtUtc = DateTime.UtcNow;
+                    node.TriedAtUtc = DateTime.UtcNow;
                     node.DelayMs = universalDelay;
                     node.UniversalOk = universalDelay is not null;
                     node.YoutubeOk = Opened(results, "YouTube");
@@ -258,6 +261,7 @@ internal static class NodeTester
                     node.FailCount = state.FailCount;
                 }
 
+                MarkTried(candidates);
                 NodeStore.SaveNodes();
                 AppLog.Write("test", $"Откат проверки: ни один из {candidates.Count} узлов не открылся");
                 return new NodeTestSummary(candidates.Count, 0, 0,
@@ -357,6 +361,7 @@ internal static class NodeTester
                     .FirstOrDefault(result => result.Service == "Cloudflare").delay;
 
                 node.CheckedAtUtc = DateTime.UtcNow;
+                node.TriedAtUtc = DateTime.UtcNow;
                 node.DelayMs = universalDelay;
                 node.UniversalOk = universalDelay is not null;
                 node.YoutubeOk = Opened(results, "YouTube");
@@ -426,6 +431,7 @@ internal static class NodeTester
                 node.FailCount = state.FailCount;
             }
 
+            MarkTried(candidates);
             return new NodeTestSummary(candidates.Count, 0, 0,
                 "Ни один узел не открылся — статусы не изменены.");
         }
@@ -442,6 +448,20 @@ internal static class NodeTester
     /// <summary>Открылся ли хотя бы один адрес указанного сервиса.</summary>
     private static bool Opened(IEnumerable<(string Service, int? delay)> results, string service) =>
         results.Any(result => result.Service == service && result.delay is not null);
+
+    /// <summary>
+    /// Отмечает попытку проверки, не меняя статус и счётчик провалов. Без этого партия,
+    /// где не открылся ни один узел, откатывалась бы и следующая проверка снова брала
+    /// бы ровно те же узлы — список не двигался бы с места никогда.
+    /// </summary>
+    private static void MarkTried(IEnumerable<ProxyNode> nodes)
+    {
+        var now = DateTime.UtcNow;
+        foreach (var node in nodes)
+        {
+            node.TriedAtUtc = now;
+        }
+    }
 
     /// <summary>Сколько доменов из списка заблокированных открывает узел.</summary>
     private static async Task<int> CountOpenDomainsAsync(

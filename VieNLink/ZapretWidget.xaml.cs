@@ -26,6 +26,7 @@ public partial class ZapretWidget : Window
         _main = main;
         var placement = _main.GetWidgetPlacement();
         _collapsed = placement.Collapsed;
+        RefreshTopmostState();
         _main.ZapretStateChanged += OnStateChanged;
         _timer.Tick += (_, _) => Refresh();
         _placementSaveTimer.Tick += (_, _) =>
@@ -220,6 +221,27 @@ public partial class ZapretWidget : Window
             Refresh();
         }
     }
+
+    /// <summary>
+    /// «Поверх всех окон»: по умолчанию включено, чтобы виджет не прятался за игрой
+    /// или браузером. Отключается закрепом в шапке виджета или галочкой в «Общих».
+    /// </summary>
+    public void RefreshTopmostState()
+    {
+        var topmost = _main.GetWidgetTopmost();
+        Topmost = topmost;
+        if (WidgetPinButton is not null)
+        {
+            WidgetPinButton.Content = topmost ? "📌" : "📍";
+            WidgetPinButton.Opacity = topmost ? 1 : 0.45;
+            WidgetPinButton.ToolTip = topmost
+                ? "Виджет поверх всех окон: включено. Нажмите, чтобы отключить"
+                : "Виджет поверх всех окон: выключено. Нажмите, чтобы включить";
+        }
+    }
+
+    private void OnPinClick(object sender, RoutedEventArgs e) =>
+        _main.SaveWidgetTopmost(!_main.GetWidgetTopmost());
 
     private void OnHeaderMouseDown(object sender, MouseButtonEventArgs e)
     {

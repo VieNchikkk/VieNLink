@@ -56,6 +56,7 @@ public partial class MainWindow
             IdleIntervalBox.Text = _settings.IdleTestIntervalMinutes.ToString();
             IdleRecheckBox.Text = _settings.IdleRecheckHours.ToString();
             MinimizeTrayCheck.IsChecked = _settings.MinimizeToTray;
+            WidgetTopmostCheck.IsChecked = _settings.WidgetTopmost;
             LightThemeCheck.IsChecked = string.Equals(_settings.Theme, "Light", StringComparison.OrdinalIgnoreCase);
             // Автозапуск читаем из реестра: это фактическое состояние, а не пожелание.
             AutostartCheck.IsChecked = AutostartService.IsEnabled;

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Палитра тёмной темы: графит и приглушённый зелёный, как в Windows-версии. -->
+    <color name="app_background">#FF18191B</color>
+    <color name="panel">#FF1E2023</color>
+    <color name="card">#FF26292C</color>
+    <color name="surface">#FF2A2D31</color>
+    <color name="chip">#FF2B2F34</color>
+    <color name="inner">#FF222528</color>
+    <color name="border">#FF34383D</color>
+    <color name="border_soft">#FF3F444A</color>
+    <color name="text">#FFF2F3F5</color>
+    <color name="text_strong">#FFF7F8F9</color>
+    <color name="muted">#FFA3A9AF</color>
+    <color name="muted_strong">#FFC9CED4</color>
+    <color name="accent">#FF9CCDB0</color>
+    <color name="accent_contrast">#FF09201B</color>
+    <color name="accent_surface">#FF224A3A</color>
+    <color name="accent_border">#FF59A57A</color>
+    <color name="positive">#FFB3EFCF</color>
+    <color name="danger">#FFF08C9C</color>
+    <color name="danger_surface">#FF3A2028</color>
+    <color name="warning">#FFF2C14E</color>
+    <color name="warning_surface">#FF4D3D18</color>
+    <color name="youtube">#FFFF6B6B</color>
+    <color name="youtube_surface">#FF3A1E22</color>
+    <color name="discord">#FF8E9BFF</color>
+    <color name="discord_surface">#FF232745</color>
+    <color name="telegram">#FF6FC3F2</color>
+    <color name="telegram_surface">#FF1C3240</color>
+    <color name="universal">#FF7FD8B5</color>
+    <color name="universal_surface">#FF203A30</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="transparent">#00000000</color>
+</resources>

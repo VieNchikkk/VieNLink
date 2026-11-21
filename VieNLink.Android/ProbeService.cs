@@ -11,16 +11,27 @@ namespace VieNLink.Mobile;
 /// кэша: основной VPN и его конфиг не перезапускаются, даже если туннель поднят.
 /// Результаты пишутся в файл, основной процесс применяет их к NodeStore.
 /// </summary>
-[Service(Process = ":probe", Exported = false)]
+[Service(Process = ":probe", Exported = false,
+    ForegroundServiceType = Android.Content.PM.ForegroundService.TypeDataSync)]
 public sealed class ProbeService : Service
 {
     private const string Tag = "probe";
+    private const int NotificationId = 1002;
+    private const string ChannelId = "vienlink-probe";
+
+    private readonly object _progressLock = new();
+    private DateTime _lastProgressWrite = DateTime.MinValue;
+    private int _progressTested;
+    private int _progressWorking;
+    private int _progressTotal;
 
     public override void OnCreate()
     {
         base.OnCreate();
         CoreRuntime.ConfigureProbe(this);
-        CoreRuntime.EnsureSetup(this);
+        // Уведомление показываем сразу: Android даёт ~5 секунд на startForeground
+        // после StartForegroundService, а Libbox.Setup может занять больше.
+        StartProbeForeground();
     }
 
     public override StartCommandResult OnStartCommand(Intent? intent, StartCommandFlags flags, int startId)
@@ -30,13 +41,96 @@ public sealed class ProbeService : Service
         return StartCommandResult.NotSticky;
     }
 
+    /// <summary>
+    /// Проверка может стартовать из фона по будильнику: foreground-служба не даёт
+    /// Android убить `:probe` до записи результатов.
+    /// </summary>
+    private void StartProbeForeground()
+    {
+        try
+        {
+            if (Build.VERSION.SdkInt >= BuildVersionCodes.O &&
+                GetSystemService(NotificationService) is NotificationManager manager)
+            {
+                var channel = new NotificationChannel(ChannelId, "Проверка узлов", NotificationImportance.Low)
+                {
+                    Description = "Фоновая проверка прокси-узлов VieNLink",
+                };
+                manager.CreateNotificationChannel(channel);
+            }
+
+            var builder = Build.VERSION.SdkInt >= BuildVersionCodes.O
+                ? new Notification.Builder(this, ChannelId)
+                : new Notification.Builder(this);
+            builder
+                .SetContentTitle("VieNLink")
+                .SetContentText("Проверка узлов")
+                .SetSmallIcon(Resource.Drawable.ic_notification)
+                .SetOngoing(true)
+                .SetShowWhen(false);
+
+            var notification = builder.Build();
+            if (Build.VERSION.SdkInt >= BuildVersionCodes.Q)
+            {
+                StartForeground(NotificationId, notification, Android.Content.PM.ForegroundService.TypeDataSync);
+            }
+            else
+            {
+                StartForeground(NotificationId, notification);
+            }
+        }
+        catch (Exception exception)
+        {
+            // Без foreground-режима проверка всё равно попробует выполниться.
+            AppLog.Write(Tag, "Не удалось показать уведомление проверки", exception);
+        }
+    }
+
     public override IBinder? OnBind(Intent? intent) => null;
+
+    /// <summary>
+    /// Пишет ход проверки в файл: основной процесс читает его и показывает
+    /// «проверено N из M, рабочих K». Частые записи не нужны — не чаще двух в секунду.
+    /// </summary>
+    private void WriteProgress(string stage, int tested, int total, int working, bool force = false)
+    {
+        lock (_progressLock)
+        {
+            if (!force && DateTime.UtcNow - _lastProgressWrite < TimeSpan.FromMilliseconds(500))
+            {
+                return;
+            }
+
+            _lastProgressWrite = DateTime.UtcNow;
+            try
+            {
+                Directory.CreateDirectory(AppPaths.DataDirectory);
+                var file = new ProbeProgressFile
+                {
+                    Stage = stage,
+                    Tested = tested,
+                    Total = total,
+                    Working = working,
+                };
+                File.WriteAllText(ProbeProtocol.ProgressPath,
+                    JsonSerializer.Serialize(file, ProbeProtocol.Json), new UTF8Encoding(false));
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write(Tag, "Не удалось записать ход проверки", exception);
+            }
+        }
+    }
 
     private async Task RunAsync(string? requestPath)
     {
         var result = new ProbeResultFile();
+        // Первая отметка пишется сразу: по её появлению основной процесс понимает,
+        // что служба действительно запустилась, а не пропала без ответа.
+        WriteProgress("Запускаю проверку…", 0, 0, 0, force: true);
         try
         {
+            CoreRuntime.EnsureSetup(this);
             if (string.IsNullOrWhiteSpace(requestPath) || !File.Exists(requestPath))
             {
                 result.Error = "Нет файла запроса проверки";
@@ -70,12 +164,17 @@ public sealed class ProbeService : Service
                 return;
             }
 
+            _progressTotal = parsed.Count;
+            WriteProgress("Готовлю пробное ядро…", 0, _progressTotal, 0, force: true);
+
             // Лимит конфига: не тащим в пробное ядро больше 200 узлов.
             var nodes = parsed.Select(pair => pair.Node).Take(200).ToList();
             var settings = SettingsStore.Current.Clone();
             settings.TunnelMode = TunnelMode.SystemProxy;
             settings.SiteRouteMode = SiteRouteMode.All;
             settings.OnlySelectedApps = false;
+            settings.AppRouteMode = AppRouteMode.All;
+            settings.AppList = string.Empty;
 
             var config = SingBoxConfigBuilder.Build(
                 nodes,
@@ -115,11 +214,26 @@ public sealed class ProbeService : Service
             var accepted = parsed
                 .Where(pair => loaded.Contains(pair.Node.Tag))
                 .ToList();
+            _progressTotal = accepted.Count;
+            Interlocked.Exchange(ref _progressTested, 0);
+            Interlocked.Exchange(ref _progressWorking, 0);
+            WriteProgress("Проверяю узлы…", 0, _progressTotal, 0, force: true);
+
             var summary = await NodeTester.TestBatchAsync(
                 api,
                 accepted.Select(pair => pair.Node).ToList(),
                 progress: null,
-                onTested: null,
+                onTested: node =>
+                {
+                    var tested = Interlocked.Increment(ref _progressTested);
+                    if (node.Status == NodeStatus.Working)
+                    {
+                        Interlocked.Increment(ref _progressWorking);
+                    }
+
+                    WriteProgress("Проверяю узлы…", tested, _progressTotal,
+                        Volatile.Read(ref _progressWorking));
+                },
                 CancellationToken.None,
                 concurrency: 6,
                 timeoutMs: 3500);
@@ -132,6 +246,7 @@ public sealed class ProbeService : Service
                     Status = node.Status,
                     DelayMs = node.DelayMs,
                     CheckedAtUtc = node.CheckedAtUtc,
+                    TriedAtUtc = node.TriedAtUtc,
                     YoutubeOk = node.YoutubeOk,
                     TelegramOk = node.TelegramOk,
                     UniversalOk = node.UniversalOk,
@@ -155,6 +270,9 @@ public sealed class ProbeService : Service
         }
         finally
         {
+            WriteProgress(result.Error is null ? "Записываю результаты…" : "Проверка не удалась",
+                Volatile.Read(ref _progressTested), _progressTotal, Volatile.Read(ref _progressWorking),
+                force: true);
             try
             {
                 CoreRuntime.Stop();
@@ -175,6 +293,18 @@ public sealed class ProbeService : Service
             catch (Exception exception)
             {
                 AppLog.Write(Tag, "Не удалось записать результаты проверки", exception);
+            }
+
+            try
+            {
+                if (Build.VERSION.SdkInt >= BuildVersionCodes.O)
+                {
+                    StopForeground(StopForegroundFlags.Remove);
+                }
+            }
+            catch (Exception)
+            {
+                // Уведомление могло быть уже снято.
             }
 
             StopSelf();

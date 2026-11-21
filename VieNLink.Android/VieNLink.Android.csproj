@@ -10,10 +10,10 @@
     <AssemblyName>VieNLink.Android</AssemblyName>
     <ApplicationId>com.vienlink.app</ApplicationId>
     <ApplicationTitle>VieNLink</ApplicationTitle>
-    <ApplicationVersion>1</ApplicationVersion>
-    <ApplicationDisplayVersion>1.0.5</ApplicationDisplayVersion>
+    <ApplicationVersion>2</ApplicationVersion>
+    <ApplicationDisplayVersion>1.1.0</ApplicationDisplayVersion>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
-    <Version>1.0.5</Version>
+    <Version>1.1.0</Version>
 
     <!-- Ядро (libbox.aar) кладётся в Libs: см. docs/android-design.md §4 и доку Android. -->
     <AndroidAarLibrariesDirectory>Libs</AndroidAarLibrariesDirectory>
@@ -25,6 +25,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\VieNLink.Core\VieNLink.Core.csproj" />
+    <!-- Названия стран общие с Windows-версией: файл не зависит от WPF. -->
+    <Compile Include="..\VieNLink\CountryNames.cs" Link="CountryNames.cs" />
   </ItemGroup>
 
   <ItemGroup>
