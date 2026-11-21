@@ -1,6 +1,6 @@
 # Передача контекста (handoff)
 
-Обновлено: 21.11.2026. **Правило:** перед передачей чата новому агенту (и при приближении
+Обновлено: 22.11.2026. **Правило:** перед передачей чата новому агенту (и при приближении
 к лимиту контекста) обновить этот файл и `docs/plan-2026.md` §0 «Точка остановки».
 
 Порядок чтения для нового агента: `AGENTS.md` → `docs/plan-2026.md` §0 и §16 →
@@ -10,7 +10,9 @@
 
 - Репозиторий: `C:\MyProg\MyrrProxy` (рабочая папка сессии).
 - GitHub: https://github.com/VieNchikkk/VieNLink — **публичный**. Актуальные релизы:
-  Windows `v1.0.10-beta`, Android `v1.1.1-android` (APK + `.apk.sha256`).
+  Windows `v1.3.1-beta`, Android `v1.3.1-android` (APK + `.apk.sha256`); версии
+  синхронизированы с 1.3.1 (`build/Version.props`). Android 1.2.0 также отправлен
+  в RuStore на модерацию (21.11.2026).
 - Windows-клиент: WPF, `net10.0-windows10.0.26100.0`.
 - Android-клиент: `net10.0-android` без MAUI, `com.vienlink.app`, ядро `Libs\libbox.aar`
   (sing-box 1.14.4, arm64).
@@ -19,18 +21,47 @@
 
 ## Сборка и проверки
 
-Готовый Windows-релиз 1.0.10: `release\VieNLink-1.0.10-win-x64` (+ ZIP 100,9 МБ) и
-`release\VieNLink-1.0.10-setup.exe` (92,8 МБ), exe и установщик подписаны (`CN=VieN`), внутри
+Готовый Windows-релиз 1.3.1: `release\VieNLink-1.3.1-win-x64` (+ ZIP) и
+`release\VieNLink-1.3.1-setup.exe`, exe и установщик подписаны (`CN=VieN`), внутри
 `core\`, `zapret\`, `LICENSE` и `THIRD-PARTY-NOTICES.md`. Опубликован на GitHub:
-https://github.com/VieNchikkk/VieNLink/releases/tag/v1.0.10-beta (ZIP, установщик,
-`SHA256SUMS.txt`, статус Pre-release).
+https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.1-beta.
 
-Android-релиз 1.1.1: `release\VieNLink-1.1.1-android.apk` (46,1 МБ, подпись
-`CN=VieNLink`) + `.apk.sha256`, опубликован:
-https://github.com/VieNchikkk/VieNLink/releases/tag/v1.1.1-android.
+Android-релиз 1.3.1: `release\VieNLink-1.3.1-android.apk` (подпись `CN=VieNLink`,
+versionCode 10301) + `.apk.sha256`, опубликован:
+https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.1-android.
 Сборка — `build/publish-android.ps1`, ключ — `%LOCALAPPDATA%\VieNLink\signing`
 (`vienlink-android.jks` + `android-signing.pass`), **хранить и не терять**: обновление
 ставится только поверх APK с той же подписью.
+
+**1.3.1 (22.11.2026) — два исправления по жалобам владельца.**
+- **Краш Android после автопереключения.** В `/data/tombstones/` два дампа
+  `com.vienlink.app`: `SIGSEGV` в `libmonodroid` (`open_from_bundles`) на `.NET TP Worker`
+  при ленивой загрузке `System.Net.NameResolution.dll`. Причина — гонка первой загрузки
+  DNS-сборки из фоновых потоков (health-check, `NetworkProbe` на выход/скорость,
+  `Maintenance`, `:probe`). Фикс: `VieNLinkApp.WarmNetworkAssemblies` трогает сетевые типы
+  на главном потоке при старте, до запуска фоновых задач.
+- **Счётчики значков врали** («пишет 8, а подключиться нечем»): окно свежести было 6 часов
+  (`IdleRecheckHours`), а перепроверка — 30 минут. `NodeAvailability` теперь считает
+  свежесть в минутах, окно = `NodeLimits.WorkingRecheckMinutes` (15 минут), все вызовы
+  `IsUsable` (Windows и Android) переведены на него; интервал перепроверки сокращён
+  с 30 до 15 минут.
+- Сборка: Windows 0 ошибок / 0 предупреждений; Android 0 ошибок (57 прежних предупреждений);
+  `SelfTest -- parsers/checkconfigs/statuslogic` — «всё в порядке». Исходники 1.3.1
+  закоммичены в `main` (`4e5044cb`), теги `v1.3.1-beta`/`v1.3.1-android` указывают на него.
+
+**Android 1.2.0 (21.11.2026).** Версия в `VieNLink.Android.csproj` — 1.2.0
+(versionCode 8). Собраны `release\VieNLink-1.2.0-store.apk` и `.aab` (магазинная сборка
+через `build/publish-store.ps1`, без `REQUEST_INSTALL_PACKAGES` и самообновления).
+В RuStore создано приложение `VieN` (appId 2063793196), версия 1.2.0(8) **отправлена
+на модерацию** 21.11.2026 (статус «Ожидает модерацию», публикация автоматическая 100%,
+проверка до 3 дней). Карточка и медиа заполнены, политика:
+https://vienchikkk.github.io/VieNLink/privacy.html. API-ключи, использованные для
+загрузки, удалены; приватные ключи в `%TEMP%` удалены.
+
+**Отложено:** автоматизация «GitHub → RuStore» через GitHub Actions (сборка store-APK/AAB,
+GitHub Release и загрузка через RuStore Public API; ключ в GitHub Secrets) — записано
+в `docs/plan-2026.md` §0 «Отложено на потом». Пока обновления в RuStore загружаются
+вручную: поднять versionCode → `publish-store.ps1` → кабинет RuStore.
 
 Windows (системный `dotnet`):
 
@@ -97,9 +128,8 @@ SHA-256 и переиспользуется по маркеру «тег|раз�
 3. Плитка добавляется только вручную (ColorOS игнорирует `cmd statusbar add-tile`).
 4. TUN-обход отложен владельцем.
 
-**Устройство:** realme 16 Pro 5G, установлен Release APK 1.1.1 (versionCode 3),
-VPN/TUN выключены, приложение остановлено; источники и настройки после теста
-обновления переустановлены с нуля.
+**Устройство:** realme 16 Pro 5G, установлен Release APK 1.1.5 (versionCode 7),
+VPN/TUN выключены.
 
 ## Аудит паритета ПК ↔ Android (21.11.2026, вечер)
 
@@ -274,7 +304,7 @@ Zapret/WinDivert и автоподбор TUN-обхода — «В разраб�
 
 ## Незакрытые задачи и следующий шаг
 
-1. **Android 1.1.1:** Release APK подписан и опубликован, автообновление проверено.
+1. **Android 1.1.5:** Release APK подписан и опубликован, автообновление проверено.
    Остались тест на втором операторе/устройстве, ручное добавление плитки и фоновая
    проверка при выключенном экране (ColorOS может убивать `:probe`).
    TUN-обход по решению владельца остаётся бета; автоподбор его стратегий — «в разработке».
