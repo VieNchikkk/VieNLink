@@ -92,3 +92,11 @@ internal static class SecretStore
     [DllImport("kernel32.dll")]
     private static extern IntPtr LocalFree(IntPtr hMem);
 }
+
+/// <summary>Реализация <see cref="ISecretProtector"/> для Windows: DPAPI текущей учётной записи.</summary>
+internal sealed class DpapiSecretProtector : ISecretProtector
+{
+    public byte[] Protect(string text) => SecretStore.Protect(text);
+
+    public string? Unprotect(byte[] data) => SecretStore.Unprotect(data);
+}

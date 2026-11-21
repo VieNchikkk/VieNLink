@@ -16,5 +16,19 @@ build/signing.thumbprint
 clash-with-secret.txt
 *.log
 
+# Скачанные компоненты и рабочие данные (ядро, zapret, конфиг ядра)
+core/
+zapret/
+runtime/
+sources.dat
+sources.json
+proxy-backup.json
+
+# libbox для Android — бинарный артефакт (~35 МБ), собирается из исходников
+# SagerNet/sing-box (gomobile, см. docs/android-design.md §15). В репозиторий не кладётся:
+# GPL-3.0 обязывает давать исходники, а не готовый AAR.
+VieNLink.Android/Libs/*.aar
+*.aar
+
 # Черновики иконок (в репозиторий идут только VieNLink.ico/.png и branding/)
 VieNLink/Assets/logo-variants/

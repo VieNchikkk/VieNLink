@@ -96,7 +96,7 @@ internal sealed class MtProtoRow : INotifyPropertyChanged
 
     public string DeadAtLabel => Proxy.DeadAtUtc is null ? "—" : Proxy.DeadAtUtc.Value.ToLocalTime().ToString("dd.MM HH:mm");
 
-    /// <summary>Сколько дней осталось лежать в «Нерабочих» (храним 14 дней).</summary>
+    /// <summary>Сколько часов осталось лежать в «Нерабочих» (храним 24 часа).</summary>
     public string DeadExpiresLabel
     {
         get
@@ -106,8 +106,8 @@ internal sealed class MtProtoRow : INotifyPropertyChanged
                 return "—";
             }
 
-            var left = MtProtoRetention.DeadDays - (int)(DateTime.UtcNow - Proxy.DeadAtUtc.Value).TotalDays;
-            return left <= 0 ? "удалить" : left + " дн.";
+            var left = MtProtoRetention.DeadHours - (int)(DateTime.UtcNow - Proxy.DeadAtUtc.Value).TotalHours;
+            return left <= 0 ? "удалить" : left + " ч.";
         }
     }
 

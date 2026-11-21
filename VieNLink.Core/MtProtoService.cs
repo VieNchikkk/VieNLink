@@ -202,7 +202,11 @@ internal static class MtProtoService
                     Url = string.Format(mirror, channel),
                     Kind = SourceKind.Telegram,
                 };
-                var (raw, _) = await NodeSourceService.FetchRawAsync(mirrorSource, cancellationToken)
+                // RSS-зеркала либо отвечают быстро, либо мертвы: 8 секунд и без повтора.
+                var (raw, _) = await NodeSourceService.FetchRawAsync(
+                        mirrorSource, cancellationToken,
+                        timeoutOverride: TimeSpan.FromSeconds(8),
+                        retryDirect: false)
                     .ConfigureAwait(false);
                 var proxies = Extract(TelegramText.Extract(WebUtility.HtmlDecode(raw)), source.Name);
                 if (proxies.Count > 0)
@@ -213,7 +217,7 @@ internal static class MtProtoService
             }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                AppLog.Write("mtproto", $"{source.Name}: RSS-зеркало {mirror} не ответило", exception);
+                AppLog.Write("mtproto", $"{source.Name}: RSS-зеркало {string.Format(mirror, channel)} не ответило", exception);
             }
         }
 

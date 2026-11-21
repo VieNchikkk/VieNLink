@@ -76,7 +76,7 @@ internal static class JsonFileStore
         }
     }
 
-    /// <summary>Пишет JSON, зашифрованный DPAPI: файл не читается без учётной записи Windows.</summary>
+    /// <summary>Пишет JSON, зашифрованный платформенным ключом (DPAPI/Keystore): файл не читается без ключа.</summary>
     public static bool WriteProtected<T>(string path, T value)
     {
         lock (WriteLock)
@@ -84,8 +84,10 @@ internal static class JsonFileStore
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                var protector = SecretProtector.Current
+                                ?? throw new InvalidOperationException("Шифрование секретов недоступно");
                 var json = JsonSerializer.Serialize(value, Options);
-                var bytes = SecretStore.Protect(json);
+                var bytes = protector.Protect(json);
                 var temporary = path + ".tmp";
                 File.WriteAllBytes(temporary, bytes);
                 if (File.Exists(path))
@@ -123,7 +125,14 @@ internal static class JsonFileStore
                     continue;
                 }
 
-                var json = SecretStore.Unprotect(bytes);
+                var protector = SecretProtector.Current;
+                if (protector is null)
+                {
+                    AppLog.Write("json", "Шифрование секретов недоступно: пропускаю " + Path.GetFileName(candidate));
+                    continue;
+                }
+
+                var json = protector.Unprotect(bytes);
                 if (json is null)
                 {
                     continue;

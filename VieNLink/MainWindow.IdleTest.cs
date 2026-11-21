@@ -12,85 +12,108 @@ namespace VieNLink;
 
 public partial class MainWindow
 {
-    // ---------- проверка узлов в простое ----------
+    // ---------- проверка узлов в фоне ----------
 
-    /// <summary>Проверка в простое: только когда окно свёрнуто и компьютер не используется.</summary>
+    private readonly HiddenProbeService _probe = new();
+
+    /// <summary>
+    /// Фоновая проверка: работает и в простое, и во время работы. Узлы проверяются
+    /// через скрытое ядро на отдельных портах, поэтому не мешают текущему подключению.
+    /// </summary>
     private async void OnIdleTick(object? sender, EventArgs e)
     {
-        if (_idleTesting)
-        {
-            // Пользователь вернулся за компьютер — вежливо останавливаем проход.
-            if (GetSystemIdleTime() < TimeSpan.FromMinutes(_settings.IdleTestMinutes))
-            {
-                _idleCts?.Cancel();
-            }
-
-            return;
-        }
-
-        if (!_settings.IdleTestEnabled || _busy)
+        if (_closing)
         {
             return;
         }
 
-        if (IsVisible && WindowState != WindowState.Minimized)
+        // MTProto обслуживается автономно: чистка старых, проверка и сбор через RSS.
+        // Проверка идёт первой, чтобы сбор каналов не откладывал её.
+        PruneExpiredMtProto();
+        await AutoCheckMtProtoAsync();
+        await AutoCollectMtProtoAsync();
+
+        if (_idleTesting || !_settings.IdleTestEnabled)
         {
             return;
         }
 
-        if (GetSystemIdleTime() < TimeSpan.FromMinutes(Math.Max(1, _settings.IdleTestMinutes)))
-        {
-            return;
-        }
+        var idleMinutes = Math.Max(1, _settings.IdleTestMinutes);
+        var userIdle = GetSystemIdleTime() >= TimeSpan.FromMinutes(idleMinutes);
 
+        // В простое проходы реже и крупнее; при работе — чаще и маленькими партиями,
+        // чтобы проверка не конкурировала с трафиком пользователя.
+        var interval = userIdle
+            ? Math.Clamp(_settings.IdleTestIntervalMinutes, 1, 5)
+            : Math.Clamp(_settings.IdleTestIntervalMinutes / 5, 1, 2);
         if (_lastIdleTestUtc is { } last &&
-            DateTime.UtcNow - last < TimeSpan.FromMinutes(Math.Max(1, _settings.IdleTestIntervalMinutes)))
+            DateTime.UtcNow - last < TimeSpan.FromMinutes(interval))
         {
             return;
         }
 
-        await RunIdleTestAsync();
+        await RunIdleTestAsync(userIdle);
     }
 
-    private async Task RunIdleTestAsync()
+    private async Task RunIdleTestAsync(bool userIdle)
     {
         var connected = _manager.IsConnected;
 
-        // Пока работает обход DPI, пробы через WinDivert искажаются — в простое не мешаем.
-        if (!connected && (_zapret.IsRunning || _desync.IsRunning || _tunBypass.IsRunning))
+        // TUN-обход перехватывает весь трафик, включая скрытое ядро, — в этом режиме
+        // проверяем только загруженные узлы. zapret и свой обход DPI ограничены целевыми
+        // доменами (zapret — hostlist, десинк — TlsHello), поэтому соединения к серверам
+        // узлов они не трогают и проверке не мешают.
+        if (_tunBypass.IsRunning)
         {
             return;
         }
 
-        // Без подключения TUN-ядро перехватило бы трафик всех программ — в простое так нельзя.
-        if (!connected && _settings.TunnelMode == TunnelMode.Tun)
+        // При активном TUN трафик скрытого ядра тоже уйдёт в туннель, поэтому
+        // в этом случае проверяем только уже загруженные узлы основным ядром.
+        var hidden = !(connected && _settings.TunnelMode == TunnelMode.Tun);
+
+        var baseBatch = Math.Clamp(_settings.IdleTestBatch, 5, 500);
+        var batch = userIdle ? baseBatch : Math.Clamp(baseBatch / 4, 5, 30);
+        if (_busy)
         {
-            return;
+            // Пользователь что-то делает в приложении — совсем маленькая партия.
+            batch = Math.Min(batch, 10);
         }
 
-        var batch = Math.Clamp(_settings.IdleTestBatch, 5, 500);
+        // Пока работает zapret/свой обход, видео и так идёт через WinDivert:
+        // проверяем совсем небольшими партиями, чтобы не отнимать канал.
+        var bypassActive = _zapret.IsRunning || _desync.IsRunning;
+        if (bypassActive)
+        {
+            batch = Math.Min(batch, 5);
+        }
+
         var cutoff = DateTime.UtcNow.AddHours(-Math.Clamp(_settings.IdleRecheckHours, 1, 168));
         static bool NeedsCheck(ProxyNode node, DateTime threshold) =>
             node.CheckedAtUtc is null || node.CheckedAtUtc < threshold;
 
-        var candidates = connected
-            ? _manager.LoadedNodes
-                .Where(node => NeedsCheck(node, cutoff))
-                .Take(batch)
-                .ToList()
-            : AllRows
+        List<ProxyNode> candidates;
+        if (hidden)
+        {
+            candidates = AllRows
                 .Select(row => row.Node)
                 .Where(node => node.Status == NodeStatus.Unknown ||
                                (node.Status == NodeStatus.Working && NeedsCheck(node, cutoff)))
                 .Distinct()
+                .OrderBy(node => node.Status == NodeStatus.Working)
+                .ThenBy(node => node.CheckedAtUtc ?? DateTime.MinValue)
                 .Take(batch)
                 .ToList();
-        var mtproto = _mtprotoRows
-            .Select(row => row.Proxy)
-            .Where(proxy => proxy.CheckedAtUtc is null || proxy.CheckedAtUtc < cutoff)
-            .Take(batch)
-            .ToList();
-        if (candidates.Count == 0 && mtproto.Count == 0)
+        }
+        else
+        {
+            candidates = _manager.LoadedNodes
+                .Where(node => NeedsCheck(node, cutoff))
+                .Take(batch)
+                .ToList();
+        }
+
+        if (candidates.Count == 0)
         {
             _lastIdleTestUtc = DateTime.UtcNow;
             return;
@@ -101,36 +124,35 @@ public partial class MainWindow
         var token = _idleCts.Token;
         try
         {
-            AppendLog($"Простой: узлов {candidates.Count}, MTProto {mtproto.Count} " +
-                      (connected ? "(через работающий туннель)" : "(без подключения)"));
+            var mode = hidden
+                ? (userIdle ? "скрытое ядро, простой" : "скрытое ядро, фон") +
+                  (bypassActive ? ", обход включён" : string.Empty)
+                : "через работающий туннель";
+            AppendLog($"Фон: узлов {candidates.Count} ({mode})");
             void OnTested(ProxyNode node) => Dispatcher.BeginInvoke(() => ApplyTestedNode(node));
-            var progress = new Progress<string>(line => AppLog.Write("idle", line));
+            var progress = new Progress<string>(line => AppLog.Write("probe", line));
 
             if (candidates.Count > 0)
             {
-                var summary = connected
-                    ? await _manager.TestLoadedNodesAsync(
-                        candidates, progress, OnTested, token, 2, 2500,
-                        "https://www.youtube.com/generate_204")
-                    : await _manager.TestNodesAsync(
+                var summary = hidden
+                    ? await _probe.TestAsync(
+                        candidates, _settings, progress, OnTested, token,
+                        concurrency: bypassActive ? 1 : (userIdle ? 4 : 2), timeoutMs: 3000,
+                        waitForGate: false)
+                    : await _manager.TestLoadedNodesAsync(
                         candidates, progress, OnTested, token, 2, 2500,
                         "https://www.youtube.com/generate_204");
 
-                // ApplyTestedNode уже обновил строки, а RepartitionAndSaveAsync пересоберёт списки.
-                await RepartitionAndSaveAsync();
-                AppendLog($"Простой: узлов проверено {summary.Total}, рабочих {summary.Working}");            }
-
-            if (mtproto.Count > 0)
-            {
-                await MtProtoService.TestAsync(
-                    mtproto,
-                    progress,
-                    proxy => Dispatcher.BeginInvoke(() => ApplyTestedMtProto(proxy)),
-                    token,
-                    concurrency: 2,
-                    timeoutMs: 2500);
-                MtProtoService.SaveCache(_mtprotoRows.Concat(_mtprotoDeadRows).Select(row => row.Proxy));
-                AppendLog($"Простой: MTProto проверено {mtproto.Count}, нерабочих {_mtprotoDeadRows.Count}");
+                if (summary.Total == 0)
+                {
+                    AppendLog("Фон: пробное ядро занято, такт пропущен");
+                }
+                else
+                {
+                    await RepartitionAndSaveAsync();
+                    AppendLog($"Фон: узлов проверено {summary.Total}, рабочих {summary.Working}, " +
+                              $"лучший открывает доменов {summary.BestDomains}");
+                }
             }
 
             _lastIdleTestUtc = DateTime.UtcNow;
@@ -138,13 +160,13 @@ public partial class MainWindow
         catch (OperationCanceledException)
         {
             await RepartitionAndSaveAsync();
-            AppendLog("Простой: проверка остановлена (пользователь вернулся)");
+            AppendLog("Фон: проверка остановлена");
         }
         catch (Exception exception)
         {
             // Если сработал откат (ни один узел не открылся), отметки могли разъехаться с таблицей.
             await RepartitionAndSaveAsync();
-            AppLog.Write("idle", "Проверка узлов в простое не удалась", exception);
+            AppLog.Write("probe", "Фоновая проверка узлов не удалась", exception);
         }
         finally
         {

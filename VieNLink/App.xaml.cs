@@ -41,6 +41,9 @@ public partial class App : Application
         AppLog.Initialize();
         AppPaths.EnsureDirectories();
 
+        // Ядро не знает про платформу: подставляем DPAPI до первого чтения настроек и источников.
+        SecretProtector.Current = new DpapiSecretProtector();
+
         // Если прошлый запуск упал с включённым прокси, возвращаем настройки Windows.
         try
         {

@@ -35,9 +35,21 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _idleCts;
     private bool _idleTesting;
     private DateTime? _lastIdleTestUtc;
+    private CancellationTokenSource? _mtprotoCollectCts;
+    private CancellationTokenSource? _mtprotoCheckCts;
+    private bool _mtprotoCollecting;
+    private bool _mtprotoChecking;
+    private DateTime? _lastMtProtoCollectUtc;
     private DispatcherTimer? _autoTimer;
     private CancellationTokenSource? _operation;
     private bool _busy;
+    private string _operationLabel = "текущее действие";
+    private ProxyNode? _headerConnectingNode;
+    private TrafficSample? _lastTrafficSample;
+    private bool _bypassSpeedMeasuring;
+    private string _bypassSpeedMode = string.Empty;
+    private double? _bypassSpeedMbps;
+    private DateTime _bypassSpeedMeasuredUtc;
     private bool _exitRequested;
     private bool _closing;
     private bool _loadingSettings;
@@ -62,6 +74,12 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        SourceInitialized += (_, _) => WindowChromeTheme.Apply(this);
+        InitializeWindowGeometry();
+
+        // Если прошлый запуск завершился аварийно, снимаем оставшееся правило
+        // блокировки QUIC — оно не должно работать без включённого обхода.
+        ZapretService.ClearStaleQuicBlock();
 
         _manager = new ProxyManager(_settings);
         _manager.StateChanged += OnManagerStateChanged;
@@ -134,6 +152,9 @@ public partial class MainWindow : Window
             await AutoRefreshIfStaleAsync();
             await AutoTickAsync();
 
+            // Telegram-прокси собираются сами, без ручных кнопок: RSS не зависит от t.me.
+            _ = AutoCollectMtProtoAsync(force: true);
+
             // Запуск после повышения прав: включаем обход DPI, свой обход или подключаемся в TUN-режиме.
             if (arguments.Any(arg => arg.Equals("--store-loopback", StringComparison.OrdinalIgnoreCase)))
             {
@@ -157,23 +178,11 @@ public partial class MainWindow : Window
             {
                 await StartDesyncAsync(false);
             }
-            else if (_settings.TunBypassAutoStart && IsAdministrator())
-            {
-                await StartTunBypassAsync();
-            }
-            else if (_settings.DesyncAutoStart && DesyncService.IsInstalled && IsAdministrator())
-            {
-                await StartDesyncAsync(false);
-            }
             else if (arguments.Any(arg => arg.Equals("--zapret-tune", StringComparison.OrdinalIgnoreCase)))
             {
                 await StartZapretAsync(true);
             }
             else if (arguments.Any(arg => arg.Equals("--zapret", StringComparison.OrdinalIgnoreCase)))
-            {
-                await StartZapretAsync(false);
-            }
-            else if (_settings.ZapretAutoStart && ZapretService.IsInstalled && IsAdministrator())
             {
                 await StartZapretAsync(false);
             }
@@ -190,6 +199,11 @@ public partial class MainWindow : Window
                     await ConnectAsync(node);
                 }
             }
+
+            // Ядро sing-box проверяется и обновляется само при каждом запуске.
+            _ = AutoUpdateCoreOnStartupAsync();
+            // Обновление самого VieNLink с GitHub: если версия новее — предложить установку.
+            _ = AutoCheckAppUpdateAsync();
         };
 
         _autoTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
@@ -218,7 +232,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if ((!refreshDue && !discoveryDue) || !BeginOperation())
+        if ((!refreshDue && !discoveryDue) || !BeginOperation("автообновление"))
         {
             return;
         }
@@ -266,7 +280,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (!BeginOperation())
+        if (!BeginOperation("поиск источников"))
         {
             return;
         }
@@ -407,7 +421,7 @@ public partial class MainWindow : Window
 
         var threshold = TimeSpan.FromHours(Math.Clamp(_settings.AutoUpdateHours, 1, 168));
         var stale = _sources.Any(s => s.Enabled && (s.LastCheckedUtc is null || DateTime.UtcNow - s.LastCheckedUtc.Value > threshold));
-        if (!stale || !BeginOperation())
+        if (!stale || !BeginOperation("автообновление подписок"))
         {
             return;
         }

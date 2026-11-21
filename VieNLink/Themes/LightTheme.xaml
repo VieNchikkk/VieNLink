@@ -3,7 +3,28 @@
     <!-- Светлая тема: тёплая бумага дневника, белые карточки и лесной зелёный акцент. -->
     <SolidColorBrush x:Key="AppBackgroundBrush" Color="#FFF2F4F0" />
     <SolidColorBrush x:Key="PanelBrush" Color="#FFFFFFFF" />
+    <LinearGradientBrush x:Key="HeaderBackgroundBrush" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#FFFFFFFF" Offset="0" />
+        <GradientStop Color="#FFF4F8F4" Offset="0.62" />
+        <GradientStop Color="#FFEDF6EF" Offset="1" />
+    </LinearGradientBrush>
     <SolidColorBrush x:Key="CardBrush" Color="#FFF8FAF7" />
+    <LinearGradientBrush x:Key="HeaderInfoBackgroundBrush" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FFFFFFFF" Offset="0" />
+        <GradientStop Color="#FFF1F8F3" Offset="0.55" />
+        <GradientStop Color="#FFE7F4EC" Offset="1" />
+    </LinearGradientBrush>
+    <!-- Фон статуса: градиент привязан к пикселям, поэтому не «прыгает» при смене ширины блока. -->
+    <LinearGradientBrush x:Key="HeaderStatusBackgroundBrush" StartPoint="0,0" EndPoint="640,0"
+                         MappingMode="Absolute">
+        <GradientStop Color="#FFFFFFFF" Offset="0" />
+        <GradientStop Color="#FFF1F8F3" Offset="0.55" />
+        <GradientStop Color="#FFE7F4EC" Offset="1" />
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="HeaderInfoBorderBrush" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF9CCBB0" Offset="0" />
+        <GradientStop Color="#FFDCE3DB" Offset="1" />
+    </LinearGradientBrush>
     <SolidColorBrush x:Key="SurfaceBrush" Color="#FFFFFFFF" />
     <SolidColorBrush x:Key="ChipBrush" Color="#FFEAF2EB" />
     <SolidColorBrush x:Key="InnerBrush" Color="#FFF2F5F1" />
@@ -22,6 +43,24 @@
 
     <SolidColorBrush x:Key="AccentBrush" Color="#FF2E7D52" />
     <SolidColorBrush x:Key="AccentContrastBrush" Color="#FFFFFFFF" />
+
+    <!-- Брендовые цвета сервисов: тонированные кнопки и значки. -->
+    <SolidColorBrush x:Key="YouTubeBrush" Color="#FFCC0000" />
+    <SolidColorBrush x:Key="YouTubeSurfaceBrush" Color="#1AFF0000" />
+    <SolidColorBrush x:Key="YouTubeBorderBrush" Color="#66FF0000" />
+
+    <SolidColorBrush x:Key="DiscordBrush" Color="#FF4752C4" />
+    <SolidColorBrush x:Key="DiscordSurfaceBrush" Color="#1A5865F2" />
+    <SolidColorBrush x:Key="DiscordBorderBrush" Color="#665865F2" />
+
+    <SolidColorBrush x:Key="TelegramBrush" Color="#FF1F8AC0" />
+    <SolidColorBrush x:Key="TelegramSurfaceBrush" Color="#1A2AABEE" />
+    <SolidColorBrush x:Key="TelegramSelectedSurfaceBrush" Color="#332AABEE" />
+    <SolidColorBrush x:Key="TelegramBorderBrush" Color="#662AABEE" />
+
+    <SolidColorBrush x:Key="UniversalBrush" Color="#FF2E7D52" />
+    <SolidColorBrush x:Key="UniversalSurfaceBrush" Color="#1A2E7D52" />
+    <SolidColorBrush x:Key="UniversalBorderBrush" Color="#6652B88D" />
 
     <!-- Подсветка важных действий «второго плана»: тонированная плашка в цвет акцента. -->
     <SolidColorBrush x:Key="AccentSurfaceBrush" Color="#FFE7F4EC" />

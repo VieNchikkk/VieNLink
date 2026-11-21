@@ -249,15 +249,19 @@ internal static class NodeSourceService
         node.Port == 1 && (node.Server is "0.0.0.0" or "127.0.0.1" or "::1" or "localhost");
 
     /// <summary>Сырой ответ источника: используется и для узлов, и для MTProto-прокси.</summary>
-    public static async Task<(string Text, string? SubscriptionInfo)> FetchRawAsync(SourceDefinition source, CancellationToken cancellationToken)
+    public static async Task<(string Text, string? SubscriptionInfo)> FetchRawAsync(
+        SourceDefinition source,
+        CancellationToken cancellationToken,
+        TimeSpan? timeoutOverride = null,
+        bool retryDirect = true)
     {
         // Страницы t.me маленькие: либо открываются быстро, либо канал недоступен.
-        var timeout = TimeSpan.FromSeconds(source.Kind == SourceKind.Telegram ? 15 : 40);
+        var timeout = timeoutOverride ?? TimeSpan.FromSeconds(source.Kind == SourceKind.Telegram ? 15 : 40);
         try
         {
             return await FetchOnceAsync(Http, source, timeout, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is HttpRequestException or TimeoutException)
+        catch (Exception exception) when (retryDirect && exception is HttpRequestException or TimeoutException)
         {
             // Системный прокси мог указывать на мёртвый узел: прямой запрос часто проходит.
             AppLog.Write("sources", $"Источник «{source.Name}»: повтор без прокси", exception);
@@ -325,6 +329,9 @@ internal static class NodeSourceService
                 AllowInsecure = n.AllowInsecure,
                 YoutubeOk = n.YoutubeOk,
                 TelegramOk = n.TelegramOk,
+                UniversalOk = n.UniversalOk,
+                DiscordOk = n.DiscordOk,
+                OpenDomains = n.OpenDomains,
                 Status = n.Status,
                 FailCount = n.FailCount,
             }).ToList(),
@@ -371,7 +378,8 @@ internal static class NodeSourceService
             // Старые версии хранили нерабочие узлы в статусе, номер которого совпал
             // с новым Working. Рабочий узел обязан иметь успешную проверку.
             if (item.Status == NodeStatus.Working &&
-                item.DelayMs is null && item.YoutubeOk != true && item.TelegramOk != true)
+                item.DelayMs is null && item.YoutubeOk != true && item.TelegramOk != true &&
+                item.UniversalOk != true && item.DiscordOk != true)
             {
                 dropped++;
                 continue;
@@ -403,6 +411,9 @@ internal static class NodeSourceService
             node.AllowInsecure = item.AllowInsecure || node.AllowInsecure;
             node.YoutubeOk = item.YoutubeOk;
             node.TelegramOk = item.TelegramOk;
+            node.UniversalOk = item.UniversalOk;
+            node.DiscordOk = item.DiscordOk;
+            node.OpenDomains = item.OpenDomains;
             node.Status = item.Status;
             node.FailCount = item.FailCount;
             nodes.Add(node);

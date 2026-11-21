@@ -74,9 +74,12 @@ internal sealed class ZapretService : IDisposable
 
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(2) };
 
+    private const string QuicBlockRuleName = "VieNLinkBlockQuicUdp443";
+
     private static string? _directory;
 
     private Process? _process;
+    private bool _quicBlocked;
 
     public static string Directory => _directory ??= ResolveDirectory();
 
@@ -392,6 +395,30 @@ internal sealed class ZapretService : IDisposable
             .ToList();
     }
 
+    /// <summary>
+    /// Порядок показа и перебора: сначала стратегии с лучшим сохранённым качеством,
+    /// затем — по истории удачных запусков (YouTube и полный успех).
+    /// </summary>
+    public static IReadOnlyList<int> GetPriorityOrder()
+    {
+        var historyOrder = GetHistoryOrder();
+        var historyPosition = historyOrder
+            .Select((index, position) => (index, position))
+            .ToDictionary(item => item.index, item => item.position);
+        var quality = BypassProfileStore.Ranked("zapret")
+            .GroupBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Max(profile => profile.Quality),
+                StringComparer.OrdinalIgnoreCase);
+
+        return Enumerable.Range(0, Presets.Count)
+            .OrderByDescending(index => quality.TryGetValue(Presets[index].Name, out var value) ? value : 0)
+            .ThenBy(index => historyPosition.TryGetValue(index, out var position) ? position : int.MaxValue)
+            .ThenBy(index => index)
+            .ToList();
+    }
+
     private static void SaveHistory(List<ZapretHistoryEntry> history)
     {
         try
@@ -537,12 +564,25 @@ internal sealed class ZapretService : IDisposable
         }
     }
 
+    /// <summary>
+    /// Список целевых доменов для zapret. Ограничиваем десинк ими, чтобы служебный
+    /// трафик — в том числе скрытая проверка узлов — шёл напрямую и не искажался.
+    /// </summary>
+    public static string EnsureTargetHostlist()
+    {
+        var path = Path.Combine(AppPaths.RuntimeDirectory, "zapret-target-hosts.txt");
+        System.IO.Directory.CreateDirectory(AppPaths.RuntimeDirectory);
+        File.WriteAllLines(path, TlsHello.TargetDomains);
+        return path;
+    }
+
     public async Task StartAsync(
         IProgress<string>? progress,
         CancellationToken cancellationToken,
         int presetIndex = 0,
         bool gameMode = false,
-        string? hostlistPath = null)
+        string? hostlistPath = null,
+        bool blockQuic = false)
     {
         if (!IsInstalled)
         {
@@ -550,6 +590,16 @@ internal sealed class ZapretService : IDisposable
         }
 
         Stop();
+
+        // Всегда ограничиваем десинк целевыми доменами: так он не трогает соединения
+        // к серверам узлов, и фоновая проверка может работать при включённом zapret.
+        var effectiveHostlist = hostlistPath ?? EnsureTargetHostlist();
+
+        if (blockQuic && !SetQuicBlock(true))
+        {
+            throw new InvalidOperationException(
+                "Не удалось включить блокировку QUIC (UDP/443). Проверьте права администратора и службу Windows Firewall.");
+        }
 
         var info = new ProcessStartInfo(ExecutablePath)
         {
@@ -561,43 +611,50 @@ internal sealed class ZapretService : IDisposable
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
         };
-        foreach (var argument in BuildArguments(presetIndex, gameMode, hostlistPath))
+        foreach (var argument in BuildArguments(presetIndex, gameMode, effectiveHostlist))
         {
             info.ArgumentList.Add(argument);
         }
 
-        progress?.Report("Запускаю обход DPI (zapret)…");
-        _process = Process.Start(info) ?? throw new InvalidOperationException("Не удалось запустить winws.exe");
-        SingBoxRunner.KillOnCloseJob.Assign(_process);
-        _process.OutputDataReceived += (_, e) =>
+        try
         {
-            if (!string.IsNullOrWhiteSpace(e.Data))
+            progress?.Report("Запускаю обход DPI (zapret)…");
+            _process = Process.Start(info) ?? throw new InvalidOperationException("Не удалось запустить winws.exe");
+            SingBoxRunner.KillOnCloseJob.Assign(_process);
+            _process.OutputDataReceived += (_, e) =>
             {
-                AppLog.Write("zapret", e.Data);
-            }
-        };
-        _process.ErrorDataReceived += (_, e) =>
-        {
-            if (!string.IsNullOrWhiteSpace(e.Data))
+                if (!string.IsNullOrWhiteSpace(e.Data))
+                {
+                    AppLog.Write("zapret", e.Data);
+                }
+            };
+            _process.ErrorDataReceived += (_, e) =>
             {
-                AppLog.Write("zapret", e.Data);
-            }
-        };
-        _process.BeginOutputReadLine();
-        _process.BeginErrorReadLine();
+                if (!string.IsNullOrWhiteSpace(e.Data))
+                {
+                    AppLog.Write("zapret", e.Data);
+                }
+            };
+            _process.BeginOutputReadLine();
+            _process.BeginErrorReadLine();
 
-        // Даём ядру время поднять WinDivert и начать захват пакетов.
-        await Task.Delay(3000, cancellationToken);
-        if (_process.HasExited)
-        {
-            var code = _process.ExitCode;
-            _process.Dispose();
-            _process = null;
-            throw new InvalidOperationException(
-                $"zapret завершился с кодом {code}. Проверьте права администратора и WinDivert (см. журнал).");
+            // Даём ядру время поднять WinDivert и начать захват пакетов.
+            await Task.Delay(3000, cancellationToken);
+            if (_process.HasExited)
+            {
+                throw new InvalidOperationException(
+                    $"zapret завершился с кодом {_process.ExitCode}. " +
+                    "Проверьте права администратора и WinDivert (см. журнал).");
+            }
+
+            AppLog.Write("zapret", "Обход DPI запущен (winws)");
         }
-
-        AppLog.Write("zapret", "Обход DPI запущен (winws)");
+        catch
+        {
+            // Не оставляем включённой блокировку QUIC, если обход не поднялся.
+            Stop();
+            throw;
+        }
     }
 
 
@@ -628,7 +685,7 @@ internal sealed class ZapretService : IDisposable
         {
             using var http = CreateDirectClient(TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(10));
             var history = LoadHistory().ToList();
-            var order = GetHistoryOrder();
+            var order = GetPriorityOrder();
             var probeLimit = ProbeUrls.Length;
             var results = new List<ZapretProbeResult>();
             for (var position = 0; position < order.Count; position++)
@@ -803,8 +860,109 @@ internal sealed class ZapretService : IDisposable
         return string.Join(" · ", parts);
     }
 
+    /// <summary>
+    /// Включает или снимает системное правило Windows Firewall, блокирующее исходящий
+    /// UDP/443. Так видео YouTube переходит с QUIC на TCP, который умеет разрезать zapret.
+    /// </summary>
+    private bool SetQuicBlock(bool enabled)
+    {
+        if (enabled)
+        {
+            // Удаляем возможный остаток от прошлого запуска, иначе netsh откажется
+            // создавать правило с тем же именем.
+            RunNetsh(quiet: true, "advfirewall", "firewall", "delete", "rule", $"name={QuicBlockRuleName}");
+        }
+
+        var ok = enabled
+            ? RunNetsh(
+                "advfirewall", "firewall", "add", "rule",
+                $"name={QuicBlockRuleName}",
+                "dir=out",
+                "action=block",
+                "protocol=UDP",
+                "remoteport=443",
+                "profile=any",
+                "enable=yes")
+            : RunNetsh(quiet: true, "advfirewall", "firewall", "delete", "rule", $"name={QuicBlockRuleName}");
+        _quicBlocked = enabled && ok;
+        if (ok)
+        {
+            AppLog.Write("zapret", enabled
+                ? "QUIC (UDP/443) заблокирован: видео пойдёт по TCP"
+                : "Блокировка QUIC (UDP/443) снята");
+        }
+
+        return ok;
+    }
+
+    /// <summary>Убирает правило, оставшееся после аварийного завершения прошлого запуска.</summary>
+    public static void ClearStaleQuicBlock() =>
+        RunNetsh(quiet: true, "advfirewall", "firewall", "delete", "rule", $"name={QuicBlockRuleName}");
+
+    private static bool RunNetsh(params string[] arguments) => RunNetsh(quiet: false, arguments);
+
+    private static bool RunNetsh(bool quiet, params string[] arguments)
+    {
+        try
+        {
+            var info = new ProcessStartInfo("netsh")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            };
+            foreach (var argument in arguments)
+            {
+                info.ArgumentList.Add(argument);
+            }
+
+            using var process = Process.Start(info);
+            if (process is null)
+            {
+                return false;
+            }
+
+            var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+            if (!process.WaitForExit(5000))
+            {
+                try
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+                catch (Exception exception) when (exception is InvalidOperationException or System.ComponentModel.Win32Exception)
+                {
+                }
+
+                return false;
+            }
+
+            if (process.ExitCode != 0)
+            {
+                if (!quiet)
+                {
+                    AppLog.Write("zapret", $"netsh вернул код {process.ExitCode}: {output.Trim()}");
+                }
+
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception exception) when (exception is IOException or System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            AppLog.Write("zapret", "Не удалось выполнить netsh", exception);
+            return false;
+        }
+    }
+
     public void Stop()
     {
+        if (_quicBlocked)
+        {
+            SetQuicBlock(false);
+        }
+
         var process = _process;
         _process = null;
         if (process is null)

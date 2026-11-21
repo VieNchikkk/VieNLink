@@ -41,14 +41,14 @@ public partial class MainWindow
             OnlyVerifiedConnectCheck.IsChecked = _settings.ConnectOnlyVerified;
             OnlyMineConnectCheck.IsChecked = _settings.ConnectOnlyMine;
             ZapretAutoStartCheck.IsChecked = _settings.ZapretAutoStart;
-            ZapretGameModeCheck.IsChecked = _settings.ZapretGameMode;
             DesyncAutoStartCheck.IsChecked = _settings.DesyncAutoStart;
+            ZapretBlockQuicCheck.IsChecked = _settings.ZapretBlockQuic;
             DesyncBlockQuicCheck.IsChecked = _settings.DesyncBlockQuic;
-            SelectDesyncStrategyRadio(_settings.DesyncStrategy);
+            UpdateDesyncStrategyInfo(_settings.DesyncStrategy);
             TunBypassBlockQuicCheck.IsChecked = _settings.TunBypassBlockQuic;
             TunBypassAutoStartCheck.IsChecked = _settings.TunBypassAutoStart;
             SelectTunBypassStrategyRadio(_settings.TunBypassStrategy);
-            SelectZapretPresetRadio(_settings.ZapretPreset);
+            UpdateZapretStrategyInfo(_settings.ZapretPreset);
         TestAfterRefreshCheck.IsChecked = _settings.TestAfterRefresh;
             IdleTestCheck.IsChecked = _settings.IdleTestEnabled;
             IdleMinutesBox.Text = _settings.IdleTestMinutes.ToString();
@@ -73,7 +73,17 @@ public partial class MainWindow
             RouteOnlyRadio.IsChecked = _settings.SiteRouteMode == SiteRouteMode.OnlyListed;
             RouteExceptRadio.IsChecked = _settings.SiteRouteMode == SiteRouteMode.AllExceptListed;
             SiteListBox.Text = _settings.SiteList;
-            OnlyAppsCheck.IsChecked = _settings.OnlySelectedApps;
+
+            var appMode = _settings.AppRouteMode;
+            if (appMode == AppRouteMode.All && _settings.OnlySelectedApps)
+            {
+                appMode = AppRouteMode.OnlyListed;
+            }
+
+            AppAllRadio.IsChecked = appMode == AppRouteMode.All;
+            AppOnlyRadio.IsChecked = appMode == AppRouteMode.OnlyListed;
+            AppExceptRadio.IsChecked = appMode == AppRouteMode.AllExceptListed;
+            OnlyAppsCheck.IsChecked = appMode == AppRouteMode.OnlyListed;
             AppListBox.Text = _settings.AppList;
         }
         finally
@@ -82,6 +92,7 @@ public partial class MainWindow
         }
 
         UpdateRoutingAvailability();
+        RefreshRoutingChips();
     }
 
     /// <summary>
@@ -194,8 +205,9 @@ public partial class MainWindow
         }
 
         AppListBox.Text = string.Join(Environment.NewLine, current);
-        AppListBox.ScrollToEnd();
+        AppOnlyRadio.IsChecked = true;
         OnlyAppsCheck.IsChecked = true;
+        RefreshAppChips();
         OnRoutingChanged(this, new RoutedEventArgs());
         FooterText.Text = "В список приложений добавлено: " + string.Join(", ", added);
     }
@@ -210,7 +222,12 @@ public partial class MainWindow
                 ? SiteRouteMode.AllExceptListed
                 : SiteRouteMode.All;
         _settings.SiteList = SiteListBox.Text;
-        _settings.OnlySelectedApps = OnlyAppsCheck.IsChecked == true;
+        _settings.AppRouteMode = AppOnlyRadio.IsChecked == true
+            ? AppRouteMode.OnlyListed
+            : AppExceptRadio.IsChecked == true
+                ? AppRouteMode.AllExceptListed
+                : AppRouteMode.All;
+        _settings.OnlySelectedApps = _settings.AppRouteMode == AppRouteMode.OnlyListed;
         _settings.AppList = AppListBox.Text;
     }
 
@@ -264,7 +281,7 @@ public partial class MainWindow
 
         if (snapshot.ExpiredMtProto > 0)
         {
-            AppendLog($"Из «Нерабочих» MTProto удалено {snapshot.ExpiredMtProto} прокси старше 14 дней");
+            AppendLog($"Из «Нерабочих» MTProto удалено {snapshot.ExpiredMtProto} прокси старше {MtProtoRetention.DeadHours} ч");
         }
 
         if (snapshot.TrimmedMtProto > 0)
@@ -276,8 +293,7 @@ public partial class MainWindow
 
         if (snapshot.Nodes.Count > 0)
         {
-            var working = snapshot.Nodes.Count(n => n.DelayMs is not null);
-            StatusDetail.Text = $"Из кэша: {snapshot.Nodes.Count} узлов, рабочих {working}";
+            StatusDetail.Text = "Кэш прочитан — можно проверять узлы";
             FooterText.Text = $"Кэш от {snapshot.CacheTime:dd.MM HH:mm}";
         }
 
@@ -407,6 +423,50 @@ public partial class MainWindow
         await Task.Run(() => NodeSourceService.SaveCache(unique));
     }
 
+    /// <summary>
+    /// Сводка вместо списка узлов: сколько всего, рабочих и с доступом к сервисам.
+    /// Сам список скрыт, сортировка и выбор узла идут внутри.
+    /// </summary>
+    private void UpdateNodesSummary()
+    {
+        if (NodesSummaryText is null)
+        {
+            return;
+        }
+
+        var nodes = AllRows.Select(row => row.Node).ToList();
+        var working = nodes.Count(node => node.Status == NodeStatus.Working);
+        var universal = nodes.Count(node => node.UniversalOk == true || node.DelayMs is not null);
+        var youtube = nodes.Count(node => node.YoutubeOk == true);
+        var telegram = nodes.Count(node => node.TelegramOk == true);
+        var discord = nodes.Count(node => node.DiscordOk == true);
+
+        UniversalNodeCount = nodes.Count(node => node.DelayMs is not null);
+        YoutubeNodeCount = nodes.Count(node => node.DelayMs is not null && node.YoutubeOk == true);
+        TelegramNodeCount = nodes.Count(node => node.DelayMs is not null && node.TelegramOk == true);
+        DiscordNodeCount = nodes.Count(node => node.DelayMs is not null && node.DiscordOk == true);
+        var bestDomains = working == 0
+            ? 0
+            : nodes.Where(node => node.Status == NodeStatus.Working)
+                   .Max(node => node.OpenDomains);
+
+        NodesSummaryText.Text = $"В списке: {nodes.Count} узлов · рабочих: {working}";
+        if (NodesAccessText is not null)
+        {
+            NodesAccessText.Text = $"Доступ: универс. {universal}, YouTube {youtube}, " +
+                                   $"Telegram {telegram}, Discord {discord} · " +
+                                   $"лучший открывает доменов {bestDomains}";
+        }
+
+        // Постоянная строка в шапке: её не перетирают ход проверки и сообщения операций.
+        if (HeaderNodesText is not null)
+        {
+            HeaderNodesText.Text = $"Загруженные узлы: {nodes.Count} · " +
+                                   $"YouTube {youtube} · Discord {discord} · Telegram {telegram} · " +
+                                   $"Универсальных {universal}";
+        }
+    }
+
     private void UpdateSummary()
     {
         // Количество узлов показываем прямо в заголовках подвкладок.
@@ -416,6 +476,7 @@ public partial class MainWindow
         NodesWorkingTab.Header = $"Рабочие ({_workingRows.Count})";
         UpdateMaskedCount();
         UpdateCacheSummary();
+        UpdateNodesSummary();
 
         if (WorkingEmpty is not null)
         {

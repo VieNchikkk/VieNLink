@@ -10,10 +10,10 @@
     <UseWindowsForms>true</UseWindowsForms>
     <WindowsSdkPackageVersion>10.0.26100.87</WindowsSdkPackageVersion>
 
-    <Version>1.0.5</Version>
-    <AssemblyVersion>1.0.5.0</AssemblyVersion>
-    <FileVersion>1.0.5.0</FileVersion>
-    <InformationalVersion>1.0.5-beta</InformationalVersion>
+    <Version>1.0.6</Version>
+    <AssemblyVersion>1.0.6.0</AssemblyVersion>
+    <FileVersion>1.0.6.0</FileVersion>
+    <InformationalVersion>1.0.6-beta</InformationalVersion>
     <AssemblyName>VieNLink</AssemblyName>
     <RootNamespace>VieNLink</RootNamespace>
     <Product>VieNLink (бета)</Product>
@@ -35,10 +35,15 @@
 
   <ItemGroup>
     <Resource Include="Assets\VieNLink.ico" />
+    <Resource Include="Assets\VieNLink.png" />
   </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="VieNLink.SelfTest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VieNLink.Core\VieNLink.Core.csproj" />
   </ItemGroup>
 
 </Project>

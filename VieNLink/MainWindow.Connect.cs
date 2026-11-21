@@ -40,10 +40,154 @@ public partial class MainWindow
 
     private async void OnDisconnectClick(object sender, RoutedEventArgs e)
     {
-        if (_manager.IsConnected || _manager.IsKillSwitchHeld)
+        await DisconnectEverythingAsync();
+    }
+
+    /// <summary>Кнопка шапки «Отключить»: снимает узел и все включённые обходы.</summary>
+    private async Task DisconnectEverythingAsync()
+    {
+        if (!BeginOperation("отключение"))
         {
-            await DisconnectAsync();
+            return;
         }
+
+        _failedForSession.Clear();
+        var stopped = new List<string>();
+        try
+        {
+            if (_tunBypass.IsRunning || _tunBypassStartedDesync)
+            {
+                await StopTunBypassAsync();
+                stopped.Add("TUN-обход");
+            }
+
+            if (_zapret.IsRunning)
+            {
+                _zapret.Stop();
+                UpdateZapretUi();
+                stopped.Add("обход DPI (zapret)");
+            }
+
+            if (_desync.IsRunning)
+            {
+                _desync.Stop();
+                UpdateDesyncUi();
+                stopped.Add("свой обход DPI");
+            }
+
+            if (_manager.IsConnected || _manager.IsKillSwitchHeld)
+            {
+                SetStatus("Отключаюсь", "Возвращаю системный прокси…");
+                await _manager.DisconnectAsync();
+                stopped.Add("прокси-узел");
+            }
+
+            SetStatus("Отключено", stopped.Count == 0
+                ? "Активных подключений не было"
+                : "Остановлено: " + string.Join(", ", stopped));
+            FooterText.Text = "Отключено";
+        }
+        catch (Exception exception)
+        {
+            ReportError("Ошибка при отключении", exception);
+        }
+        finally
+        {
+            EndOperation();
+            UpdateConnectionUi();
+        }
+    }
+
+    /// <summary>
+    /// Быстрое подключение к сервису: берём уже проверенный узел с нужным доступом.
+    /// Сортировка скрыта — сначала больше открытых заблокированных доменов, затем быстрее.
+    /// </summary>
+    private async void OnQuickServiceClick(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string service })
+        {
+            return;
+        }
+
+        // Любая кнопка быстрого подключения возвращает со страницы Telegram.
+        if (TelegramTab.IsChecked == true)
+        {
+            TelegramTab.IsChecked = false;
+        }
+
+        ApplyRoutingSettingsFromUi();
+        SaveSettings();
+
+        if (_settings.TunnelMode == TunnelMode.Tun && !IsAdministrator())
+        {
+            AskElevation();
+            return;
+        }
+
+        var node = PickNodeForService(service);
+        if (node is null)
+        {
+            var name = service switch
+            {
+                "youtube" => "YouTube",
+                "telegram" => "Telegram",
+                "discord" => "Discord",
+                _ => "универсальным доступом",
+            };
+            MessageBox.Show(this,
+                $"Нет проверенных узлов с доступом: {name}.\n\n" +
+                "Обновите списки и нажмите «Все узлы» на вкладке «Узлы».",
+                "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        await ConnectAsync(node);
+    }
+
+    private void OnTelegramTabChecked(object sender, RoutedEventArgs e)
+    {
+        if (TelegramPage is null || QuickConnectPage is null)
+        {
+            return;
+        }
+
+        TelegramPage.Visibility = Visibility.Visible;
+        QuickConnectPage.Visibility = Visibility.Collapsed;
+    }
+
+    private void OnTelegramTabUnchecked(object sender, RoutedEventArgs e)
+    {
+        if (TelegramPage is null || QuickConnectPage is null)
+        {
+            return;
+        }
+
+        TelegramPage.Visibility = Visibility.Collapsed;
+        QuickConnectPage.Visibility = Visibility.Visible;
+    }
+
+    /// <summary>Узел для сервиса: только проверенные, по числу открытых доменов и задержке.</summary>
+    private ProxyNode? PickNodeForService(string service)
+    {
+        var pool = _workingRows
+            .Select(row => row.Node)
+            .Where(node => node.DelayMs is not null &&
+                           (!_settings.ConnectOnlyMine || node.IsMine));
+
+        Func<ProxyNode, bool> opened = service switch
+        {
+            "youtube" => node => node.YoutubeOk == true,
+            "telegram" => node => node.TelegramOk == true,
+            "discord" => node => node.DiscordOk == true,
+            _ => node => node.UniversalOk == true || node.DelayMs is not null,
+        };
+
+        return pool
+            .Where(opened)
+            .OrderByDescending(node => node.OpenDomains)
+            .ThenBy(node => node.DelayMs)
+            .ThenByDescending(node => node.IsMine)
+            .FirstOrDefault();
     }
 
     private async Task ConnectAsync(ProxyNode node, bool automatic = false, IReadOnlyList<string>? probeUrls = null)
@@ -95,7 +239,7 @@ public partial class MainWindow
 
         if (_settings.ConnectOnlyVerified && node.DelayMs is null)
         {
-            SetStatus("Узел не проверен", "Сначала проверьте узлы: «Проверить всё» на вкладке «Узлы»");
+            SetStatus("Узел не проверен", "Сначала проверьте узлы: «Все узлы» на вкладке «Узлы»");
             return;
         }
 
@@ -105,7 +249,7 @@ public partial class MainWindow
             return;
         }
 
-        if (!BeginOperation())
+        if (!BeginOperation("подключение"))
         {
             return;
         }
@@ -132,6 +276,7 @@ public partial class MainWindow
                             !(automatic && _failedForSession.Contains(n.Id)))
                 .OrderBy(n => NodeRanking.Family(n) == firstFamily ? 1 : 0)
                 .ThenByDescending(n => telegramNeeded && n.TelegramOk == true)
+                .ThenByDescending(n => n.OpenDomains)
                 .ThenByDescending(n => n.IsMine)
                 .ThenByDescending(NodeRanking.Score)
                 .ThenBy(n => n.DelayMs)
@@ -141,6 +286,8 @@ public partial class MainWindow
             foreach (var candidate in candidates)
             {
                 _operation!.Token.ThrowIfCancellationRequested();
+                _headerConnectingNode = candidate;
+                UpdateHeaderConnectionInfo();
                 SetStatus("Подключаюсь", candidate.Name + " · " + candidate.Protocol);
                 var progress = new Progress<string>(line => StatusDetail.Text = line);
 
@@ -158,6 +305,7 @@ public partial class MainWindow
                             AppendLog($"Запасной узел: {backup.Name} — {NodeRanking.CamouflageLabel(backup)}"); 
                         }
                         _tray?.ShowBalloon("Прокси включён", candidate.Name + Environment.NewLine + "127.0.0.1:" + _manager.ActiveMixedPort);
+                        _headerConnectingNode = null;
                         UpdateConnectionUi();
                         _ = RefreshExitInfoAsync();
 
@@ -167,7 +315,7 @@ public partial class MainWindow
                             try
                             {
                                 StatusDetail.Text = "Читаю каналы Telegram через прокси…";
-                                var found = await CollectMtProtoCoreAsync();
+                                var found = await CollectMtProtoCoreAsync(_operation!.Token);
                                 AppendLog($"После подключения собрано MTProto-ссылок: {found}");
                                 SetStatus("Подключено: " + candidate.Name, $"MTProto в списке: {_mtprotoRows.Count}");
                             }
@@ -218,6 +366,7 @@ public partial class MainWindow
         }
         finally
         {
+            _headerConnectingNode = null;
             EndOperation();
             UpdateConnectionUi();
         }
@@ -225,7 +374,7 @@ public partial class MainWindow
 
     private async Task DisconnectAsync()
     {
-        if (!BeginOperation())
+        if (!BeginOperation("отключение"))
         {
             return;
         }
@@ -276,6 +425,7 @@ public partial class MainWindow
             .Where(n => n.DelayMs is not null && (!_settings.ConnectOnlyMine || n.IsMine))
             .OrderByDescending(n => telegramNeeded && n.TelegramOk == true)
             .ThenByDescending(n => n.IsMine)
+            .ThenByDescending(n => n.OpenDomains)
             .ThenByDescending(NodeRanking.Score)
             .ThenBy(n => n.DelayMs)
             .ToList();
@@ -353,7 +503,7 @@ public partial class MainWindow
         }
 
         // Если запасной узел уже в конфиге — переключаемся без перезапуска ядра.
-        if (_manager.IsNodeLoaded(next) && BeginOperation())
+        if (_manager.IsNodeLoaded(next) && BeginOperation("переключение узла"))
         {
             try
             {
@@ -418,10 +568,12 @@ public partial class MainWindow
     {
         var removed = NodeHealth.RegisterFailure(node);
         ApplyTestedNode(node);
-        NodeSourceService.SaveCache(AllRows.Select(r => r.Node));
+        // Кэш пишется в фоне: список может быть десятки тысяч узлов, не тормозим UI.
+        var snapshot = AllRows.Select(r => r.Node).ToList();
+        _ = Task.Run(() => NodeSourceService.SaveCache(snapshot));
         AppendLog(removed
-            ? $"Узел удалён после {node.FailCount} провалов: {node.Name} — {reason}"
-            : $"Узел не отвечает ({node.FailCount} из {NodeLimits.RemoveAfterFailures}): {node.Name} — {reason}");
+            ? $"Узел удалён после {node.FailCount} провалов — {reason}"
+            : $"Узел не отвечает ({node.FailCount} из {NodeLimits.RemoveAfterFailures}) — {reason}");
     }
 
     /// <summary>Следующий рабочий узел, по возможности из другого семейства камуфляжа.</summary>
@@ -432,6 +584,7 @@ public partial class MainWindow
             .Where(n => n.DelayMs is not null && !_failedForSession.Contains(n.Id))
             .OrderBy(n => avoidFamily is not null && NodeRanking.Family(n) == avoidFamily ? 1 : 0)
             .ThenByDescending(n => telegramNeeded && n.TelegramOk == true)
+            .ThenByDescending(n => n.OpenDomains)
             .ThenByDescending(n => n.IsMine)
             .ThenByDescending(NodeRanking.Score)
             .ThenBy(n => n.DelayMs)
@@ -445,6 +598,7 @@ public partial class MainWindow
             .Where(n => n.DelayMs is not null && n.Id != current.Id &&
                         NodeRanking.Family(n) != NodeRanking.Family(current))
             .OrderByDescending(n => n.IsMine)
+            .ThenByDescending(n => n.OpenDomains)
             .ThenByDescending(NodeRanking.Score)
             .ThenBy(n => n.DelayMs)
             .FirstOrDefault();
@@ -465,18 +619,24 @@ public partial class MainWindow
     {
         var connected = _manager.IsConnected;
         var held = _manager.IsKillSwitchHeld;
+        var delay = _manager.CurrentNode?.DelayMs;
         StatusText.Text = connected
-            ? "Подключено: " + (_manager.CurrentNode?.Name ?? "узел")
+            ? "Подключено · " + (delay is { } ms ? ms + " мс" : "проверенный узел")
             : held
                 ? "Трафик заблокирован (kill switch)"
                 : "Отключено";
         StatusDot.Fill = (Brush)FindResource(connected ? "AccentBrush" : held ? "DangerBrush" : "MutedBrush");
-        DisconnectButton.Visibility = connected || held ? Visibility.Visible : Visibility.Collapsed;
-        _tray?.UpdateStatus(connected, _manager.CurrentNode?.Name, held);
+        _tray?.UpdateStatus(connected, null, held);
         Title = connected
-            ? AppInfo.DisplayName + " — " + _manager.CurrentNode?.Name
+            ? AppInfo.DisplayName + " — подключено"
             : AppInfo.DisplayName + " — свободные узлы";
+        if (!connected)
+        {
+            _lastTrafficSample = null;
+        }
+
         UpdateHeaderState();
+        UpdateHeaderConnectionInfo();
         UpdateTrayNodes();
         UpdateDiagnostics();
     }
@@ -501,11 +661,11 @@ public partial class MainWindow
             : $"Последнее: {_lastFailoverUtc.Value.ToLocalTime():HH:mm:ss} — {_lastFailoverNote}";
 
         DiagnosticsText.Text = string.Join(Environment.NewLine,
-            $"Активный узел: {node.Name}",
+            $"Активный узел: проверенный" + (node.DelayMs is { } delay ? $" · {delay} мс" : string.Empty),
             $"Маскировка: {NodeRanking.Label(node)} · камуфляж: {NodeRanking.CamouflageLabel(node)}",
             backup is null
                 ? "Запасной: нет узла другого камуфляжа"
-                : $"Запасной: {backup.Name} ({NodeRanking.CamouflageLabel(backup)}, {backup.DelayMs} мс)",
+                : $"Запасной: другой камуфляж ({NodeRanking.CamouflageLabel(backup)}, {backup.DelayMs} мс)",
             $"Проверенных рабочих: {_workingRows.Count(r => r.Node.DelayMs is not null)} · " +
             $"моих: {_workingRows.Count(r => r.Node.IsMine && r.Node.DelayMs is not null)}",
             $"Переключений: {_failoverCount} · тёплых: {_warmSwitchCount} · полных: {_coldSwitchCount}",
@@ -525,7 +685,7 @@ public partial class MainWindow
         CacheSummaryText.Text =
             $"Кэш: {nodes} узлов · MTProto {mtproto} (нерабочих {_mtprotoDeadRows.Count}). " +
             $"Непроверенные узлы удаляются при первом провале, уже рабочие — после {NodeLimits.RemoveAfterFailures} провалов подряд; " +
-            $"нерабочие MTProto: лимит {MtProtoRetention.MaxDead}, старше 14 дней удаляются автоматически.";
+            $"нерабочие MTProto: лимит {MtProtoRetention.MaxDead}, старше {MtProtoRetention.DeadHours} ч удаляются автоматически.";
     }
 
     /// <summary>Ручная очистка: убирает нерабочие MTProto, узлы остаются.</summary>
@@ -565,7 +725,6 @@ public partial class MainWindow
     {
         MainTabs.SelectedItem = ToolsTab;
         ToolsTabs.SelectedItem = SourcesTab;
-        NewSourceMineCheck.IsChecked = true;
         NewSourceUrl.Focus();
         FooterText.Text = "Вставьте ссылку на свой сервер (vless://, trojan://…) или личную подписку";
     }

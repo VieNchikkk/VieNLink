@@ -1,0 +1,489 @@
+namespace VieNLink.Mobile;
+
+/// <summary>Итог проверки узлов для интерфейса.</summary>
+internal sealed record NodeTestSummary(
+    int Tested,
+    int Working,
+    int Removed,
+    string? Error,
+    int Universal = 0,
+    int Youtube = 0,
+    int Telegram = 0,
+    int Discord = 0,
+    int BestDomains = 0);
+
+/// <summary>
+/// Проверка задержки узлов через Clash API внутри libbox (127.0.0.1:20801).
+/// Если туннель уже поднят — опрашиваются только узлы его конфига, ядро не перезапускается.
+/// Если нет — поднимается временный конфиг без TUN, и после проверки ядро останавливается.
+/// </summary>
+internal static class NodeTester
+{
+    /// <summary>
+    /// За один прогон проверяем не весь список: мобильный канал слабее, а каждый запрос
+    /// идёт через узел и тратит его трафик.
+    /// </summary>
+    public const int MaxBatch = 150;
+
+    public const int Concurrency = 12;
+    public const int TimeoutMs = 4000;
+
+    /// <summary>
+    /// Проверочные адреса по сервисам. Универсальный (Cloudflare) — приоритетный:
+    /// именно его задержка показывается и учитывается при выборе лучшего узла.
+    /// YouTube и Telegram отмечены отдельно, Discord нужен, чтобы не браковать узел
+    /// из-за блокировки одного домена. Несколько адресов на сервис — чтобы блокировка
+    /// одного домена не прятала рабочий узел.
+    /// </summary>
+    private static readonly (string Service, string Url)[] ProbeUrls =
+    {
+        ("Cloudflare", "https://cp.cloudflare.com/generate_204"),
+        ("YouTube", "https://www.youtube.com/"),
+        ("YouTube", "https://redirector.googlevideo.com/generate_204"),
+        ("Telegram", "https://t.me/"),
+        ("Telegram", "https://web.telegram.org/"),
+        ("Discord", "https://discord.com/"),
+    };
+
+    /// <summary>
+    /// Полный список заблокированных доменов (тот же, что у zapret/десинка).
+    /// Прогоняется только для узлов, которые прошли базовую проверку: у мёртвых узлов
+    /// это была бы пустая трата времени и трафика.
+    /// </summary>
+    private static readonly (string Service, string Url)[] FullProbes = BuildFullProbes();
+
+    private static (string Service, string Url)[] BuildFullProbes() =>
+        TlsHello.TargetDomains
+            .Select(domain => (domain, "https://" + domain + "/"))
+            .ToArray();
+
+    private static int _running;
+
+    public static bool IsRunning => Volatile.Read(ref _running) == 1;
+
+    public static async Task<NodeTestSummary> TestAsync(
+        IProgress<string>? progress,
+        Action<ProxyNode>? onTested,
+        CancellationToken cancellationToken)
+    {
+        if (Interlocked.CompareExchange(ref _running, 1, 0) != 0)
+        {
+            return new NodeTestSummary(0, 0, 0, "Проверка уже идёт");
+        }
+
+        var startedTestCore = false;
+        ClashApiClient? api = null;
+        try
+        {
+            NodeStore.EnsureLoaded();
+
+            var ordered = NodeStore.OrderForConfig(NodeStore.Nodes);
+            if (ordered.Count == 0)
+            {
+                return new NodeTestSummary(0, 0, 0, "Список узлов пуст: обновите источники");
+            }
+
+            List<ProxyNode> candidates;
+            if (TunnelService.State == TunnelState.Running && CoreRuntime.IsRunning)
+            {
+                // Работающий туннель не трогаем: проверяем только то, что уже загружено в ядро.
+                var loaded = CoreRuntime.LoadedTags;
+                candidates = ordered.Where(node => loaded.Contains(node.Tag)).Take(MaxBatch).ToList();
+                if (candidates.Count == 0)
+                {
+                    return new NodeTestSummary(0, 0, 0,
+                        "Туннель запущен с другим конфигом — сначала выберите узел в списке");
+                }
+
+                progress?.Report($"Проверяю узлы работающего туннеля: {candidates.Count}");
+            }
+            else
+            {
+                if (CoreRuntime.IsRunning)
+                {
+                    return new NodeTestSummary(0, 0, 0, "Туннель ещё запускается, подождите");
+                }
+
+                candidates = ordered.Take(MaxBatch).ToList();
+                progress?.Report($"Поднимаю ядро для проверки: {candidates.Count} узлов");
+
+                var testSettings = new AppSettings
+                {
+                    // Временный конфиг без TUN: нужен только mixed-порт и Clash API.
+                    TunnelMode = TunnelMode.SystemProxy,
+                    SiteRouteMode = SiteRouteMode.All,
+                    OnlySelectedApps = false,
+                };
+
+                var config = SingBoxConfigBuilder.Build(
+                    candidates,
+                    candidates[0].Tag,
+                    CoreRuntime.MixedPort,
+                    CoreRuntime.ApiPort,
+                    CoreRuntime.ApiSecret,
+                    testSettings);
+
+                CoreRuntime.EnsureSetup(Android.App.Application.Context);
+
+                // TUN в этом конфиге нет: OpenTun не вызывается, служба не нужна.
+                if (!CoreRuntime.Start(config))
+                {
+                    return new NodeTestSummary(0, 0, 0, "Ядро не создало сервер проверки");
+                }
+
+                startedTestCore = true;
+
+                var loaded = CoreRuntime.LoadedTags;
+                candidates = candidates.Where(node => loaded.Contains(node.Tag)).ToList();
+                if (candidates.Count == 0)
+                {
+                    return new NodeTestSummary(0, 0, 0, "Ядро не приняло ни одного узла");
+                }
+            }
+
+            api = new ClashApiClient(CoreRuntime.ApiPort, CoreRuntime.ApiSecret);
+            if (!await WaitForApiAsync(api, cancellationToken).ConfigureAwait(false))
+            {
+                return new NodeTestSummary(0, 0, 0, "Clash API не ответил: ядро не поднялось");
+            }
+
+            // Снимок: если не открылся ни один узел из большой партии, это проблема сети,
+            // а не узлов — статусы не меняем, иначе можно вычистить весь список.
+            var snapshot = candidates.ToDictionary(
+                node => node,
+                node => (node.Status, node.DelayMs, node.CheckedAtUtc,
+                         node.YoutubeOk, node.TelegramOk, node.UniversalOk, node.DiscordOk,
+                         node.OpenDomains, node.FailCount));
+
+            var working = 0;
+            var universal = 0;
+            var youtube = 0;
+            var telegram = 0;
+            var discord = 0;
+            var done = 0;
+
+            using var limiter = new SemaphoreSlim(Concurrency);
+            var tasks = candidates.Select(async node =>
+            {
+                await limiter.WaitAsync(cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    // Все адреса проверяем параллельно: у мёртвого узла это одна
+                    // задержка по таймауту, а не шесть подряд.
+                    var results = await Task.WhenAll(ProbeUrls.Select(async probe =>
+                    {
+                        var delay = await api.TestDelayAsync(node.Tag, TimeoutMs, cancellationToken, probe.Url)
+                            .ConfigureAwait(false);
+                        return (probe.Service, delay);
+                    })).ConfigureAwait(false);
+
+                    var anyOpened = results.Any(result => result.delay is not null);
+
+                    // Приоритет — универсальный адрес: его задержка идёт в список и в выбор
+                    // лучшего узла. Если он не открылся, узел может быть рабочим для
+                    // отдельных сервисов, но автоматически первым не выбирается.
+                    var universalDelay = results
+                        .FirstOrDefault(result => result.Service == "Cloudflare").delay;
+
+                    node.CheckedAtUtc = DateTime.UtcNow;
+                    node.DelayMs = universalDelay;
+                    node.UniversalOk = universalDelay is not null;
+                    node.YoutubeOk = Opened(results, "YouTube");
+                    node.TelegramOk = Opened(results, "Telegram");
+                    node.DiscordOk = Opened(results, "Discord");
+
+                    // Сколько всего заблокированных доменов открывается: главный показатель
+                    // качества узла. Считаем только у живых, иначе это 18 таймаутов впустую.
+                    node.OpenDomains = anyOpened
+                        ? await CountOpenDomainsAsync(api, node.Tag, cancellationToken).ConfigureAwait(false)
+                        : 0;
+
+                    if (anyOpened)
+                    {
+                        NodeHealth.RegisterSuccess(node);
+                        Interlocked.Increment(ref working);
+                        if (universalDelay is not null)
+                        {
+                            Interlocked.Increment(ref universal);
+                        }
+
+                        if (node.YoutubeOk == true)
+                        {
+                            Interlocked.Increment(ref youtube);
+                        }
+
+                        if (node.TelegramOk == true)
+                        {
+                            Interlocked.Increment(ref telegram);
+                        }
+
+                        if (Opened(results, "Discord"))
+                        {
+                            Interlocked.Increment(ref discord);
+                        }
+                    }
+                    else
+                    {
+                        NodeHealth.RegisterFailure(node);
+                    }
+
+                    onTested?.Invoke(node);
+                }
+                finally
+                {
+                    limiter.Release();
+                    var finished = Interlocked.Increment(ref done);
+                    if (finished % 10 == 0 || finished == candidates.Count)
+                    {
+                        progress?.Report(
+                            $"Проверено {finished} из {candidates.Count}: рабочих {Volatile.Read(ref working)}");
+                    }
+                }
+            });
+
+            await Task.WhenAll(tasks).ConfigureAwait(false);
+
+            if (working == 0 && candidates.Count >= 20)
+            {
+                foreach (var (node, state) in snapshot)
+                {
+                    node.Status = state.Status;
+                    node.DelayMs = state.DelayMs;
+                    node.CheckedAtUtc = state.CheckedAtUtc;
+                    node.YoutubeOk = state.YoutubeOk;
+                    node.TelegramOk = state.TelegramOk;
+                    node.UniversalOk = state.UniversalOk;
+                    node.DiscordOk = state.DiscordOk;
+                    node.OpenDomains = state.OpenDomains;
+                    node.FailCount = state.FailCount;
+                }
+
+                NodeStore.SaveNodes();
+                AppLog.Write("test", $"Откат проверки: ни один из {candidates.Count} узлов не открылся");
+                return new NodeTestSummary(candidates.Count, 0, 0,
+                    "Ни один узел не открылся — проверьте сеть. Статусы узлов не изменены.");
+            }
+
+            var removed = NodeStore.DropDeadNodes(candidates);
+            NodeStore.SaveNodes();
+
+            // Лучший узел выбираем сами и запоминаем: кнопка «Лучший» больше не нужна,
+            // а прежний выбор мог умереть, пока шла проверка.
+            var best = NodeStore.SelectBestWorking();
+
+            var services = $"универсальных {universal}, YouTube {youtube}, " +
+                           $"Telegram {telegram}, Discord {discord}";
+            var bestDomains = candidates.Count == 0 ? 0 : candidates.Max(node => node.OpenDomains);
+            AppLog.Write("test",
+                $"Проверка узлов: рабочих {working} из {candidates.Count} ({services}), " +
+                $"лучший открывает доменов {bestDomains}, удалено {removed}" +
+                (best is null ? ", живых узлов нет" : ", выбран " + best.Name));
+            progress?.Report($"Готово: рабочих {working} из {candidates.Count} ({services}), " +
+                             $"лучший открывает доменов {bestDomains}, удалено {removed}" +
+                             (best is null ? "" : "; выбран " + best.Name + " · " + best.DisplayDelay));
+
+            return new NodeTestSummary(candidates.Count, working, removed, null,
+                universal, youtube, telegram, discord, bestDomains);
+        }
+        catch (OperationCanceledException)
+        {
+            return new NodeTestSummary(0, 0, 0, "Проверка отменена");
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("test", "Не удалось проверить узлы", exception);
+            Android.Util.Log.Error("VieNLink", "Проверка узлов: " + exception);
+            return new NodeTestSummary(0, 0, 0, "Ошибка проверки: " + exception.Message);
+        }
+        finally
+        {
+            api?.Dispose();
+            if (startedTestCore)
+            {
+                CoreRuntime.Stop();
+            }
+
+            Volatile.Write(ref _running, 0);
+        }
+    }
+
+    /// <summary>
+    /// Проверка готового списка через переданный Clash API. Используется отдельным
+    /// процессом :probe: основное ядро и VPN не трогаются. Сохранение результатов —
+    /// на стороне вызывающего.
+    /// </summary>
+    internal static async Task<NodeTestSummary> TestBatchAsync(
+        ClashApiClient api,
+        IReadOnlyList<ProxyNode> candidates,
+        IProgress<string>? progress,
+        Action<ProxyNode>? onTested,
+        CancellationToken cancellationToken,
+        int concurrency = 12,
+        int timeoutMs = TimeoutMs)
+    {
+        if (candidates.Count == 0)
+        {
+            return new NodeTestSummary(0, 0, 0, null);
+        }
+
+        var snapshot = candidates.ToDictionary(
+            node => node,
+            node => (node.Status, node.DelayMs, node.CheckedAtUtc,
+                     node.YoutubeOk, node.TelegramOk, node.UniversalOk, node.DiscordOk,
+                     node.OpenDomains, node.FailCount));
+
+        var working = 0;
+        var universal = 0;
+        var youtube = 0;
+        var telegram = 0;
+        var discord = 0;
+        var done = 0;
+
+        using var limiter = new SemaphoreSlim(Math.Max(1, concurrency));
+        var tasks = candidates.Select(async node =>
+        {
+            await limiter.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                var results = await Task.WhenAll(ProbeUrls.Select(async probe =>
+                {
+                    var delay = await api.TestDelayAsync(node.Tag, timeoutMs, cancellationToken, probe.Url)
+                        .ConfigureAwait(false);
+                    return (probe.Service, delay);
+                })).ConfigureAwait(false);
+
+                var anyOpened = results.Any(result => result.delay is not null);
+                var universalDelay = results
+                    .FirstOrDefault(result => result.Service == "Cloudflare").delay;
+
+                node.CheckedAtUtc = DateTime.UtcNow;
+                node.DelayMs = universalDelay;
+                node.UniversalOk = universalDelay is not null;
+                node.YoutubeOk = Opened(results, "YouTube");
+                node.TelegramOk = Opened(results, "Telegram");
+                node.DiscordOk = Opened(results, "Discord");
+                node.OpenDomains = anyOpened
+                    ? await CountOpenDomainsAsync(api, node.Tag, cancellationToken, timeoutMs).ConfigureAwait(false)
+                    : 0;
+
+                if (anyOpened)
+                {
+                    NodeHealth.RegisterSuccess(node);
+                    Interlocked.Increment(ref working);
+                    if (universalDelay is not null)
+                    {
+                        Interlocked.Increment(ref universal);
+                    }
+
+                    if (node.YoutubeOk == true)
+                    {
+                        Interlocked.Increment(ref youtube);
+                    }
+
+                    if (node.TelegramOk == true)
+                    {
+                        Interlocked.Increment(ref telegram);
+                    }
+
+                    if (Opened(results, "Discord"))
+                    {
+                        Interlocked.Increment(ref discord);
+                    }
+                }
+                else
+                {
+                    NodeHealth.RegisterFailure(node);
+                }
+
+                onTested?.Invoke(node);
+            }
+            finally
+            {
+                limiter.Release();
+                var finished = Interlocked.Increment(ref done);
+                if (finished % 10 == 0 || finished == candidates.Count)
+                {
+                    progress?.Report(
+                        $"Проверено {finished} из {candidates.Count}: рабочих {Volatile.Read(ref working)}");
+                }
+            }
+        });
+
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+
+        if (working == 0 && candidates.Count >= 20)
+        {
+            foreach (var (node, state) in snapshot)
+            {
+                node.Status = state.Status;
+                node.DelayMs = state.DelayMs;
+                node.CheckedAtUtc = state.CheckedAtUtc;
+                node.YoutubeOk = state.YoutubeOk;
+                node.TelegramOk = state.TelegramOk;
+                node.UniversalOk = state.UniversalOk;
+                node.DiscordOk = state.DiscordOk;
+                node.OpenDomains = state.OpenDomains;
+                node.FailCount = state.FailCount;
+            }
+
+            return new NodeTestSummary(candidates.Count, 0, 0,
+                "Ни один узел не открылся — статусы не изменены.");
+        }
+
+        var services = $"универсальных {universal}, YouTube {youtube}, " +
+                       $"Telegram {telegram}, Discord {discord}";
+        var bestDomains = candidates.Max(node => node.OpenDomains);
+        progress?.Report($"Готово: рабочих {working} из {candidates.Count} ({services}), " +
+                         $"лучший открывает доменов {bestDomains}");
+        return new NodeTestSummary(candidates.Count, working, 0, null,
+            universal, youtube, telegram, discord, bestDomains);
+    }
+
+    /// <summary>Открылся ли хотя бы один адрес указанного сервиса.</summary>
+    private static bool Opened(IEnumerable<(string Service, int? delay)> results, string service) =>
+        results.Any(result => result.Service == service && result.delay is not null);
+
+    /// <summary>Сколько доменов из списка заблокированных открывает узел.</summary>
+    private static async Task<int> CountOpenDomainsAsync(
+        ClashApiClient api,
+        string tag,
+        CancellationToken cancellationToken,
+        int timeoutMs = TimeoutMs)
+    {
+        // Не больше четырёх запросов одновременно на узел: 18 параллельных соединений
+        // перегружают слабый бесплатный узел, и он ложно показывает ноль доменов.
+        using var limiter = new SemaphoreSlim(4);
+        var tasks = FullProbes.Select(async probe =>
+        {
+            await limiter.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return await api.TestDelayAsync(tag, timeoutMs, cancellationToken, probe.Url)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                limiter.Release();
+            }
+        });
+
+        var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+        return results.Count(delay => delay is not null);
+    }
+
+    /// <summary>Clash API поднимается через мгновение после старта службы — ждём до ~4,5 с.</summary>
+    private static async Task<bool> WaitForApiAsync(ClashApiClient api, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 30; attempt++)
+        {
+            if (await api.PingAsync(cancellationToken).ConfigureAwait(false))
+            {
+                return true;
+            }
+
+            await Task.Delay(150, cancellationToken).ConfigureAwait(false);
+        }
+
+        return false;
+    }
+}

@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+﻿using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
@@ -39,6 +39,9 @@ internal enum DesyncTcpMode
 
     /// <summary>11 фейковых ClientHello с badseq/TTL 2, затем настоящий multidisorder — как zapret.</summary>
     FakeMultiDisorder,
+
+    /// <summary>Разбить ClientHello на IP-фрагменты: DPI, не собирающий фрагменты, не увидит SNI.</summary>
+    IpFrag,
 }
 
 /// <summary>Описание стратегии собственного обхода DPI.</summary>
@@ -137,65 +140,23 @@ internal sealed class DesyncService : IDisposable
     /// <summary>Сколько фейковых QUIC Initial отправлять перед настоящим — как в zapret (--dpi-desync-repeats=11).</summary>
     private const int QuicRepeats = 11;
 
-    /// <summary>Домены, для которых включается десинк. Остальные идут напрямую.</summary>
-    private static readonly string[] TargetDomains =
-    {
-        "youtube.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com", "ggpht.com",
-        "t.me", "telegram.org", "telegram.me",
-        "discord.com", "discordapp.com", "discord.gg",
-        "x.com", "twitter.com", "twimg.com",
-        "instagram.com", "cdninstagram.com", "facebook.com", "fbcdn.net",
-    };
+    /// <summary>Домены и разбор ClientHello перенесены в ядро (<see cref="TlsHello"/>): нужны форвардеру TUN-обхода.</summary>
+    internal static bool IsTargetHost(string host) => TlsHello.IsTargetHost(host);
 
-    /// <summary>Десинк включается только для этих доменов (и поддоменов); остальные — напрямую.</summary>
-    internal static bool IsTargetHost(string host) =>
-        TargetDomains.Any(domain => host.Equals(domain, StringComparison.OrdinalIgnoreCase) ||
-                                    host.EndsWith("." + domain, StringComparison.OrdinalIgnoreCase));
+    private static bool IsTargetPayload(string payload) => TlsHello.IsTargetPayload(payload);
 
-    private static bool IsTargetPayload(string payload) =>
-        TargetDomains.Any(domain => payload.Contains(domain, StringComparison.OrdinalIgnoreCase));
-
-    /// <summary>
-    /// Находит в полезной нагрузке TCP-сегмента полное имя хоста, оканчивающееся на
-    /// целевой домен. Нужно, когда ClientHello не влез в один сегмент и обычный разбор
-    /// не сработал: SNI всё равно виден в первых байтах, и его надо разрезать.
-    /// </summary>
     internal static bool TryLocateHost(string payload, out int offset, out int length)
-    {
-        static bool IsHostChar(char value) => char.IsLetterOrDigit(value) || value is '-' or '.' or '_';
+        => TlsHello.TryLocateHost(payload, out offset, out length);
 
-        foreach (var domain in TargetDomains)
-        {
-            var index = payload.IndexOf(domain, StringComparison.OrdinalIgnoreCase);
-            if (index < 0)
-            {
-                continue;
-            }
+    internal static bool TryParseTlsClientHello(ReadOnlySpan<byte> payload, out int sniOffset, out int sniLength)
+        => TlsHello.TryParseTlsClientHello(payload, out sniOffset, out sniLength);
 
-            var end = index + domain.Length;
-            while (end < payload.Length && IsHostChar(payload[end]))
-            {
-                end++;
-            }
-
-            // Имя хоста в DNS не длиннее 253 символов; заодно это не даёт
-            // «съесть» соседние байты, если перед SNI случайно буква или цифра.
-            var start = index;
-            var lowerBound = Math.Max(0, end - 253);
-            while (start > lowerBound && IsHostChar(payload[start - 1]))
-            {
-                start--;
-            }
-
-            offset = start;
-            length = end - start;
-            return true;
-        }
-
-        offset = 0;
-        length = 0;
-        return false;
-    }
+    internal static bool TryParseTlsClientHello(
+        ReadOnlySpan<byte> payload,
+        out int sniOffset,
+        out int sniLength,
+        out int extensionsLengthOffset)
+        => TlsHello.TryParseTlsClientHello(payload, out sniOffset, out sniLength, out extensionsLengthOffset);
 
     /// <summary>
     /// Точки разреза для ClientHello, который не удалось разобрать целиком: режем SNI
@@ -268,9 +229,31 @@ internal sealed class DesyncService : IDisposable
             "Только подмена SNI в фейковом пакете, настоящий ClientHello идёт целиком."),
         new("Мультиразрез", DesyncTcpMode.MultiSplit, true,
             "Три разреза: после 1-го байта, в середине и после первого символа SNI. Плюс QUIC-фейк."),
+        new("IP-фрагментация ClientHello", DesyncTcpMode.IpFrag, true,
+            "ClientHello уходит двумя IP-фрагментами: DPI, не собирающий фрагменты, не видит SNI.",
+            FakeTtl: 64, BadSeq: false),
         new("Только QUIC-фейк", DesyncTcpMode.None, true,
             "TCP не трогаем, подменяем только QUIC Initial. Для видео YouTube, если TLS уже открывается."),
     };
+
+    /// <summary>
+    /// Порядок показа и перебора: сначала стратегии с лучшим сохранённым качеством,
+    /// затем — в обычном порядке (от мягких к более агрессивным).
+    /// </summary>
+    public static IReadOnlyList<int> GetPriorityOrder()
+    {
+        var quality = BypassProfileStore.Ranked("desync")
+            .GroupBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Max(profile => profile.Quality),
+                StringComparer.OrdinalIgnoreCase);
+
+        return Enumerable.Range(0, Strategies.Count)
+            .OrderByDescending(index => quality.TryGetValue(Strategies[index].Name, out var value) ? value : 0)
+            .ThenBy(index => index)
+            .ToList();
+    }
 
     public static string Directory => AppPaths.DesyncDirectory;
 
@@ -675,6 +658,24 @@ internal sealed class DesyncService : IDisposable
             return false;
         }
 
+        if (strategy.Tcp == DesyncTcpMode.IpFrag)
+        {
+            if (!TryBuildIpFragments(packet, out var fragments))
+            {
+                Trace?.Invoke("ipfrag: пакет не разбит");
+                return false;
+            }
+
+            foreach (var fragment in fragments)
+            {
+                SendRaw(api, handle, fragment, address);
+            }
+
+            Interlocked.Increment(ref _splitPackets);
+            Trace?.Invoke($"ipfrag: {fragments.Count} фрагментов, {packet.Length} байт");
+            return true; // оригинальный пакет заменён фрагментами
+        }
+
         if (strategy.Tcp == DesyncTcpMode.FakeMultiDisorder)
         {
             var tcpOffset = (packet[0] & 0x0F) * 4;
@@ -999,6 +1000,43 @@ internal sealed class DesyncService : IDisposable
         }
     }
 
+    /// <summary>
+    /// Отправка без WinDivertHelperCalcChecksums: для IP-фрагментов IP-чексумма уже
+    /// посчитана, а TCP-чексумма остаётся исходной (TCP-поток не менялся).
+    /// </summary>
+    private bool SendRaw(WinDivertApi api, IntPtr handle, byte[] packet, byte[] address)
+    {
+        var packetBuffer = Marshal.AllocHGlobal(packet.Length);
+        var addressBuffer = Marshal.AllocHGlobal(address.Length);
+        try
+        {
+            Marshal.Copy(packet, 0, packetBuffer, packet.Length);
+            Marshal.Copy(address, 0, addressBuffer, address.Length);
+            if (!api.Send(handle, packetBuffer, (uint)packet.Length, out _, addressBuffer))
+            {
+                var error = Marshal.GetLastPInvokeError();
+                if (_running)
+                {
+                    AppLog.Write("desync", $"WinDivert send (фрагмент): ошибка {error}");
+                }
+
+                return false;
+            }
+
+            return true;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            AppLog.Write("desync", "Не удалось отправить IP-фрагмент", exception);
+            return false;
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(packetBuffer);
+            Marshal.FreeHGlobal(addressBuffer);
+        }
+    }
+
     private bool Send(WinDivertApi api, IntPtr handle, byte[] packet, byte[] address)
     {
         var packetBuffer = Marshal.AllocHGlobal(packet.Length);
@@ -1105,8 +1143,10 @@ internal sealed class DesyncService : IDisposable
         bool blockQuic = false)
     {
         var results = new List<DesyncProbeResult>();
-        for (var index = 0; index < Strategies.Count; index++)
+        var order = GetPriorityOrder();
+        for (var position = 0; position < order.Count; position++)
         {
+            var index = order[position];
             var strategy = Strategies[index];
             // QUIC-фейк нельзя проверить обычным HTTPS-запросом — оставляем его для ручного выбора.
             if (strategy.Tcp == DesyncTcpMode.None)
@@ -1115,7 +1155,7 @@ internal sealed class DesyncService : IDisposable
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            progress?.Report($"Стратегия {index + 1}/{Strategies.Count}: «{strategy.Name}»…");
+            progress?.Report($"Стратегия {position + 1}/{Strategies.Count}: «{strategy.Name}»…");
             try
             {
                 Start(strategy, progress, blockQuic);
@@ -1641,107 +1681,6 @@ internal sealed class DesyncService : IDisposable
         return true;
     }
 
-    internal static bool TryParseTlsClientHello(
-        ReadOnlySpan<byte> payload,
-        out int sniOffset,
-        out int sniLength)
-        => TryParseTlsClientHello(payload, out sniOffset, out sniLength, out _);
-
-    /// <summary>
-    /// Ищет SNI в TLS ClientHello. Смещения считаются от начала TLS-потока,
-    /// поэтому метод годится и для пакета из WinDivert, и для обычного TCP-потока.
-    /// </summary>
-    internal static bool TryParseTlsClientHello(
-        ReadOnlySpan<byte> payload,
-        out int sniOffset,
-        out int sniLength,
-        out int extensionsLengthOffset)
-    {
-        sniOffset = 0;
-        sniLength = 0;
-        extensionsLengthOffset = 0;
-        var payloadLength = payload.Length;
-        if (payloadLength < 11 ||
-            payload[0] != 0x16 || payload[1] != 0x03 || payload[5] != 0x01)
-        {
-            return false;
-        }
-
-        // ClientHello может не помещаться в один TCP-сегмент (большой key share).
-        // Не требуем полную запись: SNI обычно находится в начале и в этом сегменте.
-        var p = 9; // 5 байт записи + 4 байта заголовка handshake
-        if (p + 2 + 32 > payloadLength)
-        {
-            return false;
-        }
-
-        p += 2 + 32; // версия и random
-        if (p >= payloadLength)
-        {
-            return false;
-        }
-
-        var sessionLength = payload[p];
-        p += 1 + sessionLength;
-        if (p + 2 > payloadLength)
-        {
-            return false;
-        }
-
-        var cipherLength = (payload[p] << 8) | payload[p + 1];
-        p += 2 + cipherLength;
-        if (p + 1 > payloadLength)
-        {
-            return false;
-        }
-
-        var compressionLength = payload[p];
-        p += 1 + compressionLength;
-        if (p + 2 > payloadLength)
-        {
-            return false;
-        }
-
-        var extensionsLength = (payload[p] << 8) | payload[p + 1];
-        extensionsLengthOffset = p;
-        p += 2;
-        var extensionsEnd = Math.Min(p + extensionsLength, payloadLength);
-        while (p + 4 <= extensionsEnd)
-        {
-            var type = (payload[p] << 8) | payload[p + 1];
-            var length = (payload[p + 2] << 8) | payload[p + 3];
-            var data = p + 4;
-            if (data + length > payloadLength)
-            {
-                break;
-            }
-
-            if (type == 0 && length >= 5)
-            {
-                var listLength = (payload[data] << 8) | payload[data + 1];
-                var q = data + 2;
-                var listEnd = Math.Min(q + listLength, data + length);
-                while (q + 3 <= listEnd)
-                {
-                    var nameType = payload[q];
-                    var nameLength = (payload[q + 1] << 8) | payload[q + 2];
-                    q += 3;
-                    if (nameType == 0 && nameLength > 0 && q + nameLength <= listEnd)
-                    {
-                        sniOffset = q;
-                        sniLength = nameLength;
-                        return true;
-                    }
-
-                    q += nameLength;
-                }
-            }
-
-            p = data + length;
-        }
-
-        return false;
-    }
 
     internal static int[] SplitPoints(DesyncTcpMode mode, TlsClientHelloInfo hello, string? host = null)
     {
@@ -1793,6 +1732,94 @@ internal sealed class DesyncService : IDisposable
             }.Distinct().OrderBy(value => value).ToArray(),
             _ => Array.Empty<int>(),
         };
+    }
+
+    /// <summary>
+    /// Разбивает IPv4-пакет с TCP-сегментом на IP-фрагменты (по 1200 байт, кратно 8).
+    /// TCP-поток не меняется: сервер собирает фрагменты, а DPI, который их не собирает,
+    /// не видит ClientHello и SNI. Контрольные суммы TCP остаются исходными.
+    /// </summary>
+    internal static bool TryBuildIpFragments(byte[] packet, out List<byte[]> fragments)
+    {
+        fragments = new List<byte[]>();
+        if (packet.Length < 40 || (packet[0] >> 4) != 4 || packet[9] != 6)
+        {
+            return false;
+        }
+
+        var headerLength = (packet[0] & 0x0F) * 4;
+        if (headerLength < 20 || packet.Length < headerLength + 16)
+        {
+            return false;
+        }
+
+        var totalLength = BinaryPrimitives.ReadUInt16BigEndian(packet.AsSpan(2, 2));
+        if (totalLength < headerLength + 16 || totalLength > packet.Length)
+        {
+            return false;
+        }
+
+        // Уже фрагмент (MF или ненулевое смещение) — не трогаем.
+        if ((BinaryPrimitives.ReadUInt16BigEndian(packet.AsSpan(6, 2)) & 0x3FFF) != 0)
+        {
+            return false;
+        }
+
+        var payloadLength = totalLength - headerLength;
+        if (payloadLength <= 32)
+        {
+            return false;
+        }
+
+        // Крупный ClientHello режем по 1200 байт; маленький — примерно пополам,
+        // иначе весь пакет попал бы в один фрагмент и смысла бы не было.
+        var chunkSize = payloadLength > 1200
+            ? 1200
+            : Math.Max(8, ((payloadLength / 2 + 7) / 8) * 8);
+        var identifier = BinaryPrimitives.ReadUInt16BigEndian(packet.AsSpan(4, 2));
+        if (identifier == 0)
+        {
+            identifier = (ushort)Random.Shared.Next(1, ushort.MaxValue);
+        }
+
+        var offset = 0;
+        while (offset < payloadLength)
+        {
+            var length = Math.Min(chunkSize, payloadLength - offset);
+            var fragment = new byte[headerLength + length];
+            packet.AsSpan(0, headerLength).CopyTo(fragment);
+            BinaryPrimitives.WriteUInt16BigEndian(fragment.AsSpan(2, 2), (ushort)fragment.Length);
+            BinaryPrimitives.WriteUInt16BigEndian(fragment.AsSpan(4, 2), identifier);
+
+            var moreFragments = offset + length < payloadLength;
+            var flagsAndOffset = (ushort)((moreFragments ? 0x2000 : 0) | (offset / 8));
+            BinaryPrimitives.WriteUInt16BigEndian(fragment.AsSpan(6, 2), flagsAndOffset);
+
+            packet.AsSpan(headerLength + offset, length).CopyTo(fragment.AsSpan(headerLength));
+            WriteIpHeaderChecksum(fragment, headerLength);
+            fragments.Add(fragment);
+            offset += length;
+        }
+
+        return fragments.Count > 1;
+    }
+
+    private static void WriteIpHeaderChecksum(byte[] packet, int headerLength)
+    {
+        packet[10] = 0;
+        packet[11] = 0;
+        uint sum = 0;
+        for (var index = 0; index + 1 < headerLength; index += 2)
+        {
+            sum += (uint)((packet[index] << 8) | packet[index + 1]);
+        }
+
+        while ((sum >> 16) != 0)
+        {
+            sum = (sum & 0xFFFF) + (sum >> 16);
+        }
+
+        BinaryPrimitives.WriteUInt16BigEndian(packet.AsSpan(10, 2), (ushort)~sum);
     }
 
     /// <summary>Режет ClientHello на TCP-сегменты; seq и длины пересчитываются.</summary>

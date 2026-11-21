@@ -14,7 +14,7 @@ public partial class MainWindow
 {
     // ---------- состояние и трей ----------
 
-    private bool BeginOperation()
+    private bool BeginOperation(string? action = null)
     {
         _idleCts?.Cancel();
 
@@ -24,6 +24,7 @@ public partial class MainWindow
         }
 
         _busy = true;
+        _operationLabel = action ?? "текущее действие";
         _operation = new CancellationTokenSource();
         SetBusy(true);
         return true;
@@ -35,6 +36,7 @@ public partial class MainWindow
         _operation?.Dispose();
         _operation = null;
         SetBusy(false);
+        _operationLabel = "текущее действие";
 
         // Сбой узла, замеченный во время проверки или другой операции, обрабатываем сейчас.
         if (_pendingFailoverName is { } pending)
@@ -51,27 +53,20 @@ public partial class MainWindow
         TestSelectedButton.IsEnabled = !busy;
         TestBatchButton.IsEnabled = !busy;
         TestAllButton.IsEnabled = !busy;
-        SpeedTestButton.IsEnabled = !busy;
-        ConnectSelectedButton.IsEnabled = !busy;
-        DisconnectButton.IsEnabled = !busy;
-        ConnectButton.IsEnabled = !busy;
         DesyncToggleButton.IsEnabled = !busy;
-        DesyncInstallButton.IsEnabled = !busy;
-        DesyncTuneButton.IsEnabled = !busy;
-        DesyncProbeButton.IsEnabled = !busy;
         TunBypassToggleButton.IsEnabled = !busy;
         TunBypassProbeButton.IsEnabled = !busy;
-        VideoNodeButton.IsEnabled = !busy;
         BlockDiagnoseButton.IsEnabled = !busy;
         CancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         Cursor = busy ? System.Windows.Input.Cursors.Wait : System.Windows.Input.Cursors.Arrow;
+        UpdateHeaderState();
         ZapretStateChanged?.Invoke();
     }
 
     private void OnCancelClick(object sender, RoutedEventArgs e)
     {
         _operation?.Cancel();
-        FooterText.Text = "Останавливаю…";
+        FooterText.Text = "Останавливаю: " + _operationLabel;
     }
 
     private void SetStatus(string status, string detail)
@@ -222,6 +217,8 @@ public partial class MainWindow
 
     protected override void OnClosing(CancelEventArgs e)
     {
+        SaveWindowPlacement();
+
         if (!_exitRequested && _settings.MinimizeToTray)
         {
             e.Cancel = true;
@@ -237,6 +234,8 @@ public partial class MainWindow
 
         _closing = true;
         _autoTimer?.Stop();
+        _mtprotoCollectCts?.Cancel();
+        _mtprotoCheckCts?.Cancel();
         base.OnClosing(e);
     }
 
@@ -244,6 +243,10 @@ public partial class MainWindow
     {
         AppLog.LineWritten -= OnLogLine;
         _idleTimer?.Stop();
+        _idleCts?.Cancel();
+        _mtprotoCollectCts?.Cancel();
+        _mtprotoCheckCts?.Cancel();
+        _probe.StopNow();
         _zapretWidget?.Close();
         _tray?.Dispose();
         // Синхронно: прокси, ядро и обход DPI должны быть сняты до выхода из приложения.

@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0-android</TargetFramework>
+    <SupportedOSPlatformVersion>26.0</SupportedOSPlatformVersion>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>VieNLink.Mobile</RootNamespace>
+    <AssemblyName>VieNLink.Android</AssemblyName>
+    <ApplicationId>com.vienlink.app</ApplicationId>
+    <ApplicationTitle>VieNLink</ApplicationTitle>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>1.0.5</ApplicationDisplayVersion>
+    <AndroidPackageFormat>apk</AndroidPackageFormat>
+    <Version>1.0.5</Version>
+
+    <!-- Ядро (libbox.aar) кладётся в Libs: см. docs/android-design.md §4 и доку Android. -->
+    <AndroidAarLibrariesDirectory>Libs</AndroidAarLibrariesDirectory>
+
+    <!-- Debug-сборка тоже должна быть самодостаточной: APK ставим вручную через adb,
+         без Fast Deployment (иначе приложение падает с «No assemblies found»). -->
+    <EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VieNLink.Core\VieNLink.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AndroidAarLibrary Include="Libs\*.aar" />
+  </ItemGroup>
+
+  <!-- Тексты лицензий кладём в APK: GPL-3.0 и сторонние компоненты. -->
+  <ItemGroup>
+    <AndroidAsset Include="..\LICENSE" Link="Assets\LICENSE.txt" />
+    <AndroidAsset Include="..\THIRD-PARTY-NOTICES.md" Link="Assets\THIRD-PARTY-NOTICES.md" />
+  </ItemGroup>
+
+</Project>

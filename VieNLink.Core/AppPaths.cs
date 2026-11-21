@@ -30,9 +30,15 @@ internal static class AppPaths
     public static string SingBoxPath { get; } = Path.Combine(CoreDirectory, "sing-box.exe");
     public static string ActiveConfigPath { get; } = Path.Combine(RuntimeDirectory, "sing-box-config.json");
     public static string TunBypassConfigPath { get; } = Path.Combine(RuntimeDirectory, "tun-bypass-config.json");
+
+    /// <summary>Конфиг скрытого пробного ядра: проверка узлов не мешает основному подключению.</summary>
+    public static string ProbeConfigPath { get; } = Path.Combine(RuntimeDirectory, "probe-config.json");
     public static string MtProtoPath { get; } = Path.Combine(DataDirectory, "mtproto.json");
     public static string ProxyBackupPath { get; } = Path.Combine(DataDirectory, "proxy-backup.json");
     public static string ZapretHistoryPath { get; } = Path.Combine(DataDirectory, "zapret-history.json");
+
+    /// <summary>Удачные конфиги обходов, отсортированные по качеству подключения.</summary>
+    public static string BypassProfilesPath { get; } = Path.Combine(DataDirectory, "bypass-profiles.json");
 
     public static void EnsureDirectories()
     {

@@ -14,68 +14,143 @@ public partial class MainWindow
 {
     // ---------- Telegram (MTProto) ----------
 
-    private async void OnMtProtoRefreshClick(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// Автономный сбор MTProto через RSS: t.me в РФ часто недоступен, а RSS-зеркала
+    /// читают канал на своей стороне и не требуют прокси. Запускается по таймеру.
+    /// </summary>
+    private async Task AutoCollectMtProtoAsync(bool force = false)
     {
-        if (!BeginOperation())
+        if (_closing || _mtprotoCollecting || _busy)
         {
             return;
         }
 
-        try
-        {
-            SetStatus("Собираю MTProto-прокси", "Каналы Telegram…");
-            var found = await CollectMtProtoCoreAsync();
-            SetStatus("MTProto собраны", $"Новых ссылок: {found}. Всего в списке: {_mtprotoRows.Count}");
-        }
-        catch (OperationCanceledException)
-        {
-            SetStatus("Сбор MTProto отменён", string.Empty);
-        }
-        catch (Exception exception)
-        {
-            ReportError("Не удалось собрать MTProto-прокси", exception);
-        }
-        finally
-        {
-            EndOperation();
-            UpdateConnectionUi();
-        }
-    }
-
-    /// <summary>Принудительно читает Telegram-каналы через RSS-зеркала, не дожидаясь таймаута t.me.</summary>
-    private async void OnMtProtoRssClick(object sender, RoutedEventArgs e)
-    {
-        if (!BeginOperation())
+        if (!_sources.Any(source => source.Enabled && source.Kind == SourceKind.Telegram))
         {
             return;
         }
 
+        var now = DateTime.UtcNow;
+        if (!force &&
+            _lastMtProtoCollectUtc is { } last &&
+            now - last < TimeSpan.FromMinutes(MtProtoSchedule.CollectMinutes))
+        {
+            return;
+        }
+
+        _mtprotoCollecting = true;
+        _mtprotoCollectCts = new CancellationTokenSource();
+        var token = _mtprotoCollectCts.Token;
         try
         {
-            SetStatus("Читаю каналы через RSS", "tg.i-c-a.su и RSSHub-зеркала…");
-            var found = await CollectMtProtoCoreAsync(forceRss: true);
-            SetStatus("MTProto через RSS", $"Новых ссылок: {found}. Всего в списке: {_mtprotoRows.Count}");
+            _lastMtProtoCollectUtc = now;
+            var found = await CollectMtProtoCoreAsync(token, forceRss: true);
+            AppendLog($"Автосбор MTProto через RSS: новых {found}, всего {_mtprotoRows.Count + _mtprotoDeadRows.Count}");
         }
         catch (OperationCanceledException)
         {
-            SetStatus("Чтение RSS отменено", string.Empty);
+            // Приложение закрывается или началась ручная операция.
         }
         catch (Exception exception)
         {
-            ReportError("Не удалось прочитать каналы через RSS", exception);
+            AppLog.Write("mtproto", "Автосбор MTProto не удался", exception);
         }
         finally
         {
-            EndOperation();
-            UpdateConnectionUi();
+            _mtprotoCollecting = false;
+            _mtprotoCollectCts?.Dispose();
+            _mtprotoCollectCts = null;
         }
     }
 
     /// <summary>
-    /// Каналы t.me доступны только при работающем обходе, поэтому метод вызывается и после подключения.
+    /// Автопроверка MTProto: рабочие — часто, нерабочие — изредка. За проход
+    /// проверяется небольшая партия, чтобы не отнимать канал у пользователя.
+    /// </summary>
+    private async Task AutoCheckMtProtoAsync()
+    {
+        // Проверка TCP лёгкая и не мешает обновлению источников или подключению.
+        if (_closing || _mtprotoChecking)
+        {
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        var workingCutoff = now.AddMinutes(-MtProtoSchedule.WorkingRecheckMinutes);
+        var deadCutoff = now.AddHours(-MtProtoSchedule.DeadRecheckHours);
+
+        var working = _mtprotoRows
+            .Select(row => row.Proxy)
+            .Where(proxy => proxy.CheckedAtUtc is null || proxy.CheckedAtUtc < workingCutoff)
+            .OrderBy(proxy => proxy.CheckedAtUtc ?? DateTime.MinValue)
+            .Take(MtProtoSchedule.WorkingBatch)
+            .ToList();
+
+        var dead = _mtprotoDeadRows
+            .Select(row => row.Proxy)
+            .Where(proxy => proxy.CheckedAtUtc is null || proxy.CheckedAtUtc < deadCutoff)
+            .OrderBy(proxy => proxy.CheckedAtUtc ?? DateTime.MinValue)
+            .Take(MtProtoSchedule.DeadBatch)
+            .ToList();
+
+        var batch = working.Concat(dead).ToList();
+        if (batch.Count == 0)
+        {
+            return;
+        }
+
+        _mtprotoChecking = true;
+        _mtprotoCheckCts = new CancellationTokenSource();
+        var token = _mtprotoCheckCts.Token;
+        try
+        {
+            AppendLog($"MTProto: автопроверка {batch.Count} (рабочих {working.Count}, нерабочих {dead.Count})");
+            await MtProtoService.TestAsync(
+                batch,
+                null,
+                proxy => Dispatcher.BeginInvoke(() => ApplyTestedMtProto(proxy)),
+                token,
+                concurrency: 4,
+                timeoutMs: 2500);
+            RepartitionMtProtoAndSave();
+        }
+        catch (OperationCanceledException)
+        {
+            RepartitionMtProtoAndSave();
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("mtproto", "Автопроверка MTProto не удалась", exception);
+        }
+        finally
+        {
+            _mtprotoChecking = false;
+            _mtprotoCheckCts?.Dispose();
+            _mtprotoCheckCts = null;
+        }
+    }
+
+    /// <summary>Удаляет нерабочие MTProto, пролежавшие больше суток.</summary>
+    private int PruneExpiredMtProto()
+    {
+        var all = _mtprotoRows.Concat(_mtprotoDeadRows).Select(row => row.Proxy).ToList();
+        var removed = all.RemoveAll(proxy => MtProtoRetention.IsExpired(proxy, DateTime.UtcNow));
+        if (removed == 0)
+        {
+            return 0;
+        }
+
+        RebuildMtProtoRows(all);
+        MtProtoService.SaveCache(all);
+        AppendLog($"MTProto: удалено {removed} нерабочих старше {MtProtoRetention.DeadHours} ч");
+        return removed;
+    }
+
+    /// <summary>
+    /// Читает включённые каналы Telegram. Вызывается автосбором и после подключения.
     /// Возвращает число найденных ссылок.
     /// </summary>
-    private async Task<int> CollectMtProtoCoreAsync(bool forceRss = false)
+    private async Task<int> CollectMtProtoCoreAsync(CancellationToken cancellationToken, bool forceRss = false)
     {
         var sources = _sources.Where(s => s.Enabled && s.Kind == SourceKind.Telegram).ToList();
         if (sources.Count == 0)
@@ -87,9 +162,10 @@ public partial class MainWindow
         var found = new List<MtProtoProxy>();
         foreach (var source in sources)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                var list = await MtProtoService.FetchAsync(source, _operation!.Token, forceRss);
+                var list = await MtProtoService.FetchAsync(source, cancellationToken, forceRss);
                 source.LastCheckedUtc = DateTime.UtcNow;
                 source.LastError = null;
                 found.AddRange(list);
@@ -215,7 +291,7 @@ public partial class MainWindow
 
         if (MtProtoDeadSummary is not null)
         {
-            MtProtoDeadSummary.Text = $"Нерабочих {_mtprotoDeadRows.Count} · хранятся 14 дней, затем удаляются";
+            MtProtoDeadSummary.Text = $"Нерабочих {_mtprotoDeadRows.Count} · удаляются через {MtProtoRetention.DeadHours} ч";
         }
 
         if (MtProtoDeadEmpty is not null)
@@ -228,20 +304,22 @@ public partial class MainWindow
 
     private async void OnMtProtoTestClick(object sender, RoutedEventArgs e)
     {
+        _mtprotoCheckCts?.Cancel();
+
         var dead = ReferenceEquals(MtProtoTabs.SelectedItem, MtProtoDeadTab);
         var rows = dead ? _mtprotoDeadRows : _mtprotoRows;
         if (rows.Count == 0)
         {
             MessageBox.Show(
                 this,
-                dead ? "Нерабочих прокси нет." : "Сначала соберите прокси из каналов.",
+                dead ? "Нерабочих прокси нет." : "Прокси ещё не собраны — приложение собирает их автоматически.",
                 "VieNLink",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
             return;
         }
 
-        if (!BeginOperation())
+        if (!BeginOperation("проверку MTProto"))
         {
             return;
         }
@@ -281,13 +359,15 @@ public partial class MainWindow
     /// <summary>Проверка соединения с одним выбранным прокси на открытой подвкладке.</summary>
     private async void OnMtProtoTestSelectedClick(object sender, RoutedEventArgs e)
     {
+        _mtprotoCheckCts?.Cancel();
+
         if (SelectedMtProto() is not { } proxy)
         {
             MessageBox.Show(this, "Выберите прокси в таблице.", "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
-        if (!BeginOperation())
+        if (!BeginOperation("проверку MTProto"))
         {
             return;
         }
@@ -415,36 +495,6 @@ public partial class MainWindow
         source.LastError = null;
         NodeSourceService.SaveSources(_sources);
         await LoadSingleSourceAsync(source);
-    }
-
-    /// <summary>Ручное добавление MTProto-прокси по ссылкам tg://proxy.</summary>
-    private void OnMtProtoAddManuallyClick(object sender, RoutedEventArgs e)
-    {
-        var text = TextInputWindow.Show(
-            this,
-            "Добавить MTProto-прокси",
-            "Вставьте ссылки tg://proxy?server=…&port=…&secret=… или https://t.me/proxy?… — по одной в строке.",
-            string.Empty);
-        if (string.IsNullOrWhiteSpace(text))
-        {
-            return;
-        }
-
-        var links = MtProtoService.Extract(text, "вручную");
-        if (links.Count == 0)
-        {
-            MessageBox.Show(
-                this,
-                "Не нашёл ни одной ссылки tg://proxy. Пример: tg://proxy?server=1.2.3.4&port=443&secret=abcdef",
-                "VieNLink",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
-            return;
-        }
-
-        MergeMtProto(links);
-        SetStatus("MTProto добавлены", $"Новых ссылок: {links.Count}. Всего: {_mtprotoRows.Count}");
-        AppendLog($"MTProto добавлены вручную: {links.Count}");
     }
 
 }

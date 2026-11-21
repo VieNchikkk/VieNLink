@@ -55,6 +55,15 @@
         <Setter Property="Padding" Value="18,9" />
     </Style>
 
+    <!-- Внимание: прерывание запущенного действия. -->
+    <Style x:Key="WarningButton" TargetType="Button" BasedOn="{StaticResource BaseButton}">
+        <Setter Property="Background" Value="{DynamicResource WarningSurfaceBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource WarningBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource WarningBrush}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Padding" Value="16,9" />
+    </Style>
+
     <Style x:Key="SmallButton" TargetType="Button" BasedOn="{StaticResource BaseButton}">
         <Setter Property="Padding" Value="10,4" />
         <Setter Property="FontSize" Value="12" />
@@ -66,6 +75,71 @@
         <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
         <Setter Property="BorderBrush" Value="{DynamicResource AccentBorderBrush}" />
         <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <!-- Сервисные кнопки: тонированная плашка и значок в цвете бренда. -->
+    <Style x:Key="YouTubeSmallButton" TargetType="Button" BasedOn="{StaticResource SmallButton}">
+        <Setter Property="Background" Value="{DynamicResource YouTubeSurfaceBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource YouTubeBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource YouTubeBorderBrush}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Padding" Value="11,5" />
+    </Style>
+
+    <Style x:Key="DiscordSmallButton" TargetType="Button" BasedOn="{StaticResource SmallButton}">
+        <Setter Property="Background" Value="{DynamicResource DiscordSurfaceBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DiscordBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DiscordBorderBrush}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Padding" Value="11,5" />
+    </Style>
+
+    <Style x:Key="UniversalSmallButton" TargetType="Button" BasedOn="{StaticResource SmallButton}">
+        <Setter Property="Background" Value="{DynamicResource UniversalSurfaceBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource UniversalBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource UniversalBorderBrush}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Padding" Value="11,5" />
+    </Style>
+
+    <Style x:Key="TelegramSmallButton" TargetType="Button" BasedOn="{StaticResource SmallButton}">
+        <Setter Property="Background" Value="{DynamicResource TelegramSurfaceBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource TelegramBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource TelegramBorderBrush}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Padding" Value="11,5" />
+    </Style>
+
+    <!-- Вкладка страницы MTProto: плоская, с синим подчёркиванием. -->
+    <Style x:Key="TelegramTabRadio" TargetType="RadioButton">
+        <Setter Property="Foreground" Value="{DynamicResource TelegramBrush}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Margin" Value="12,0,0,8" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Border x:Name="Chrome"
+                            Background="Transparent"
+                            BorderBrush="Transparent"
+                            BorderThickness="0,0,0,2"
+                            CornerRadius="6,6,0,0"
+                            Padding="14,7">
+                        <ContentPresenter ContentSource="Content" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource TelegramSurfaceBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource TelegramBrush}" />
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource TelegramSelectedSurfaceBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
 
     <!-- Компактный переключатель-ползунок для виджета и настроек. -->
@@ -231,6 +305,16 @@
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
+    </Style>
+
+    <!-- Значок в заголовке вкладки: цвет наследуется от самой вкладки. -->
+    <Style x:Key="TabIcon" TargetType="Path">
+        <Setter Property="Width" Value="16" />
+        <Setter Property="Height" Value="16" />
+        <Setter Property="Stretch" Value="Uniform" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Margin" Value="0,0,7,0" />
+        <Setter Property="Fill" Value="{Binding Foreground, RelativeSource={RelativeSource AncestorType=TabItem}}" />
     </Style>
 
     <Style x:Key="AppTabItem" TargetType="TabItem">
@@ -453,16 +537,77 @@
     <Style TargetType="ScrollBar" BasedOn="{StaticResource AppScrollBar}" />
 
     <Style x:Key="HintText" TargetType="TextBlock">
-        <Setter Property="Foreground" Value="{DynamicResource MutedBrush}" />
-        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Foreground" Value="{DynamicResource TextSoftBrush}" />
+        <Setter Property="FontSize" Value="13" />
         <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="LineHeight" Value="19" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
     </Style>
 
     <Style x:Key="SectionTitle" TargetType="TextBlock">
         <Setter Property="Foreground" Value="{DynamicResource TextStrongBrush}" />
-        <Setter Property="FontSize" Value="15" />
+        <Setter Property="FontSize" Value="16.5" />
         <Setter Property="FontWeight" Value="SemiBold" />
         <Setter Property="Margin" Value="0,0,0,8" />
+    </Style>
+
+    <!-- Инструкции: карточка, короткое «КРАТКО» и полное «ПОДРОБНЕЕ» одним блоком. -->
+    <Style x:Key="InstructionCard" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource InnerBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="9" />
+        <Setter Property="Padding" Value="14,12" />
+        <Setter Property="Margin" Value="0,8,0,0" />
+    </Style>
+
+    <Style x:Key="InstructionLabel" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource MutedStrongBrush}" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="FontWeight" Value="Bold" />
+        <Setter Property="Margin" Value="0,10,0,4" />
+    </Style>
+
+    <Style x:Key="InstructionSummary" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource TextStrongBrush}" />
+        <Setter Property="FontSize" Value="14.5" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="LineHeight" Value="21" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+    </Style>
+
+    <Style x:Key="InstructionText" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource TextSoftBrush}" />
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="LineHeight" Value="20" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+    </Style>
+
+    <Style x:Key="InstructionImportantCard" TargetType="Border">
+        <Setter Property="Background" Value="{DynamicResource WarningSurfaceBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource WarningBrush}" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="12,9" />
+        <Setter Property="Margin" Value="0,10,0,0" />
+    </Style>
+
+    <Style x:Key="InstructionImportantLabel" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource WarningBrush}" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="FontWeight" Value="Bold" />
+    </Style>
+
+    <Style x:Key="InstructionImportantText" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{DynamicResource TextStrongBrush}" />
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="TextWrapping" Value="Wrap" />
+        <Setter Property="LineHeight" Value="20" />
+        <Setter Property="LineStackingStrategy" Value="BlockLineHeight" />
+        <Setter Property="Margin" Value="0,4,0,0" />
     </Style>
 
     <Style TargetType="ToolTip">

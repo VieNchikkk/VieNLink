@@ -33,7 +33,7 @@ public partial class MainWindow
             return;
         }
 
-        if (!BeginOperation())
+        if (!BeginOperation("проверку узла"))
         {
             return;
         }
@@ -76,6 +76,43 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// Экспорт профиля для телефона: JSON для sing-box (с TUN) и ссылка в буфер —
+    /// Android-клиенты (SFA, Exclave, Karing) импортируют и то, и другое.
+    /// </summary>
+    private void OnWorkingExportClick(object sender, RoutedEventArgs e)
+    {
+        if (WorkingGrid.SelectedItem is not NodeRow row)
+        {
+            return;
+        }
+
+        var dialog = new Microsoft.Win32.SaveFileDialog
+        {
+            FileName = ProfileExport.SuggestFileName(row.Node),
+            Filter = "Конфиг sing-box (*.json)|*.json|Все файлы (*.*)|*.*",
+            Title = "Экспорт профиля для телефона",
+        };
+
+        if (dialog.ShowDialog(this) != true)
+        {
+            return;
+        }
+
+        try
+        {
+            // Без BOM: sing-box не читает JSON с меткой порядка байтов.
+            File.WriteAllText(dialog.FileName, ProfileExport.BuildConfig(row.Node, tunnel: true),
+                new System.Text.UTF8Encoding(false));
+            Clipboard.SetText(ProfileExport.BuildShareLink(row.Node));
+            FooterText.Text = "Профиль сохранён, ссылка скопирована — импортируйте в SFA или Exclave";
+        }
+        catch (Exception exception)
+        {
+            ReportError("Не удалось сохранить профиль", exception);
+        }
+    }
+
     private void DeleteRow(NodeRow? row)
     {
         if (row is null)
@@ -85,7 +122,8 @@ public partial class MainWindow
 
         var all = AllRows.Select(r => r.Node).Where(n => !ReferenceEquals(n, row.Node)).ToList();
         ReplaceNodes(all);
-        NodeSourceService.SaveCache(all);
+        // Кэш пишется в фоне, чтобы удаление не подмораживало окно на большом списке.
+        _ = Task.Run(() => NodeSourceService.SaveCache(all));
     }
 
 }

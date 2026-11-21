@@ -17,15 +17,27 @@ public partial class ZapretWidget : Window
 {
     private readonly MainWindow _main;
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(1) };
-    private bool _collapsed = _lastCollapsed;
-    private static bool _lastCollapsed;
+    private readonly DispatcherTimer _placementSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
+    private bool _collapsed;
 
     public ZapretWidget(MainWindow main)
     {
         InitializeComponent();
         _main = main;
+        var placement = _main.GetWidgetPlacement();
+        _collapsed = placement.Collapsed;
         _main.ZapretStateChanged += OnStateChanged;
         _timer.Tick += (_, _) => Refresh();
+        _placementSaveTimer.Tick += (_, _) =>
+        {
+            _placementSaveTimer.Stop();
+            SavePlacement();
+        };
+        LocationChanged += (_, _) =>
+        {
+            _placementSaveTimer.Stop();
+            _placementSaveTimer.Start();
+        };
         Closed += OnClosed;
         Loaded += OnLoaded;
         ApplyCollapsed();
@@ -36,10 +48,20 @@ public partial class ZapretWidget : Window
         ApplyCollapsed();
         UpdateLayout();
 
-        // Первый показ — в правом нижнем углу рабочей области.
-        var area = SystemParameters.WorkArea;
-        Left = area.Right - ActualWidth - 16;
-        Top = area.Bottom - ActualHeight - 16;
+        // Виджет открывается там, где его оставили. Первый запуск — правый нижний угол.
+        var (savedLeft, savedTop, _) = _main.GetWidgetPlacement();
+        if (savedLeft is double left && savedTop is double top &&
+            double.IsFinite(left) && double.IsFinite(top))
+        {
+            Left = MainWindow.ClampToScreen(left, SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenWidth, ActualWidth);
+            Top = MainWindow.ClampToScreen(top, SystemParameters.VirtualScreenTop, SystemParameters.VirtualScreenHeight, ActualHeight);
+        }
+        else
+        {
+            var area = SystemParameters.WorkArea;
+            Left = area.Right - ActualWidth - 16;
+            Top = area.Bottom - ActualHeight - 16;
+        }
 
         // Состояние меняют разные подсистемы (узел, свой обход, видео),
         // поэтому кроме события обновляемся и по таймеру.
@@ -50,7 +72,17 @@ public partial class ZapretWidget : Window
     private void OnClosed(object? sender, EventArgs e)
     {
         _timer.Stop();
+        _placementSaveTimer.Stop();
+        SavePlacement();
         _main.ZapretStateChanged -= OnStateChanged;
+    }
+
+    private void SavePlacement()
+    {
+        if (IsLoaded && double.IsFinite(Left) && double.IsFinite(Top))
+        {
+            _main.SaveWidgetPlacement(Left, Top, _collapsed);
+        }
     }
 
     private void OnStateChanged()
@@ -68,15 +100,24 @@ public partial class ZapretWidget : Window
     {
         WidgetBody.Visibility = _collapsed ? Visibility.Collapsed : Visibility.Visible;
         WidgetCollapseButton.Content = _collapsed ? "▸" : "▾";
-        Width = _collapsed ? 168 : 212;
+        WidgetTitle.Visibility = _collapsed ? Visibility.Collapsed : Visibility.Visible;
+        WidgetMiniInfo.Visibility = _collapsed ? Visibility.Visible : Visibility.Collapsed;
+        Width = _collapsed ? 162 : 212;
         Refresh();
     }
 
     private void OnCollapseClick(object sender, RoutedEventArgs e)
     {
         _collapsed = !_collapsed;
-        _lastCollapsed = _collapsed;
         ApplyCollapsed();
+        UpdateLayout();
+        if (IsLoaded)
+        {
+            Left = MainWindow.ClampToScreen(Left, SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenWidth, ActualWidth);
+            Top = MainWindow.ClampToScreen(Top, SystemParameters.VirtualScreenTop, SystemParameters.VirtualScreenHeight, ActualHeight);
+        }
+
+        _main.SaveWidgetPlacement(Left, Top, _collapsed);
     }
 
     private void Refresh()
@@ -86,11 +127,20 @@ public partial class ZapretWidget : Window
         var active = mode.Length > 0;
 
         WidgetDot.Fill = (Brush)FindResource(active ? "PositiveTextBrush" : "DangerBrush");
-        WidgetTitle.Text = _collapsed ? (active ? mode : "Выключено") : "Обход DPI";
+        WidgetTitle.Text = "Обход DPI";
+        WidgetMiniInfo.Text = _main.WidgetMiniInfoText;
 
+        WidgetYoutubeCount.Text = _main.YoutubeNodeCount.ToString();
+        WidgetDiscordCount.Text = _main.DiscordNodeCount.ToString();
+        WidgetUniversalCount.Text = _main.UniversalNodeCount.ToString();
+        WidgetTelegramCount.Text = _main.TelegramNodeCount.ToString();
+
+        ApplyButtonState(WidgetYoutubeButton, _main.IsServiceConnected("youtube"), busy);
+        ApplyButtonState(WidgetDiscordButton, _main.IsServiceConnected("discord"), busy);
+        ApplyButtonState(WidgetUniversalButton, _main.IsServiceConnected("universal"), busy);
+        ApplyButtonState(WidgetTelegramButton, _main.IsServiceConnected("telegram"), busy);
         ApplyButtonState(WidgetZapretButton, _main.ZapretRunning, busy);
         ApplyButtonState(WidgetDesyncButton, _main.DesyncRunning, busy);
-        ApplyButtonState(WidgetVideoButton, _main.VideoModeActive, busy);
 
         var detail = _main.ActiveModeDetail;
         WidgetStatus.Text = active
@@ -127,14 +177,26 @@ public partial class ZapretWidget : Window
     private async void OnDesyncClick(object sender, RoutedEventArgs e) =>
         await RunAsync(_main.WidgetToggleDesyncAsync);
 
-    private async void OnVideoClick(object sender, RoutedEventArgs e) =>
-        await RunAsync(_main.WidgetToggleVideoAsync);
+    private async void OnYoutubeClick(object sender, RoutedEventArgs e) =>
+        await RunAsync(() => _main.WidgetConnectServiceAsync("youtube"));
+
+    private async void OnDiscordClick(object sender, RoutedEventArgs e) =>
+        await RunAsync(() => _main.WidgetConnectServiceAsync("discord"));
+
+    private async void OnUniversalClick(object sender, RoutedEventArgs e) =>
+        await RunAsync(() => _main.WidgetConnectServiceAsync("universal"));
+
+    private async void OnTelegramClick(object sender, RoutedEventArgs e) =>
+        await RunAsync(() => _main.WidgetConnectServiceAsync("telegram"));
 
     private async Task RunAsync(Func<Task> action)
     {
         WidgetZapretButton.IsEnabled = false;
         WidgetDesyncButton.IsEnabled = false;
-        WidgetVideoButton.IsEnabled = false;
+        WidgetYoutubeButton.IsEnabled = false;
+        WidgetDiscordButton.IsEnabled = false;
+        WidgetUniversalButton.IsEnabled = false;
+        WidgetTelegramButton.IsEnabled = false;
         try
         {
             await action();

@@ -14,50 +14,69 @@ public partial class MainWindow
 {
     // ---------- свой обход DPI (WinDivert) ----------
 
+    /// <summary>
+    /// Список стратегий — только для информации. Порядок автоматический: лучшие по
+    /// накопленному качеству сверху, остальные — в обычном порядке перебора.
+    /// </summary>
     private void BuildDesyncStrategyList()
     {
-        DesyncStrategyPanel.Children.Clear();
-        for (var index = 0; index < DesyncService.Strategies.Count; index++)
+        if (DesyncStrategyPanel is null)
         {
-            var strategy = DesyncService.Strategies[index];
-            var radio = new RadioButton
-            {
-                Content = strategy.Name,
-                GroupName = "DesyncStrategy",
-                Tag = index,
-                Style = (Style)FindResource("AppRadioButton"),
-                Margin = new Thickness(0, 2, 12, 2),
-                FontSize = 12.5,
-                ToolTip = strategy.Description,
-            };
-            radio.Checked += OnDesyncStrategyChecked;
-            DesyncStrategyPanel.Children.Add(radio);
+            return;
         }
 
-        SelectDesyncStrategyRadio(_settings.DesyncStrategy);
+        DesyncStrategyPanel.Children.Clear();
+        var order = DesyncService.GetPriorityOrder();
+        var columns = Math.Max(1, (order.Count + StrategyRows - 1) / StrategyRows);
+        DesyncStrategyPanel.Rows = StrategyRows;
+        DesyncStrategyPanel.Columns = columns;
+
+        var cells = new TextBlock?[StrategyRows * columns];
+        for (var position = 0; position < order.Count; position++)
+        {
+            var index = order[position];
+            var strategy = DesyncService.Strategies[index];
+            var item = new TextBlock
+            {
+                Tag = (Index: index, Number: position + 1),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 1, 12, 1),
+                FontSize = 11.5,
+                VerticalAlignment = VerticalAlignment.Top,
+                ToolTip = strategy.Description,
+            };
+            cells[(position % StrategyRows) * columns + position / StrategyRows] = item;
+        }
+
+        for (var cell = 0; cell < cells.Length; cell++)
+        {
+            DesyncStrategyPanel.Children.Add(cells[cell] ?? new TextBlock { Visibility = Visibility.Hidden });
+        }
+
+        UpdateDesyncStrategyInfo(_settings.DesyncStrategy);
     }
 
-    private void SelectDesyncStrategyRadio(int index)
+    private void UpdateDesyncStrategyInfo(int index)
     {
-        var green = (Brush)FindResource("AccentBrush");
-        foreach (var radio in DesyncStrategyPanel.Children.OfType<RadioButton>())
+        if (DesyncStrategyPanel is null)
         {
-            var isChosen = radio.Tag is int value && value == index;
-            radio.IsChecked = isChosen;
-            var name = radio.Tag is int tag && tag >= 0 && tag < DesyncService.Strategies.Count
-                ? DesyncService.Strategies[tag].Name
-                : string.Empty;
-            radio.Content = isChosen ? "★ " + name : name;
-            if (isChosen)
+            return;
+        }
+
+        var green = (Brush)FindResource("AccentBrush");
+        var muted = (Brush)FindResource("MutedStrongBrush");
+        foreach (var item in DesyncStrategyPanel.Children.OfType<TextBlock>())
+        {
+            if (item.Tag is not (int strategyIndex, int number) ||
+                strategyIndex < 0 || strategyIndex >= DesyncService.Strategies.Count)
             {
-                radio.Foreground = green;
-                radio.FontWeight = FontWeights.SemiBold;
+                continue;
             }
-            else
-            {
-                radio.ClearValue(ForegroundProperty);
-                radio.ClearValue(FontWeightProperty);
-            }
+
+            var chosen = strategyIndex == index;
+            item.Text = $"{number}. {(chosen ? "★ " : string.Empty)}{DesyncService.Strategies[strategyIndex].Name}";
+            item.Foreground = chosen ? green : muted;
+            item.FontWeight = chosen ? FontWeights.SemiBold : FontWeights.Normal;
         }
     }
 
@@ -79,7 +98,7 @@ public partial class MainWindow
             $"WinDivert: {(installed ? "установлен" : "не установлен")} · " +
             $"запущен: {(running ? "да" : "нет")} · " +
             $"права администратора: {(admin ? "есть" : "нет")} · " +
-            $"стратегия: {selected?.Name ?? "не подобрана"}";
+            $"стратегия: {selected?.Name ?? "подберётся автоматически"}";
         if (selected is not null)
         {
             DesyncStatusText.Text += " — " + selected.Description;
@@ -105,17 +124,12 @@ public partial class MainWindow
             DesyncToggleButton.Style = (Style)FindResource(running ? "DangerButton" : "PrimaryButton");
         }
 
-        if (DesyncInstallButton is not null)
-        {
-            DesyncInstallButton.Content = installed ? "Переустановить WinDivert" : "Установить WinDivert";
-        }
+        UpdateHeaderState();
     }
-
-    private async void OnDesyncInstallClick(object sender, RoutedEventArgs e) => await InstallDesyncAsync();
 
     private async Task InstallDesyncAsync()
     {
-        if (!BeginOperation())
+        if (!BeginOperation("установку WinDivert"))
         {
             return;
         }
@@ -166,8 +180,6 @@ public partial class MainWindow
         await StartDesyncFlowAsync(false);
     }
 
-    private async void OnDesyncTuneClick(object sender, RoutedEventArgs e) => await StartDesyncFlowAsync(true);
-
     private async Task StartDesyncFlowAsync(bool forceTune, bool fromWidget = false)
     {
         if (!DesyncService.IsInstalled)
@@ -196,7 +208,7 @@ public partial class MainWindow
 
     private async Task StartDesyncAsync(bool forceTune)
     {
-        if (!BeginOperation())
+        if (!BeginOperation(forceTune ? "подбор стратегии обхода DPI" : "включение обхода DPI"))
         {
             return;
         }
@@ -238,10 +250,18 @@ public partial class MainWindow
                 }
             });
 
+            if (!forceTune)
+            {
+                TryApplyBestDesyncProfile();
+            }
+
             if (forceTune || _settings.DesyncStrategy < 0)
             {
                 SetStatus("Подбираю стратегию", $"Перебираю {DesyncService.Strategies.Count} стратегий: YouTube и Telegram…");
                 var results = await _desync.AutoTuneAsync(progress, _operation!.Token, _settings.DesyncBlockQuic);
+                BypassProfileStore.RecordMany(results
+                    .Where(result => result.Ok > 0)
+                    .Select(result => DesyncProfile(result, _settings.DesyncBlockQuic, "desync")));
                 var best = results
                     .Where(result => result.Ok > 0)
                     .OrderByDescending(result => result.VideoOk)
@@ -261,37 +281,37 @@ public partial class MainWindow
                         ? "TCP до YouTube не устанавливается (IP-блок), а Cloudflare открывается. " +
                           "Обход по SNI здесь не поможет — подключитесь к узлу («Инструменты → Узлы → Подключить») или добавьте свою подписку."
                         : tlsBlocked
-                            ? "YouTube блокируется на уровне SNI/TLS. Попробуйте стратегию «Фейк + multidisorder, TTL 128» " +
-                              "или «TTL 64» вручную; если не поможет — вкладку «Обход запрет» (zapret) или узел."
-                            : "Автоподбор не нашёл рабочую стратегию. Попробуйте «Обход запрет» (zapret) или подключитесь к узлу.";
+                            ? "YouTube блокируется на уровне SNI/TLS. Автоподбор попробовал все стратегии; " +
+                              "если не помогло — включите zapret на вкладке «Обход Zapret» или подключитесь к узлу."
+                            : "Автоподбор не нашёл рабочую стратегию. Попробуйте «Обход Zapret» или подключитесь к узлу.";
                     SetStatus("Автоподбор не удался", ipBlocked
                         ? "YouTube блокируется по IP — нужен узел"
                         : "Обход не включён — попробуйте zapret или узел");
-                    ShowDesyncResults(results, null);
                     return;
                 }
                 else
                 {
                     _settings.DesyncStrategy = best.Index;
-                    SelectDesyncStrategyRadio(best.Index);
                     DesyncTuneText.Text = best.VideoOk
                         ? $"Выбран: «{best.Name}» — YouTube {Mark(best.YoutubeOk)}, видео {Mark(best.VideoOk)}, " +
                           $"Telegram {Mark(best.TelegramOk)}"
                         : $"Выбран: «{best.Name}» — страница YouTube {Mark(best.YoutubeOk)}, видео {Mark(best.VideoOk)}. " +
-                          "Если страница открывается, а видео нет — провайдер блокирует видео-CDН по IP; " +
-                          "для видео — вкладка «В разработке».";
-                    ShowDesyncResults(results, best.Index);
+                          "Если страница открывается, а видео нет — включите блокировку QUIC или подключите прокси-узел.";
                     AppendLog($"Автоподбор своего обхода: выбран «{best.Name}» ({best.Ok}/{best.Total})");
                 }
 
                 SaveSettings();
+                BuildDesyncStrategyList();
             }
 
             var strategy = DesyncService.Strategies[Math.Clamp(_settings.DesyncStrategy, 0, DesyncService.Strategies.Count - 1)];
             SetStatus("Включаю свой обход DPI", $"Стратегия: {strategy.Name}");
             _desync.Start(strategy, progress, _settings.DesyncBlockQuic);
+            BypassProfileStore.Record(StartedProfile(
+                "desync", Math.Clamp(_settings.DesyncStrategy, 0, DesyncService.Strategies.Count - 1),
+                strategy.Name, gameMode: false, _settings.DesyncBlockQuic));
             SetStatus("Свой обход DPI включён",
-                "Страница YouTube откроется напрямую; видео-CDН у этого провайдера блокируется по IP — для видео вкладка «В разработке»");
+                "Стратегия подобрана автоматически. Если видео не идёт — включите блокировку QUIC или прокси-узел.");
             FooterText.Text = "Свой обход DPI включён (WinDivert, без прокси-узла)";
         }
         catch (OperationCanceledException)
@@ -308,9 +328,6 @@ public partial class MainWindow
             UpdateDesyncUi();
         }
     }
-
-    private void ShowDesyncResults(IReadOnlyList<DesyncProbeResult> results, int? chosenIndex)
-        => ShowDesyncResults(results, chosenIndex, DesyncResultsPanel);
 
     private void ShowDesyncResults(IReadOnlyList<DesyncProbeResult> results, int? chosenIndex, StackPanel panel)
     {
@@ -343,35 +360,6 @@ public partial class MainWindow
         }
     }
 
-    private void OnDesyncStrategyChecked(object sender, RoutedEventArgs e)
-    {
-        if (_loadingSettings || sender is not RadioButton { Tag: int index })
-        {
-            return;
-        }
-
-        _settings.DesyncStrategy = index;
-        SaveSettings();
-        UpdateDesyncUi();
-        if (_desync.IsRunning)
-        {
-            _desync.Stop();
-            UpdateDesyncUi();
-            _ = StartDesyncFlowAsync(false);
-        }
-    }
-
-    private void OnDesyncAutoStartChanged(object sender, RoutedEventArgs e)
-    {
-        if (_loadingSettings)
-        {
-            return;
-        }
-
-        _settings.DesyncAutoStart = DesyncAutoStartCheck.IsChecked == true;
-        SaveSettings();
-    }
-
     private void OnDesyncBlockQuicChanged(object sender, RoutedEventArgs e)
     {
         if (_loadingSettings)
@@ -384,52 +372,6 @@ public partial class MainWindow
         if (_desync.IsRunning)
         {
             DesyncTuneText.Text = "Блокировка QUIC применится после перезапуска обхода.";
-        }
-    }
-
-    private async void OnDesyncProbeClick(object sender, RoutedEventArgs e)
-    {
-        if (!_desync.IsRunning)
-        {
-            SetStatus("Свой обход DPI выключен", "Сначала включите обход, затем проверьте");
-            return;
-        }
-
-        if (!BeginOperation())
-        {
-            return;
-        }
-
-        try
-        {
-            SetStatus("Проверяю напрямую", "YouTube и t.me через свой обход DPI…");
-            var index = _settings.DesyncStrategy;
-            var name = _desync.CurrentStrategy?.Name ?? "текущая";
-            var result = await DesyncService.ProbeAsync(index, name, _operation!.Token, probeVideo: true);
-            var youtubeTcp = await DesyncService.TcpReachableAsync(
-                "www.youtube.com", 443, TimeSpan.FromSeconds(4), _operation!.Token);
-            var cloudflareTcp = await DesyncService.TcpReachableAsync(
-                "cp.cloudflare.com", 443, TimeSpan.FromSeconds(4), _operation!.Token);
-            var ipBlocked = !youtubeTcp && cloudflareTcp;
-            DesyncTuneText.Text =
-                $"Прямой доступ: YouTube {Mark(result.YoutubeOk)}, видео {Mark(result.VideoOk)}, " +
-                $"Telegram {Mark(result.TelegramOk)} ({result.Ok}/{result.Total}, {result.AverageMs} мс)" +
-                (ipBlocked
-                    ? " · TCP до YouTube не проходит — провайдер блокирует по IP, нужен прокси-узел"
-                    : string.Empty);
-            StatusDetail.Text = DesyncTuneText.Text;
-        }
-        catch (OperationCanceledException)
-        {
-            SetStatus("Проверка отменена", string.Empty);
-        }
-        catch (Exception exception)
-        {
-            ReportError("Не удалось проверить прямой доступ", exception);
-        }
-        finally
-        {
-            EndOperation();
         }
     }
 

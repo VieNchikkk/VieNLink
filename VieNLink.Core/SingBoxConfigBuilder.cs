@@ -22,7 +22,8 @@ internal static class SingBoxConfigBuilder
         int mixedPort,
         int apiPort,
         string apiSecret,
-        AppSettings settings)
+        AppSettings settings,
+        bool dnsThroughProxy = false)
     {
         var included = new List<ProxyNode>(nodes.Count);
         var seenTags = new HashSet<string>(StringComparer.Ordinal);
@@ -110,18 +111,35 @@ internal static class SingBoxConfigBuilder
         // В режиме системного прокси DNS не трогаем — иначе проверка узлов зависит от узла.
         if (tunEnabled)
         {
-            config["dns"] = new JsonObject
-            {
-                ["servers"] = new JsonArray
+            // dnsThroughProxy: DNS по TCP через узел. Нужно там, где локальный UDP/53
+            // зарезан или подменяется (мобильные сети, Android без root).
+            config["dns"] = dnsThroughProxy
+                ? new JsonObject
                 {
-                    new JsonObject
+                    ["servers"] = new JsonArray
                     {
-                        ["type"] = "local",
-                        ["tag"] = "local",
+                        new JsonObject
+                        {
+                            ["type"] = "tcp",
+                            ["tag"] = "remote",
+                            ["server"] = "1.1.1.1",
+                            ["detour"] = SelectorTag,
+                        },
                     },
-                },
-                ["final"] = "local",
-            };
+                    ["final"] = "remote",
+                }
+                : new JsonObject
+                {
+                    ["servers"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["type"] = "local",
+                            ["tag"] = "local",
+                        },
+                    },
+                    ["final"] = "local",
+                };
         }
 
         config["inbounds"] = inbounds;
@@ -164,8 +182,9 @@ internal static class SingBoxConfigBuilder
         int apiPort,
         string apiSecret,
         bool blockQuic,
-        string processName,
-        string? onlyProcess = null)
+        string? processName,
+        string? onlyProcess = null,
+        string? dnsServer = null)
     {
         var rules = new JsonArray
         {
@@ -184,14 +203,19 @@ internal static class SingBoxConfigBuilder
                 ["action"] = "route",
                 ["outbound"] = DirectTag,
             },
-            new JsonObject
+        };
+
+        if (!string.IsNullOrWhiteSpace(processName))
+        {
+            // Сам форвардер и служебные запросы приложения не должны уходить обратно в TUN.
+            // На Android этот процесс исключён из VPN на уровне VpnService, правило не нужно.
+            rules.Add(new JsonObject
             {
-                // Сам форвардер и служебные запросы приложения не должны уходить обратно в TUN.
                 ["process_name"] = new JsonArray { processName },
                 ["action"] = "route",
                 ["outbound"] = DirectTag,
-            },
-        };
+            });
+        }
 
         if (blockQuic)
         {
@@ -233,15 +257,7 @@ internal static class SingBoxConfigBuilder
                 ["level"] = "warn",
                 ["timestamp"] = true,
             },
-            ["dns"] = new JsonObject
-            {
-                ["servers"] = new JsonArray
-                {
-                    new JsonObject { ["type"] = "local", ["tag"] = "local" },
-                },
-                ["final"] = "local",
-                ["strategy"] = "ipv4_only",
-            },
+            ["dns"] = BuildTunBypassDns(dnsServer),
             ["inbounds"] = new JsonArray
             {
                 new JsonObject
@@ -322,7 +338,19 @@ internal static class SingBoxConfigBuilder
 
         var apps = ParseAppNames(settings.AppList);
         var sites = ParseDomains(settings.SiteList);
-        var appFilter = settings.OnlySelectedApps && apps.Count > 0;
+        var appMode = settings.AppRouteMode;
+        if (appMode == AppRouteMode.All && settings.OnlySelectedApps)
+        {
+            // Совместимость со старой настройкой «только выбранные приложения».
+            appMode = AppRouteMode.OnlyListed;
+        }
+
+        var appFilter = appMode == AppRouteMode.OnlyListed && apps.Count > 0;
+        if (appMode == AppRouteMode.AllExceptListed && apps.Count > 0)
+        {
+            // Исключённые приложения всегда идут напрямую, остальные — по правилам сайтов.
+            rules.Add(RouteRule(DirectTag, apps, null));
+        }
 
         var finalTag = SelectorTag;
 
@@ -405,6 +433,34 @@ internal static class SingBoxConfigBuilder
         {
             tls["record_fragment"] = true;
         }
+    }
+
+    private static JsonObject BuildTunBypassDns(string? dnsServer)
+    {
+        // Windows: локальный резолвер. Android: свой UDP-сервер, потому что системный
+        // резолвер там недоступен ядру и запросы из TUN зациклились бы.
+        if (string.IsNullOrWhiteSpace(dnsServer))
+        {
+            return new JsonObject
+            {
+                ["servers"] = new JsonArray
+                {
+                    new JsonObject { ["type"] = "local", ["tag"] = "local" },
+                },
+                ["final"] = "local",
+                ["strategy"] = "ipv4_only",
+            };
+        }
+
+        return new JsonObject
+        {
+            ["servers"] = new JsonArray
+            {
+                new JsonObject { ["type"] = "udp", ["tag"] = "remote", ["server"] = dnsServer },
+            },
+            ["final"] = "remote",
+            ["strategy"] = "ipv4_only",
+        };
     }
 
     private static JsonObject BuildTunInbound(AppSettings settings) => new()

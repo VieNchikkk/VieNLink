@@ -1,0 +1,71 @@
+using System.Runtime.InteropServices;
+using Android.App;
+
+namespace VieNLink.Mobile;
+
+/// <summary>
+/// Точка входа Android-версии: подставляет платформенные реализации в общее ядро
+/// и перенаправляет stderr в файл — Go-ядро пишет туда текст паники, иначе он теряется.
+/// </summary>
+[Application(Label = "VieNLink")]
+public sealed class VieNLinkApp : Application
+{
+    private const int O_WRONLY = 0x1;
+    private const int O_CREAT = 0x40;
+    private const int O_APPEND = 0x400;
+    private const int StderrFileDescriptor = 2;
+
+    public VieNLinkApp(IntPtr handle, Android.Runtime.JniHandleOwnership transfer) : base(handle, transfer)
+    {
+    }
+
+    public override void OnCreate()
+    {
+        base.OnCreate();
+
+        RedirectStandardError();
+        RegisterSecretProtector();
+        ProbeScheduler.Start(this);
+    }
+
+    /// <summary>
+    /// Go-рантайм печатает панику в stderr, а на Android stderr процесса — /dev/null.
+    /// Подменяем fd 2 файлом: после падения текст паники можно прочитать через
+    /// `adb shell run-as com.vienlink.app cat files/core-stderr.log`.
+    /// </summary>
+    private void RedirectStandardError()
+    {
+        try
+        {
+            var path = Path.Combine(FilesDir!.AbsolutePath, "core-stderr.log");
+            var fd = open(path, O_WRONLY | O_CREAT | O_APPEND, 0x1A4); // 0644
+            if (fd >= 0)
+            {
+                dup2(fd, StderrFileDescriptor);
+            }
+        }
+        catch (Exception exception)
+        {
+            Android.Util.Log.Warn("VieNLink", "не удалось перенаправить stderr: " + exception.Message);
+        }
+    }
+
+    private void RegisterSecretProtector()
+    {
+        try
+        {
+            SecretProtector.Current = new KeystoreSecretStore();
+        }
+        catch (Java.Lang.Exception exception)
+        {
+            // Без шифрования источники писать нельзя: файл с токенами остался бы открытым.
+            AppLog.Write("android", "Keystore недоступен — источники подписок не сохранятся", exception);
+        }
+    }
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int open(string pathname, int flags, int mode);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int dup2(int oldfd, int newfd);
+}

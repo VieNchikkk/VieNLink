@@ -21,14 +21,13 @@ public partial class MainWindow
             : "Ядро не установлено — скачается автоматически при первом подключении (около 33 МБ).";
         if (AppVersionText is not null)
         {
-            AppVersionText.Text = "Версия приложения: " + AppInfo.VersionLabel +
-                " · ядро: " + SingBoxCore.InstalledVersion;
+            AppVersionText.Text = "Версия приложения: " + AppInfo.VersionLabel;
         }
     }
 
     private async void OnEnsureCoreClick(object sender, RoutedEventArgs e)
     {
-        if (!BeginOperation())
+        if (!BeginOperation("проверку ядра"))
         {
             return;
         }
@@ -71,20 +70,22 @@ public partial class MainWindow
         AppendLog(line);
     }
 
+    /// <summary>Сколько последних строк журнала держим в окне. Старые отбрасываются целиком.</summary>
+    private const int LogMaxLines = 500;
+
     private void AppendLog(string line)
     {
         try
         {
             LogBox.AppendText(line + Environment.NewLine);
-            if (LogBox.Text.Length > 200_000)
+            var lines = LogBox.Text.Split('\n');
+            if (lines.Length > LogMaxLines)
             {
-                LogBox.Text = LogBox.Text[^120_000..];
-                LogBox.CaretIndex = LogBox.Text.Length;
+                LogBox.Text = string.Join('\n', lines[^LogMaxLines..]);
             }
-            else
-            {
-                LogBox.ScrollToEnd();
-            }
+
+            LogBox.CaretIndex = LogBox.Text.Length;
+            LogBox.ScrollToEnd();
         }
         catch (Exception exception) when (exception is InvalidOperationException or ArgumentException)
         {

@@ -3,13 +3,18 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="VieNLink (бета) — свободные узлы"
         Icon="pack://application:,,,/Assets/VieNLink.ico"
-        Height="720" Width="1080"
-        MinHeight="560" MinWidth="860"
+        Height="820" Width="1240"
+        MinHeight="620" MinWidth="820"
         WindowStartupLocation="CenterScreen"
+        ResizeMode="NoResize"
         Background="{DynamicResource AppBackgroundBrush}"
         Foreground="{DynamicResource TextBrush}"
         FontFamily="Segoe UI"
-        FontSize="13">
+        FontSize="13"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Display"
+        TextOptions.TextRenderingMode="ClearType">
 
     <Grid>
         <Grid.RowDefinitions>
@@ -19,179 +24,223 @@
         </Grid.RowDefinitions>
 
         <!-- Шапка: состояние и главные действия -->
-        <Border Grid.Row="0" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource TableGridLineBrush}" BorderThickness="0,0,0,1" Padding="20,14">
+        <Border Grid.Row="0" Background="{DynamicResource HeaderBackgroundBrush}" BorderBrush="{DynamicResource TableGridLineBrush}" BorderThickness="0,0,0,1" Padding="20,14">
             <Grid>
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Ellipse x:Name="StatusDot" Width="10" Height="10" Fill="{DynamicResource MutedBrush}" VerticalAlignment="Top" Margin="0,7,10,0" />
-                    <StackPanel>
-                        <TextBlock x:Name="StatusText" Text="Отключено" FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource TextStrongBrush}" />
-                        <TextBlock x:Name="StatusDetail" Style="{StaticResource HintText}" Text="Списки узлов ещё не загружены" />
-                    </StackPanel>
-                    <Border Background="{DynamicResource WarningSurfaceBrush}" CornerRadius="4" Padding="6,2"
-                            Margin="10,2,0,0" VerticalAlignment="Top"
-                            ToolTip="Бета-версия: основные режимы проверены, но возможны сбои">
-                        <TextBlock Text="БЕТА" FontSize="10" FontWeight="SemiBold"
-                                   Foreground="{DynamicResource WarningBrush}" />
-                    </Border>
-                </StackPanel>
+                <!-- Логотип приложения в шапке -->
+                <Image Grid.Column="0" x:Name="HeaderLogo"
+                       Source="pack://application:,,,/Assets/VieNLink.png"
+                       Width="58" Height="58" Margin="0,0,14,0"
+                       VerticalAlignment="Center"
+                       RenderOptions.BitmapScalingMode="HighQuality"
+                       ToolTip="VieNLink — клиент свободных узлов" />
 
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <StackPanel x:Name="HeaderStatsPanel" Orientation="Vertical" VerticalAlignment="Center"
-                                Margin="0,0,16,0" HorizontalAlignment="Right">
-                        <TextBlock x:Name="HeaderStatsText" Style="{StaticResource HintText}" HorizontalAlignment="Right"
-                                   Visibility="Collapsed" Text="↓ 0 КБ/с · ↑ 0 КБ/с" />
-                        <TextBlock x:Name="HeaderExitText" Style="{StaticResource HintText}" HorizontalAlignment="Right"
-                                   Visibility="Collapsed" ToolTip="Страна и IP, через которые вы выходите в интернет" />
-                    </StackPanel>
-                    <Button x:Name="ConnectButton" Content="Подключить" Style="{StaticResource PrimaryButton}"
-                            Margin="0,0,8,0" Click="OnHeaderConnectClick"
-                            ToolTip="Подключиться к лучшему проверенному узлу или отключиться" />
-                    <Button x:Name="CancelButton" Content="Отмена" Style="{StaticResource SmallButton}"
-                            Visibility="Collapsed" Click="OnCancelClick" ToolTip="Прервать текущую операцию" />
+                <Border Grid.Column="1" Background="{DynamicResource HeaderStatusBackgroundBrush}"
+                        BorderBrush="{DynamicResource HeaderInfoBorderBrush}" BorderThickness="1"
+                        CornerRadius="10" Padding="12,7" MinHeight="84" VerticalAlignment="Center">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Ellipse Grid.Column="0" x:Name="StatusDot" Width="10" Height="10" Fill="{DynamicResource MutedBrush}" VerticalAlignment="Top" Margin="0,7,10,0" />
+                        <StackPanel Grid.Column="1">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock x:Name="StatusText" Text="Отключено" FontSize="17" FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextStrongBrush}" VerticalAlignment="Center" />
+                                <Border Background="{DynamicResource WarningSurfaceBrush}" CornerRadius="9" Padding="8,2"
+                                        Margin="10,0,0,0" VerticalAlignment="Center"
+                                        ToolTip="Бета-версия: основные режимы проверены, но возможны сбои">
+                                    <TextBlock Text="БЕТА" FontSize="10" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource WarningBrush}" />
+                                </Border>
+                            </StackPanel>
+                            <TextBlock x:Name="HeaderNodesText" Style="{StaticResource HintText}"
+                                       Text="Загруженные узлы: 0 · YouTube 0 · Discord 0 · Telegram 0 · Универсальных 0"
+                                       ToolTip="Уже проверенные и рассортированные узлы по сервисам" />
+                            <TextBlock x:Name="StatusDetail" Style="{StaticResource HintText}" Text="Списки узлов ещё не загружены" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="24,0,0,0">
+                    <Border x:Name="HeaderConnectionPanel" Background="{DynamicResource HeaderInfoBackgroundBrush}"
+                            BorderBrush="{DynamicResource HeaderInfoBorderBrush}" BorderThickness="1"
+                            CornerRadius="10" Padding="12,7" Margin="0,0,12,0"
+                            VerticalAlignment="Center" Visibility="Collapsed">
+                        <DockPanel>
+                            <Border x:Name="HeaderConnectionAccent" DockPanel.Dock="Left" Width="3" CornerRadius="2"
+                                    Margin="0,0,10,0" Background="{DynamicResource AccentBrush}" />
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0" MaxWidth="320">
+                                    <TextBlock x:Name="HeaderConnectionText" FontSize="12.5" FontWeight="SemiBold"
+                                               Foreground="{DynamicResource TextStrongBrush}" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock x:Name="HeaderConnectionQualityText" Style="{StaticResource HintText}"
+                                               Margin="0,2,0,0" TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock x:Name="HeaderConnectionStatsText" Style="{StaticResource HintText}"
+                                               HorizontalAlignment="Right" />
+                                    <TextBlock x:Name="HeaderConnectionRatingText" FontSize="12" FontWeight="SemiBold"
+                                               HorizontalAlignment="Right" Margin="0,2,0,0" />
+                                </StackPanel>
+                                <TextBlock x:Name="HeaderStatsText" Visibility="Collapsed" />
+                                <TextBlock x:Name="HeaderExitText" Visibility="Collapsed" />
+                            </Grid>
+                        </DockPanel>
+                    </Border>
+                    <Button x:Name="CancelButton" Style="{StaticResource WarningButton}"
+                            Margin="0,0,8,0" Visibility="Collapsed" Click="OnCancelClick"
+                            ToolTip="Прервать текущую операцию">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Width="15" Height="15" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,7,0"
+                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  Data="M12,2C17.5,2 22,6.5 22,12C22,17.5 17.5,22 12,22C6.5,22 2,17.5 2,12C2,6.5 6.5,2 12,2M12,4C7.58,4 4,7.58 4,12C4,16.42 7.58,20 12,20C16.42,20 20,16.42 20,12C20,7.58 16.42,4 12,4M16.24,7.76L17.66,9.17L13.41,13.41L17.66,17.66L16.24,19.07L12,14.83L7.76,19.07L6.34,17.66L10.59,13.41L6.34,9.17L7.76,7.76L12,12L16.24,7.76Z" />
+                            <TextBlock Text="Отменить" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="HeaderDisconnectButton" Style="{StaticResource DangerButton}"
+                            Visibility="Collapsed" Click="OnDisconnectClick"
+                            ToolTip="Отключить все активные подключения">
+                        <StackPanel Orientation="Horizontal">
+                            <Path Width="15" Height="15" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,7,0"
+                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  Data="M16.56,5.44L15.11,6.89C16.84,7.94 18,9.83 18,12A6,6 0 0,1 12,18A6,6 0 0,1 6,12C6,9.83 7.16,7.94 8.88,6.88L7.44,5.44C5.36,6.88 4,9.28 4,12A8,8 0 0,0 12,20A8,8 0 0,0 20,12C20,9.28 18.64,6.88 16.56,5.44M13,3H11V13H13V3Z" />
+                            <TextBlock Text="Отключить" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
             </Grid>
         </Border>
 
-        <TabControl x:Name="MainTabs" Grid.Row="1">
+        <TabControl x:Name="MainTabs" Grid.Row="1" SelectionChanged="OnMainTabsSelectionChanged">
 
-            <!-- ПОДКЛЮЧЕНИЕ: способы обхода и туннель -->
-            <TabItem x:Name="ConnectionTab" Header="Подключение" Style="{StaticResource AppTabItem}">
+            <!-- ПОДКЛЮЧЕНИЕ: быстрое подключение и Telegram -->
+            <TabItem x:Name="ConnectionTab" Style="{StaticResource AppTabItem}">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource TabIcon}"
+                              Data="M3.9,12C3.9,10.29 5.29,8.9 7,8.9H11V7H7A5,5 0 0,0 2,12A5,5 0 0,0 7,17H11V15.1H7C5.29,15.1 3.9,13.71 3.9,12M8,13H16V11H8V13M17,7H13V8.9H17C18.71,8.9 20.1,10.29 20.1,12C20.1,13.71 18.71,15.1 17,15.1H13V17H17A5,5 0 0,0 22,12A5,5 0 0,0 17,7Z" />
+                        <TextBlock Text="Подключение" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
                 <DockPanel>
-                    <Border DockPanel.Dock="Top" Padding="16,10,16,0">
-                        <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap"
-                                   Text="Способы обойти блокировки: zapret, свой обход DPI, видео YouTube и Telegram через узел, а также режим туннеля. Зелёная заливка — главное действие, зелёный контур — важный следующий шаг." />
-                    </Border>
-                    <TabControl x:Name="ConnectionTabs">
-            <TabItem x:Name="ZapretTab" Header="Обход блокировок" Style="{StaticResource AppTabItem}">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="16,12,16,16">
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="Обход DPI (zapret)" />
-                        <TextBlock x:Name="ZapretStatusText" Style="{StaticResource HintText}" TextWrapping="Wrap" Text="Проверка…" />
-                        <TextBlock x:Name="ZapretActiveText" Style="{StaticResource HintText}" Margin="0,4,0,0" TextWrapping="Wrap" FontWeight="SemiBold" />
-                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                            <Button x:Name="BypassButton" Content="Включить обход" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0"
-                                    Click="OnBypassButtonClick" ToolTip="Включить или остановить обход DPI (zapret)" />
-                            <Button Content="Скачать / обновить zapret" Style="{StaticResource SmallButton}" Margin="0,0,8,0" Click="OnZapretInstallClick" />
-                            <Button Content="Подобрать под провайдера" Style="{StaticResource AccentSmallButton}" Click="OnZapretTuneClick"
-                                    ToolTip="Перебрать все режимы zapret (несколько минут); проверка идёт только по YouTube, Telegram и Discord" />
-                        </StackPanel>
+                    <WrapPanel DockPanel.Dock="Top" Margin="16,12,16,4">
+                        <Button Style="{StaticResource YouTubeSmallButton}" Margin="0,0,8,8" Tag="youtube"
+                                Click="OnQuickServiceClick" ToolTip="Подключиться через лучший узел с доступом к YouTube">
+                            <StackPanel Orientation="Horizontal">
+                                <Viewbox Width="18" Height="18" Margin="0,0,7,0">
+                                    <Canvas Width="24" Height="24">
+                                        <Rectangle Canvas.Left="1" Canvas.Top="5" Width="22" Height="14"
+                                                   RadiusX="4" RadiusY="4" Fill="{DynamicResource YouTubeBrush}" />
+                                        <Path Fill="#FFFFFFFF" Data="M 9.5,8.5 L 16.5,12 L 9.5,15.5 Z" />
+                                    </Canvas>
+                                </Viewbox>
+                                <TextBlock Text="YouTube" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
 
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="Стратегия" Margin="0,20,0,6" />
-                        <ScrollViewer MaxHeight="360" VerticalScrollBarVisibility="Auto">
-                            <UniformGrid x:Name="ZapretPresetPanel" Columns="3" />
+                        <Button Style="{StaticResource DiscordSmallButton}" Margin="0,0,8,8" Tag="discord"
+                                Click="OnQuickServiceClick" ToolTip="Подключиться через лучший узел с доступом к Discord">
+                            <StackPanel Orientation="Horizontal">
+                                <Viewbox Width="18" Height="18" Margin="0,0,7,0">
+                                    <Path Fill="{DynamicResource DiscordBrush}" Stretch="Uniform"
+                                          Data="M20.317 4.3698a19.7913 19.7913 0 00-4.8851-1.5152.0741.0741 0 00-.0785.0371c-.211.3753-.4447.8648-.6083 1.2495-1.8447-.2762-3.68-.2762-5.4868 0-.1636-.3933-.4058-.8742-.6177-1.2495a.077.077 0 00-.0785-.037 19.7363 19.7363 0 00-4.8852 1.515.0699.0699 0 00-.0321.0277C.5334 9.0458-.319 13.5799.0992 18.0578a.0824.0824 0 00.0312.0561c2.0528 1.5076 4.0413 2.4228 5.9929 3.0294a.0777.0777 0 00.0842-.0276c.4616-.6304.8731-1.2952 1.226-1.9942a.076.076 0 00-.0416-.1057c-.6528-.2476-1.2743-.5495-1.8722-.8923a.077.077 0 01-.0076-.1277c.1258-.0943.2517-.1923.3718-.2914a.0743.0743 0 01.0776-.0105c3.9278 1.7933 8.18 1.7933 12.0614 0a.0739.0739 0 01.0785.0095c.1202.099.246.1981.3728.2924a.077.077 0 01-.0066.1276 12.2986 12.2986 0 01-1.873.8914.0766.0766 0 00-.0407.1067c.3604.698.7719 1.3628 1.225 1.9932a.076.076 0 00.0842.0286c1.961-.6067 3.9495-1.5219 6.0023-3.0294a.077.077 0 00.0313-.0552c.5004-5.177-.8382-9.6739-3.5485-13.6604a.061.061 0 00-.0312-.0286zM8.02 15.3312c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9555-2.4189 2.157-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.9555 2.4189-2.1569 2.4189zm7.9748 0c-1.1825 0-2.1569-1.0857-2.1569-2.419 0-1.3332.9554-2.4189 2.1569-2.4189 1.2108 0 2.1757 1.0952 2.1568 2.419 0 1.3332-.946 2.4189-2.1568 2.4189Z" />
+                                </Viewbox>
+                                <TextBlock Text="Discord" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+
+                        <Button Style="{StaticResource UniversalSmallButton}" Margin="0,0,8,8" Tag="universal"
+                                Click="OnQuickServiceClick" ToolTip="Подключиться через лучший узел с универсальным доступом (Cloudflare)">
+                            <StackPanel Orientation="Horizontal">
+                                <Viewbox Width="18" Height="18" Margin="0,0,7,0">
+                                    <Path Fill="{DynamicResource UniversalBrush}" Stretch="Uniform"
+                                          Data="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z" />
+                                </Viewbox>
+                                <TextBlock Text="Универсальный" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+
+                        <Button Style="{StaticResource TelegramSmallButton}" Margin="0,0,8,8" Tag="telegram"
+                                Click="OnQuickServiceClick" ToolTip="Подключиться через лучший узел с доступом к Telegram">
+                            <StackPanel Orientation="Horizontal">
+                                <Viewbox Width="18" Height="18" Margin="0,0,7,0">
+                                    <Grid Width="24" Height="24">
+                                        <Ellipse Width="24" Height="24" Fill="#FFFFFFFF" />
+                                        <Path Fill="{DynamicResource TelegramBrush}"
+                                              Data="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
+                                    </Grid>
+                                </Viewbox>
+                                <TextBlock Text="Telegram" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+
+                        <RadioButton x:Name="TelegramTab" Content="Telegram MTProtoProxies"
+                                     Style="{StaticResource TelegramTabRadio}"
+                                     Checked="OnTelegramTabChecked" Unchecked="OnTelegramTabUnchecked"
+                                     ToolTip="Открыть страницу Telegram MTProtoProxies: MTProto-прокси и подключение через узел" />
+                    </WrapPanel>
+                    <Grid>
+                        <ScrollViewer x:Name="QuickConnectPage" VerticalScrollBarVisibility="Auto">
+                            <StackPanel Margin="16,4,16,16">
+                                <TextBlock Style="{StaticResource SectionTitle}" Text="Быстрое подключение" />
+                                <TextBlock Style="{StaticResource InstructionText}"
+                                           Text="Узел выбирается автоматически из уже проверенных: чем больше заблокированных доменов он открывает, тем выше. Для Telegram откройте «Telegram MTProtoProxies» — там MTProto-прокси и отдельное подключение только для Telegram." />
+                                <TextBlock Style="{StaticResource SectionTitle}" Text="Как это работает" Margin="0,20,0,8" />
+                                <Border Style="{StaticResource InstructionCard}" Margin="0">
+                                    <StackPanel>
+                                        <TextBlock Text="КРАТКО" Style="{StaticResource InstructionLabel}" Margin="0,0,0,4" />
+                                        <TextBlock Style="{StaticResource InstructionSummary}">
+                                            <Run Text="Нажмите кнопку сервиса — VieNLink сам выберет " />
+                                            <Run Text="проверенный узел" Foreground="{DynamicResource AccentBrush}" FontWeight="Bold" />
+                                            <Run Text=" с доступом к нему и подключится." />
+                                        </TextBlock>
+                                        <TextBlock Text="ПОДРОБНЕЕ" Style="{StaticResource InstructionLabel}" />
+                                        <TextBlock Style="{StaticResource InstructionText}"
+                                                   Text="Отдельный узел для каждого сервиса искать не нужно. После подключения в шапке появятся страна, задержка и скорость; при сбое узел заменится автоматически, если включено автопереключение." />
+                                    </StackPanel>
+                                </Border>
+                                <TextBlock Style="{StaticResource SectionTitle}" Text="Виджет и главное окно" Margin="0,20,0,8" />
+                                <Border Style="{StaticResource InstructionCard}" Margin="0">
+                                    <StackPanel>
+                                        <TextBlock Text="КРАТКО" Style="{StaticResource InstructionLabel}" Margin="0,0,0,4" />
+                                        <TextBlock Style="{StaticResource InstructionSummary}">
+                                            <Run Text="Размер главного окна " />
+                                            <Run Text="закреплён" Foreground="{DynamicResource AccentBrush}" FontWeight="Bold" />
+                                            <Run Text=", а окно и виджет " />
+                                            <Run Text="запоминают своё место" Foreground="{DynamicResource AccentBrush}" FontWeight="Bold" />
+                                            <Run Text=". Кнопка «Виджет» в ряду вкладок выделена цветом." />
+                                        </TextBlock>
+                                        <TextBlock Text="ПОДРОБНЕЕ" Style="{StaticResource InstructionLabel}" />
+                                        <TextBlock Style="{StaticResource InstructionText}"
+                                                   Text="Перетащите главное окно за заголовок — при следующем запуске оно откроется там же. Плавающий виджет вызывается цветной кнопкой «Виджет»; его можно перетащить в удобное место, а кнопкой «▾» свернуть в компактную строку. Место и свёрнутое состояние тоже сохраняются." />
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
                         </ScrollViewer>
-                        <CheckBox x:Name="ZapretGameModeCheck" Content="Игровой режим: обход UDP (QUIC, STUN, WireGuard)" Style="{StaticResource AppCheckBox}" Margin="0,8,0,0"
-                                  Checked="OnZapretGameModeChanged" Unchecked="OnZapretGameModeChanged"
-                                  ToolTip="Добавляет обработку UDP: QUIC (видео YouTube), голос Discord/Telegram, WireGuard. Если видео зависает — включите этот режим" />
-                        <CheckBox x:Name="ZapretAutoStartCheck" Content="Запускать обход DPI при старте приложения" Style="{StaticResource AppCheckBox}" Margin="0,4,0,0" />
-
-                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                            <Button Content="Проверить напрямую" Style="{StaticResource SmallButton}" Margin="0,0,8,0"
-                                    Click="OnZapretProbeClick"
-                                    ToolTip="Проверить YouTube, t.me и Discord без прокси — с текущей стратегией zapret" />
-                            <Button Content="Виджет" Style="{StaticResource SmallButton}"
-                                    Click="OnZapretWidgetClick"
-                                    ToolTip="Маленькое окно поверх всех: включение обхода, автоподбор и игровой режим" />
-                        </StackPanel>
-                        <TextBlock x:Name="ZapretTuneText" Style="{StaticResource HintText}" Margin="0,8,0,0" TextWrapping="Wrap" />
-                        <StackPanel x:Name="ZapretResultsPanel" Margin="0,6,0,0" />
-
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="Как это работает" Margin="0,24,0,8" />
-                        <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap"
-                                   Text="zapret разрезает и подменяет TLS-пакеты на уровне Windows (WinDivert), чтобы DPI не увидел домен. Прокси-узел не нужен. Требуются права администратора: приложение предложит перезапуск с UAC.&#10;&#10;«Подобрать под провайдера» перебирает все режимы winws: fake, fakedsplit, fakeddisorder, split2, disorder, multisplit, multidisorder, hostfakesplit, ipfrag, synack, syndata, rst, rstack, tamper, hopbyhop, destopt, wssize и их комбинации. Проверяются YouTube (страница и сервер видео), t.me и Discord, причём десинк применяется только к этим доменам — посторонний трафик не затрагивается. Рабочие для YouTube стратегии отмечаются зелёным, а приложение запоминает их и в следующий раз проверяет первыми. Полный перебор занимает несколько минут, прогресс виден в строке состояния и журнале.&#10;&#10;Если страница YouTube открывается, а видео не грузится — видео-серверы блокируются отдельно. Разрезание TLS может не помочь: тогда для видео нужен прокси-узел или своя подписка.&#10;&#10;При подключении к прокси-узлу обход DPI останавливается автоматически, чтобы два обхода не мешали друг другу.&#10;&#10;Файлы winws и WinDivert хранятся в папке zapret рядом с программой — релиз можно переносить на другой компьютер целиком. Если каталог защищён от записи (например, Program Files), используется %LOCALAPPDATA%\VieNLink\zapret." />
-                    </StackPanel>
-                </ScrollViewer>
-            </TabItem>
-                <TabItem x:Name="DesyncTab" Header="Свой обход DPI" Style="{StaticResource AppTabItem}">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <StackPanel Margin="16,12,16,16">
-                            <TextBlock Style="{StaticResource SectionTitle}" Text="Собственный обход DPI (WinDivert)" />
-                            <TextBlock x:Name="DesyncStatusText" Style="{StaticResource HintText}" TextWrapping="Wrap" Text="Проверка…" />
-                            <TextBlock x:Name="DesyncActiveText" Style="{StaticResource HintText}" Margin="0,4,0,0" TextWrapping="Wrap" FontWeight="SemiBold" />
-                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                <Button x:Name="DesyncToggleButton" Content="Включить обход" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0"
-                                        Click="OnDesyncToggleClick" ToolTip="Включить или остановить собственный обход DPI" />
-                                <Button x:Name="DesyncInstallButton" Content="Установить WinDivert" Style="{StaticResource SmallButton}" Margin="0,0,8,0"
-                                        Click="OnDesyncInstallClick" ToolTip="Скачать WinDivert (DLL + драйвер) в папку desync" />
-                                <Button x:Name="DesyncTuneButton" Content="Подобрать стратегию" Style="{StaticResource AccentSmallButton}"
-                                        Click="OnDesyncTuneClick" ToolTip="Перебрать стратегии и проверить YouTube и Telegram" />
-                            </StackPanel>
-
-                            <TextBlock Style="{StaticResource SectionTitle}" Text="Стратегия" Margin="0,20,0,6" />
-                            <ScrollViewer MaxHeight="360" VerticalScrollBarVisibility="Auto">
-                                <UniformGrid x:Name="DesyncStrategyPanel" Columns="2" />
-                            </ScrollViewer>
-                            <CheckBox x:Name="DesyncAutoStartCheck" Content="Запускать свой обход DPI при старте приложения"
-                                      Style="{StaticResource AppCheckBox}" Margin="0,8,0,0"
-                                      Checked="OnDesyncAutoStartChanged" Unchecked="OnDesyncAutoStartChanged" />
-                            <CheckBox x:Name="DesyncBlockQuicCheck" Content="Блокировать QUIC (UDP/443), чтобы видео шло по TCP"
-                                      Style="{StaticResource AppCheckBox}" Margin="0,4,0,0"
-                                      Checked="OnDesyncBlockQuicChanged" Unchecked="OnDesyncBlockQuicChanged"
-                                      ToolTip="YouTube-видео часто идёт по QUIC; блокировка заставляет браузер перейти на TCP, который умеет обходить движок" />
-
-                            <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                                <Button x:Name="DesyncProbeButton" Content="Проверить напрямую" Style="{StaticResource SmallButton}"
-                                        Click="OnDesyncProbeClick"
-                                        ToolTip="Проверить YouTube и t.me без прокси — через текущий движок обхода" />
-                            </StackPanel>
-                            <TextBlock x:Name="DesyncTuneText" Style="{StaticResource HintText}" Margin="0,8,0,0" TextWrapping="Wrap" />
-                            <StackPanel x:Name="DesyncResultsPanel" Margin="0,6,0,0" />
-
-                            <TextBlock Style="{StaticResource SectionTitle}" Text="Как это работает" Margin="0,24,0,8" />
-                            <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap"
-                                       Text="Это собственный движок VieNLink: без winws.exe и без zapret. Он перехватывает исходящий TLS на порт 443, режет ClientHello на TCP-сегменты, меняет их порядок или подмешивает фейковый ClientHello с безобидным SNI. Современные Chrome и Windows присылают ClientHello больше одного TCP-сегмента — движок находит SNI в полезной нагрузке и режет по его границам, а не по фиксированным позициям. Для QUIC отправляется поддельный Initial на google. Прокси-узел не нужен.&#10;&#10;Нужны права администратора и драйвер WinDivert: приложение предложит перезапуск с UAC. Локальные и приватные адреса не трогаются. При подключении к прокси-узлу или включении zapret движок останавливается автоматически.&#10;&#10;«Подобрать стратегию» проверяет страницу YouTube, видео и t.me через каждую стратегию и выбирает рабочую. Страница YouTube и Discord открываются (TTL 128/64), Cloudflare не ломается. Видео YouTube у этого провайдера отдаётся с локального видео-узла Google (GGC) и блокируется по IP: TCP открывается, TLS не проходит ни с одной стратегией. Подробности и обход видео — в подвкладке «Видео YouTube». TLS-фрагментация sing-box (tls.fragment) настраивается в «Инструменты → Настройки» и работает только через узел." />
-                        </StackPanel>
-                    </ScrollViewer>
-                </TabItem>
-                        <TabItem x:Name="VideoDevTab" Header="Видео YouTube" Style="{StaticResource AppTabItem}">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="16,12,16,24" MaxWidth="760" HorizontalAlignment="Left">
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="Видео YouTube" />
-                        <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap"
-                                   Text="Домашний и мобильный провайдеры режут видео-узел YouTube по IP: TCP до него открывается, а TLS не проходит. Это проверено на всех 29 режимах zapret, на domain fronting, подмене IP и DNS, IPv6 — ни один способ не помогает. Видео работает только через прокси-узел: кнопка ниже направит через него только YouTube, остальные сайты пойдут напрямую." />
-                        <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
-                            <Button x:Name="VideoNodeButton" Content="Видео через узел" Style="{StaticResource PrimaryButton}"
-                                    Click="OnVideoViaNodeClick"
-                                    ToolTip="Направить только YouTube через лучший проверенный узел, остальные сайты — напрямую. Нужен хотя бы один рабочий узел" />
-                        </StackPanel>
-                        <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,8,0,0"
-                                   Text="Если узлов нет: «Инструменты → Источники» → «Обновить списки», затем «Инструменты → Узлы» → «Проверить всё». Вернуть всё как было: «Инструменты → Туннель → Всё через узел»." />
-
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="Что уже проверено" Margin="0,20,0,6" />
-                        <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap"
-                                   Text="• 29 режимов zapret: fake, split, multidisorder, ipfrag1/2, hopbyhop, destopt, synack, syndata, rst, rstack, tamper, wssize — видео-узел не отдаёт ни байта.&#10;• Domain fronting: тот же IP с чужим SNI — TLS всё равно обрывается.&#10;• Другие узлы Google — отвечают 404, ссылка привязана к локальному узлу.&#10;• Подмена DNS (9.9.9.9, DoH) — помогает открыть страницу на мобильной сети, но видео не открывает.&#10;• IPv6 — ни домашний роутер, ни мобильная сеть его не выдают." />
-                    </StackPanel>
-                </ScrollViewer>
-                        </TabItem>
-            <TabItem x:Name="TelegramTab" Header="Telegram" Style="{StaticResource AppTabItem}">
-                <DockPanel Margin="16,12,16,16">
+                        <DockPanel x:Name="TelegramPage" Visibility="Collapsed" Margin="16,4,16,16">
                     <Border DockPanel.Dock="Top" Margin="0,0,0,10">
                         <StackPanel>
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="Сбор:" VerticalAlignment="Center" Margin="0,0,8,0"
-                                           Foreground="{DynamicResource MutedStrongBrush}" />
-                                <Button Content="Собрать из каналов" Style="{StaticResource AccentSmallButton}" Margin="0,0,8,0" Click="OnMtProtoRefreshClick" />
-                                <Button Content="Добавить вручную" Style="{StaticResource SmallButton}" Margin="0,0,8,0" Click="OnMtProtoAddManuallyClick" />
-                                <Button Content="Через RSS" Style="{StaticResource SmallButton}" Click="OnMtProtoRssClick"
-                                        ToolTip="Прочитать каналы через публичные RSS-зеркала: t.me не нужен" />
-                            </StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                                 <TextBlock Text="Прокси:" VerticalAlignment="Center" Margin="0,0,8,0"
                                            Foreground="{DynamicResource MutedStrongBrush}" />
                                 <Button Content="Проверить соединение" Style="{StaticResource SmallButton}" Margin="0,0,8,0" Click="OnMtProtoTestClick"
                                         ToolTip="Проверить TCP-соединение со всеми прокси на открытой подвкладке" />
                                 <Button Content="Открыть в Telegram" Style="{StaticResource AccentSmallButton}" Click="OnMtProtoOpenClick" />
-                                <Button Content="Telegram через узел" Style="{StaticResource PrimaryButton}" Margin="8,0,0,0" Click="OnTelegramViaNodeClick"
-                                        ToolTip="Направить через прокси-узел только Telegram, остальные сайты — напрямую" />
                             </StackPanel>
                             <TextBlock x:Name="MtProtoSummary" Style="{StaticResource HintText}" Margin="0,8,0,0" />
-                            <TextBlock Style="{StaticResource HintText}" Margin="0,8,0,0"
-                                       Text="MTProto-прокси работают только внутри Telegram: браузер через них пустить нельзя, это протокол самого мессенджера. «Проверить соединение» перепроверяет открытую подвкладку, выбранную строку можно проверить из контекстного меню. Нерабочие хранятся 14 дней. Если t.me недоступен — жмите «Через RSS»: приложение прочитает канал через tg.i-c-a.su и RSSHub-зеркала (при ответе 429 подождите минуту)." />
+                            <TextBlock Style="{StaticResource InstructionText}" Margin="0,8,0,0"
+                                       Text="MTProto-прокси работают только внутри Telegram: браузер через них пустить нельзя, это протокол самого мессенджера. Каналы читаются автоматически через RSS-зеркала, рабочие прокси проверяются каждые 10 минут, нерабочие — изредка. «Проверить соединение» запускает ручную проверку открытой подвкладки, нерабочие удаляются через 24 часа." />
                         </StackPanel>
                     </Border>
 
@@ -230,7 +279,7 @@
                         <TabItem x:Name="MtProtoDeadTab" Header="Нерабочие" Style="{StaticResource AppTabItem}">
                             <DockPanel>
                                 <TextBlock x:Name="MtProtoDeadSummary" DockPanel.Dock="Top" Style="{StaticResource HintText}" Margin="8,8,8,0"
-                                           Text="Сюда попадают прокси, не ответившие при проверке. Хранятся 14 дней, затем удаляются." />
+                                           Text="Сюда попадают прокси, не ответившие при проверке. Удаляются через 24 часа, иногда проверяются на оживание." />
                                 <Grid>
                                     <DataGrid x:Name="MtProtoDeadGrid" Style="{StaticResource AppDataGrid}" MouseDoubleClick="OnMtProtoDoubleClick">
                                         <DataGrid.Columns>
@@ -255,7 +304,7 @@
                                                 Visibility="Collapsed" IsHitTestVisible="False">
                                         <TextBlock Text="Нерабочих прокси нет" FontSize="15" FontWeight="SemiBold"
                                                    Foreground="{DynamicResource MutedStrongBrush}" HorizontalAlignment="Center" />
-                                        <TextBlock Text="Не ответившие при проверке прокси попадут сюда и будут храниться 14 дней"
+                                        <TextBlock Text="Не ответившие при проверке прокси попадут сюда и будут храниться 24 часа"
                                                    Style="{StaticResource HintText}" Margin="0,6,0,0" HorizontalAlignment="Center" />
                                     </StackPanel>
                                 </Grid>
@@ -263,89 +312,141 @@
                         </TabItem>
                     </TabControl>
                 </DockPanel>
-            </TabItem>
-            <TabItem x:Name="TunTab" Header="Туннель" Style="{StaticResource AppTabItem}">
+            </Grid>
+        </DockPanel>
+    </TabItem>
+
+            <!-- ОБХОД БЛОКИРОВОК: zapret, свой обход DPI и TUN-обход -->
+            <TabItem x:Name="BypassTab" Style="{StaticResource AppTabItem}">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource TabIcon}"
+                              Data="M12,1L3,5V11C3,16.55 6.84,21.74 12,23C17.16,21.74 21,16.55 21,11V5L12,1M10,17L6,13L7.41,11.59L10,14.17L16.59,7.58L18,9L10,17Z" />
+                        <TextBlock Text="Обход блокировок" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
+                <DockPanel>
+                    <Border DockPanel.Dock="Top" Padding="16,10,16,0">
+                        <TextBlock Style="{StaticResource InstructionText}"
+                                   Text="Способы обойти блокировки без прокси-узла. Зелёная заливка — главное действие, зелёный контур — важный следующий шаг." />
+                    </Border>
+                    <TabControl x:Name="BypassTabs">
+            <TabItem x:Name="ZapretTab" Style="{StaticResource AppTabItem}">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource TabIcon}" Data="M7,2V13H10V22L17,10H13L17,2H7Z" />
+                        <TextBlock Text="Обход Zapret" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="16,12,16,24" MaxWidth="720" HorizontalAlignment="Left">
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="Туннель и маршрутизация" />
-                        <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,10"
-                                   Text="Как заворачивать трафик: системный прокси Windows или TUN на весь компьютер. Здесь же — какие сайты и приложения идут через узел." />
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="Туннелирование" Margin="0,20,0,8" />
-                        <RadioButton x:Name="SystemProxyModeRadio" GroupName="Tunnel" Style="{StaticResource AppRadioButton}" Margin="0,4"
-                                     Content="Системный прокси Windows — браузеры и приложения, уважающие настройки"
-                                     Checked="OnRoutingChanged" />
-                        <RadioButton x:Name="TunModeRadio" GroupName="Tunnel" Style="{StaticResource AppRadioButton}" Margin="0,4"
-                                     Content="TUN — весь трафик компьютера (нужны права администратора)"
-                                     Checked="OnRoutingChanged" />
-                        <CheckBox x:Name="StrictRouteCheck" Content="Строгая маршрутизация TUN (не давать обходить туннель)"
-                                  Style="{StaticResource AppCheckBox}" Margin="24,6,0,4" Checked="OnRoutingChanged" Unchecked="OnRoutingChanged" />
-                        <TextBlock Style="{StaticResource HintText}" Margin="24,0,0,0"
-                                   Text="TUN использует wintun.dll (около 750 КБ, скачается сам) и перехватывает трафик всех программ. Без прав администратора приложение предложит перезапуск с повышением." />
-
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="Что проксировать" Margin="0,20,0,8" />
-                        <RadioButton x:Name="RouteAllRadio" GroupName="Sites" Style="{StaticResource AppRadioButton}" Margin="0,4"
-                                     Content="Всё через узел" Checked="OnRoutingChanged" />
-                        <RadioButton x:Name="RouteOnlyRadio" GroupName="Sites" Style="{StaticResource AppRadioButton}" Margin="0,4"
-                                     Content="Только сайты из списка" Checked="OnRoutingChanged" />
-                        <RadioButton x:Name="RouteExceptRadio" GroupName="Sites" Style="{StaticResource AppRadioButton}" Margin="0,4"
-                                     Content="Всё, кроме сайтов из списка" Checked="OnRoutingChanged" />
-                        <WrapPanel Margin="0,8,0,0">
-                            <TextBlock Text="Быстрый выбор:" VerticalAlignment="Center" Margin="0,0,8,0"
-                                       Foreground="{DynamicResource MutedStrongBrush}" />
-                            <CheckBox Content="YouTube" Tag="youtube.com&#10;youtu.be&#10;googlevideo.com&#10;ytimg.com&#10;ggpht.com&#10;youtube-nocookie.com&#10;youtubei.googleapis.com"
-                                      Style="{StaticResource AppCheckBox}" Margin="0,0,10,0" Click="OnSitePresetClick"
-                                      ToolTip="Добавить домены YouTube в список и включить режим «Только сайты из списка»" />
-                            <CheckBox Content="Telegram" Tag="t.me&#10;telegram.org&#10;web.telegram.org&#10;tdesktop.com"
-                                      Style="{StaticResource AppCheckBox}" Margin="0,0,10,0" Click="OnSitePresetClick" />
-                            <CheckBox Content="Discord" Tag="discord.com&#10;discord.gg&#10;discordapp.com&#10;discordapp.net&#10;discord.media"
-                                      Style="{StaticResource AppCheckBox}" Margin="0,0,10,0" Click="OnSitePresetClick" />
-                            <CheckBox Content="Instagram" Tag="instagram.com&#10;cdninstagram.com&#10;ig.me"
-                                      Style="{StaticResource AppCheckBox}" Margin="0,0,10,0" Click="OnSitePresetClick" />
-                            <CheckBox Content="Facebook" Tag="facebook.com&#10;fbcdn.net&#10;fb.com&#10;m.facebook.com"
-                                      Style="{StaticResource AppCheckBox}" Margin="0,0,10,0" Click="OnSitePresetClick" />
-                            <CheckBox Content="X" Tag="x.com&#10;twitter.com&#10;twimg.com&#10;t.co"
-                                      Style="{StaticResource AppCheckBox}" Click="OnSitePresetClick" />
-                        </WrapPanel>
-                        <TextBox x:Name="SiteListBox" Style="{StaticResource AppMultilineTextBox}" Height="84" Margin="0,6,0,0"
-                                 AcceptsReturn="True" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto"
-                                 ToolTip="По одному домену в строке: youtube.com — правило покроет и поддомены" />
-                        <CheckBox x:Name="OnlyAppsCheck" Content="Только для приложений из списка" Style="{StaticResource AppCheckBox}" Margin="0,12,0,4"
-                                  Checked="OnRoutingChanged" Unchecked="OnRoutingChanged" />
-                        <TextBox x:Name="AppListBox" Style="{StaticResource AppMultilineTextBox}" Height="66" Margin="0,4,0,0"
-                                 AcceptsReturn="True" TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto"
-                                 ToolTip="Имена процессов по одному в строке: chrome.exe, Telegram.exe. Можно выбрать кнопками ниже" />
-                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                            <Button Content="Из процессов…" Style="{StaticResource SmallButton}" Margin="0,0,8,0"
-                                    Click="OnPickProcessClick"
-                                    ToolTip="Выбрать запущенные приложения из списка процессов" />
-                            <Button Content="Из файла или ярлыка…" Style="{StaticResource SmallButton}"
-                                    Click="OnPickShortcutClick"
-                                    ToolTip="Указать exe или ярлык — имя процесса добавится в список" />
+                    <StackPanel Margin="16,12,16,16">
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Обход DPI (zapret)" Margin="0,12,0,0" />
+                        <TextBlock x:Name="ZapretStatusText" Style="{StaticResource HintText}" TextWrapping="Wrap" Text="Проверка…" />
+                        <TextBlock x:Name="ZapretActiveText" Style="{StaticResource HintText}" Margin="0,4,0,0" TextWrapping="Wrap" FontWeight="SemiBold" />
+                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                            <Button x:Name="BypassButton" Content="Включить обход" Style="{StaticResource PrimaryButton}"
+                                    Click="OnBypassButtonClick" ToolTip="Включить или остановить обход DPI (zapret)" />
                         </StackPanel>
-                        <TextBlock Style="{StaticResource HintText}" Margin="0,6,0,0"
-                                   Text="Правила работают в обоих режимах. В TUN домены определяются по SNI и заголовку Host, в режиме системного прокси — по адресу из запроса. Пустой список приложений означает «все приложения»." />
 
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="Системный прокси" Margin="0,20,0,8" />
-                        <CheckBox x:Name="ApplyProxyCheck" Content="Переключать системный прокси Windows при подключении" Style="{StaticResource AppCheckBox}" Margin="0,12,0,4" />
-                        <Grid Margin="0,0,0,10">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="260" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="Не проксировать домены" VerticalAlignment="Center" Foreground="{DynamicResource TextSoftBrush}"
-                                       ToolTip="Через точку с запятой. Эти адреса пойдут напрямую — удобно для служебных сервисов и локальной сети." />
-                            <TextBox Grid.Column="1" x:Name="BypassBox" Style="{StaticResource AppTextBox}" />
-                        </Grid>
-                        <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,6,0,0"
-                                   Text="Список исключений обязателен: служебные сервисы и локальная сеть должны идти напрямую, иначе связь может порваться." />
-                        <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
-                            <Button Content="Сохранить настройки" Style="{StaticResource PrimaryButton}" Click="OnSaveSettingsClick" />
-                        </StackPanel>
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Стратегии (автоматически, лучшая — первой)" Margin="0,20,0,6" />
+                        <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,6"
+                                   Text="Выбор не нужен: при включении приложение само перебирает варианты, запоминает рабочий и поднимает его в начало списка." />
+                        <ScrollViewer MaxHeight="300" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                            <UniformGrid x:Name="ZapretPresetPanel" Rows="5" />
+                        </ScrollViewer>
+
+                        <CheckBox x:Name="ZapretBlockQuicCheck" Content="Блокировать QUIC (UDP/443), чтобы видео шло по TCP"
+                                  Style="{StaticResource AppCheckBox}" Margin="0,10,0,0"
+                                  Checked="OnZapretBlockQuicChanged" Unchecked="OnZapretBlockQuicChanged"
+                                  ToolTip="Блокирует QUIC на время работы обхода: браузер переходит на TCP, который умеет разрезать zapret" />
+                        <TextBlock x:Name="ZapretTuneText" Style="{StaticResource HintText}" Margin="0,8,0,0" TextWrapping="Wrap" />
+
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Как это работает" Margin="0,24,0,8" />
+                        <Border Style="{StaticResource InstructionCard}">
+                            <StackPanel>
+                                <TextBlock Text="КРАТКО" Style="{StaticResource InstructionLabel}" Margin="0,0,0,4" />
+                                <TextBlock Style="{StaticResource InstructionSummary}">
+                                    <Run Text="Обход DPI без прокси-узла: приложение режет TLS-пакеты так, чтобы провайдер не увидел домен. Нужны " />
+                                    <Run Text="права администратора" Foreground="{DynamicResource WarningBrush}" FontWeight="Bold" />
+                                    <Run Text=" — VieNLink предложит перезапуск." />
+                                </TextBlock>
+                                <TextBlock Text="ПОДРОБНЕЕ" Style="{StaticResource InstructionLabel}" />
+                                <TextBlock Style="{StaticResource InstructionText}"
+                                           Text="zapret разрезает и подменяет TLS-пакеты на уровне Windows (WinDivert), чтобы DPI не увидел домен. Прокси-узел не нужен. Требуются права администратора: приложение предложит перезапуск с UAC.&#10;&#10;Стратегии перебираются автоматически при включении: fake, fakedsplit, fakeddisorder, split2, disorder, multisplit, multidisorder, hostfakesplit, ipfrag, synack, syndata, rst, rstack, tamper, hopbyhop, destopt, wssize и их комбинации. Проверяются YouTube (страница и сервер видео), t.me и Discord, причём десинк применяется только к этим доменам — посторонний трафик не затрагивается. Лучшая стратегия запоминается и в следующий раз проверяется первой.&#10;&#10;Если страница YouTube открывается, а видео не грузится — включите блокировку QUIC: видео пойдёт по TCP. Если и это не помогло, видео-серверы могут блокироваться по IP — тогда нужен прокси-узел или своя подписка.&#10;&#10;При подключении к прокси-узлу обход DPI останавливается автоматически, чтобы два обхода не мешали друг другу.&#10;&#10;Файлы winws и WinDivert хранятся в папке zapret рядом с программой — релиз можно переносить на другой компьютер целиком. Если каталог защищён от записи (например, Program Files), используется %LOCALAPPDATA%\VieNLink\zapret." />
+                                <Border Style="{StaticResource InstructionImportantCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="ВАЖНО" Style="{StaticResource InstructionImportantLabel}" />
+                                        <TextBlock Style="{StaticResource InstructionImportantText}"
+                                                   Text="При включении обход сам перебирает стратегии и запоминает рабочую. При подключении к прокси-узлу он останавливается автоматически." />
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
-                    
-<TabItem x:Name="TunBypassTab" Header="TUN-обход (бета)" Style="{StaticResource AppTabItem}">
+                <TabItem x:Name="DesyncTab" Style="{StaticResource AppTabItem}">
+                    <TabItem.Header>
+                        <StackPanel Orientation="Horizontal">
+                            <Path Style="{StaticResource TabIcon}" Data="M21,9L17,5V8H10V10H17V13M7,11L3,15L7,19V16H14V14H7V11Z" />
+                            <TextBlock Text="Обход DPI" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </TabItem.Header>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                        <StackPanel Margin="16,12,16,16">
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="Собственный обход DPI (WinDivert)" />
+                            <TextBlock x:Name="DesyncStatusText" Style="{StaticResource HintText}" TextWrapping="Wrap" Text="Проверка…" />
+                            <TextBlock x:Name="DesyncActiveText" Style="{StaticResource HintText}" Margin="0,4,0,0" TextWrapping="Wrap" FontWeight="SemiBold" />
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <Button x:Name="DesyncToggleButton" Content="Включить обход" Style="{StaticResource PrimaryButton}"
+                                        Click="OnDesyncToggleClick" ToolTip="Включить или остановить собственный обход DPI" />
+                            </StackPanel>
+
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="Стратегии (автоматически, лучшая — первой)" Margin="0,20,0,6" />
+                            <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,6"
+                                       Text="Выбор не нужен: при включении приложение само перебирает варианты, запоминает рабочий и поднимает его в начало списка." />
+                            <ScrollViewer MaxHeight="300" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                                <UniformGrid x:Name="DesyncStrategyPanel" Rows="5" />
+                            </ScrollViewer>
+
+                            <CheckBox x:Name="DesyncBlockQuicCheck" Content="Блокировать QUIC (UDP/443), чтобы видео шло по TCP"
+                                      Style="{StaticResource AppCheckBox}" Margin="0,10,0,0"
+                                      Checked="OnDesyncBlockQuicChanged" Unchecked="OnDesyncBlockQuicChanged"
+                                      ToolTip="YouTube-видео часто идёт по QUIC; блокировка заставляет браузер перейти на TCP, который умеет обходить движок" />
+                            <TextBlock x:Name="DesyncTuneText" Style="{StaticResource HintText}" Margin="0,8,0,0" TextWrapping="Wrap" />
+
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="Как это работает" Margin="0,24,0,8" />
+                            <Border Style="{StaticResource InstructionCard}">
+                                <StackPanel>
+                                    <TextBlock Text="КРАТКО" Style="{StaticResource InstructionLabel}" Margin="0,0,0,4" />
+                                    <TextBlock Style="{StaticResource InstructionSummary}">
+                                        <Run Text="Собственный движок VieNLink без winws.exe: режет TLS-рукопожатие на TCP-сегменты, чтобы DPI не собрал домен. Нужны " />
+                                        <Run Text="права администратора" Foreground="{DynamicResource WarningBrush}" FontWeight="Bold" />
+                                        <Run Text=" и драйвер WinDivert." />
+                                    </TextBlock>
+                                    <TextBlock Text="ПОДРОБНЕЕ" Style="{StaticResource InstructionLabel}" />
+                                    <TextBlock Style="{StaticResource InstructionText}"
+                                               Text="Это собственный движок VieNLink: без winws.exe и без zapret. Он перехватывает исходящий TLS на порт 443, режет ClientHello на TCP-сегменты, меняет их порядок или подмешивает фейковый ClientHello с безобидным SNI. Современные Chrome и Windows присылают ClientHello больше одного TCP-сегмента — движок находит SNI в полезной нагрузке и режет по его границам, а не по фиксированным позициям. Для QUIC отправляется поддельный Initial на google. Прокси-узел не нужен.&#10;&#10;Нужны права администратора и драйвер WinDivert: приложение предложит перезапуск с UAC. Локальные и приватные адреса не трогаются. При подключении к прокси-узлу или включении zapret движок останавливается автоматически.&#10;&#10;Стратегии перебираются автоматически при включении: проверяются страница YouTube, видео и t.me, выбирается лучшая и запоминается. Страница YouTube и Discord открываются (TTL 128/64), Cloudflare не ломается. Видео YouTube у этого провайдера может блокироваться по IP — тогда видео открывается через прокси-узел (кнопка «YouTube» на вкладке «Подключение»). TLS-фрагментация sing-box (tls.fragment) настраивается в «Инструменты → Настройки» и работает только через узел." />
+                                    <Border Style="{StaticResource InstructionImportantCard}">
+                                        <StackPanel>
+                                            <TextBlock Text="ВАЖНО" Style="{StaticResource InstructionImportantLabel}" />
+                                            <TextBlock Style="{StaticResource InstructionImportantText}"
+                                                       Text="Обход и прокси-узел не работают одновременно: при подключении к узлу или включении zapret этот движок останавливается сам." />
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </TabItem>
+<TabItem x:Name="TunBypassTab" Style="{StaticResource AppTabItem}">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource TabIcon}"
+                              Data="M9,2V4H5V8H3V10H5V14H3V16H5V20H9V22H11V16H13V22H15V20H19V16H21V14H19V10H21V8H19V4H15V2H13V8H11V2H9M7,4H9V8H7V4M15,4H17V8H15V4M7,16H9V20H7V16M15,16H17V20H15V16Z" />
+                        <TextBlock Text="TUN-обход (Beta)" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="16,12,16,24" MaxWidth="720" HorizontalAlignment="Left">
                         <TextBlock Style="{StaticResource SectionTitle}" Text="TUN-обход без прокси-узла" />
@@ -372,26 +473,51 @@
                                   Checked="OnTunBypassBlockQuicChanged" Unchecked="OnTunBypassBlockQuicChanged"
                                   ToolTip="QUIC нельзя разрезать в пользовательском TCP-форвардере. Блокировка заставляет браузер перейти на TCP" />
                         <CheckBox x:Name="TunBypassAutoStartCheck" Content="Запускать TUN-обход при старте приложения"
-                                  Style="{StaticResource AppCheckBox}" Margin="0,4,0,0"
+                                  Style="{StaticResource AppCheckBox}" Margin="0,4,0,0" Visibility="Collapsed"
                                   Checked="OnTunBypassAutoStartChanged" Unchecked="OnTunBypassAutoStartChanged" />
                         <TextBlock x:Name="TunBypassTuneText" Style="{StaticResource HintText}" Margin="0,8,0,0" TextWrapping="Wrap" />
                         <StackPanel x:Name="TunBypassResultsPanel" Margin="0,6,0,0" />
 
                         <TextBlock Style="{StaticResource SectionTitle}" Text="Как это работает" Margin="0,24,0,8" />
-                        <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap"
-                                   Text="Обход без прокси-узла и без WinDivert. sing-box поднимает TUN-адаптер VieNLink-Bypass и отправляет TCP в локальный SOCKS5-форвардер VieNLink. Форвардер открывает прямой канал до сайта и режет TLS ClientHello на TCP-сегменты или меняет их порядок — DPI не собирает SNI. QUIC блокируется, чтобы браузер перешёл на TCP. Работает по IPv4; IPv6 пока идёт напрямую.&#10;&#10;Нужны права администратора и wintun.dll: приложение предложит перезапуск с UAC. Трафик самого VieNLink.exe идёт напрямую, иначе форвардер замкнулся бы сам на себя. Это отдельный режим: при подключении к узлу, включении zapret или «Своего обхода DPI» TUN-обход останавливается.&#10;&#10;«Автоподключение» по очереди запускает TUN-обход с каждой стратегией, проверяет Cloudflare, YouTube и t.me через отдельный процесс curl.exe и выбирает лучшую (сначала те, что открывают YouTube и Telegram, затем быстрейшие). Стратегии — разные позиции разреза: после первого символа SNI, перед SNI, в середине домена, после TLS-заголовка, после 1-го байта и мультиразрез. На разных провайдерах работают разные.&#10;&#10;Если Cloudflare открывается, а YouTube или t.me — нет, значит ТСПУ блокирует их по IP/протоколу, а не по SNI: для них нужен прокси-узел или zapret/WinDivert." />
+                        <Border Style="{StaticResource InstructionCard}">
+                            <StackPanel>
+                                <TextBlock Text="КРАТКО" Style="{StaticResource InstructionLabel}" Margin="0,0,0,4" />
+                                <TextBlock Style="{StaticResource InstructionSummary}">
+                                    <Run Text="Трафик идёт через TUN-адаптер и локальный форвардер, который режет TLS. Прокси-узел не нужен; нужны " />
+                                    <Run Text="права администратора" Foreground="{DynamicResource WarningBrush}" FontWeight="Bold" />
+                                    <Run Text=" и wintun.dll. Режим экспериментальный." />
+                                </TextBlock>
+                                <TextBlock Text="ПОДРОБНЕЕ" Style="{StaticResource InstructionLabel}" />
+                                <TextBlock Style="{StaticResource InstructionText}"
+                                           Text="Обход без прокси-узла и без WinDivert. sing-box поднимает TUN-адаптер VieNLink-Bypass и отправляет TCP в локальный SOCKS5-форвардер VieNLink. Форвардер открывает прямой канал до сайта и режет TLS ClientHello на TCP-сегменты или меняет их порядок — DPI не собирает SNI. QUIC блокируется, чтобы браузер перешёл на TCP. Работает по IPv4; IPv6 пока идёт напрямую.&#10;&#10;Нужны права администратора и wintun.dll: приложение предложит перезапуск с UAC. Трафик самого VieNLink.exe идёт напрямую, иначе форвардер замкнулся бы сам на себя. Это отдельный режим: при подключении к узлу, включении zapret или «Обхода DPI» TUN-обход останавливается.&#10;&#10;«Автоподключение» по очереди запускает TUN-обход с каждой стратегией, проверяет Cloudflare, YouTube и t.me через отдельный процесс curl.exe и выбирает лучшую (сначала те, что открывают YouTube и Telegram, затем быстрейшие). Стратегии — разные позиции разреза: после первого символа SNI, перед SNI, в середине домена, после TLS-заголовка, после 1-го байта и мультиразрез. На разных провайдерах работают разные.&#10;&#10;Если Cloudflare открывается, а YouTube или t.me — нет, значит ТСПУ блокирует их по IP/протоколу, а не по SNI: для них нужен прокси-узел или zapret/WinDivert." />
+                                <Border Style="{StaticResource InstructionImportantCard}">
+                                    <StackPanel>
+                                        <TextBlock Text="ВАЖНО" Style="{StaticResource InstructionImportantLabel}" />
+                                        <TextBlock Style="{StaticResource InstructionImportantText}"
+                                                   Text="Если Cloudflare открывается, а YouTube или t.me — нет, блокировка идёт по IP: для них нужен прокси-узел или zapret." />
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                        </Border>
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
-</TabControl>
+                    </TabControl>
                 </DockPanel>
             </TabItem>
 
-            <TabItem x:Name="ToolsTab" Header="Инструменты" Style="{StaticResource AppTabItem}">
+            <TabItem x:Name="ToolsTab" Style="{StaticResource AppTabItem}">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource TabIcon}"
+                              Data="M22.7,19L13.6,9.9C14.5,7.6 14,4.9 12.1,3C10.1,1 7.1,0.6 4.7,1.7L9,6L6,9L1.6,4.7C0.4,7.1 0.9,10.1 2.9,12.1C4.8,14 7.5,14.5 9.8,13.6L18.9,22.7C19.3,23.1 19.9,23.1 20.3,22.7L22.6,20.4C23.1,20 23.1,19.3 22.7,19Z" />
+                        <TextBlock Text="Инструменты" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
                 <DockPanel>
                     <Border DockPanel.Dock="Top" Padding="16,10,16,0">
                         <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap"
-                                   Text="Узлы, источники, Telegram-прокси, диагностика и настройки подключения. Начните с «Обновить списки», затем «Партия 500» и «Подключить»." />
+                                   Text="Узлы, источники, туннелирование, настройки и общие параметры. Начните с «Обновить списки», затем запустите ручную проверку узлов." />
                     </Border>
                     <TabControl x:Name="ToolsTabs">
             <!-- УЗЛЫ -->
@@ -399,13 +525,12 @@
                 <DockPanel>
                     <Border DockPanel.Dock="Top" Padding="16,12,16,8">
                         <StackPanel>
-                            <Grid>
+                            <!-- Поиск и фильтры скрыты вместе со списком, но оставлены для текущей логики. -->
+                            <Grid Visibility="Collapsed">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-
                                 <Grid Width="230">
                                     <TextBox x:Name="SearchBox" Style="{StaticResource AppTextBox}" VerticalAlignment="Center"
                                              TextChanged="OnSearchChanged" />
@@ -413,7 +538,6 @@
                                                Foreground="{DynamicResource PlaceholderBrush}" Margin="12,0,0,0"
                                                VerticalAlignment="Center" IsHitTestVisible="False" />
                                 </Grid>
-
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="16,0,0,0">
                                     <CheckBox x:Name="OnlyMaskedCheck" Content="Только маскированные" Style="{StaticResource AppCheckBox}"
                                               VerticalAlignment="Center" Checked="OnFilterChanged" Unchecked="OnFilterChanged"
@@ -425,45 +549,42 @@
                                     <CheckBox x:Name="OnlyMineCheck" Content="Только мои" Style="{StaticResource AppCheckBox}"
                                               VerticalAlignment="Center" Margin="16,0,0,0" Checked="OnFilterChanged" Unchecked="OnFilterChanged" />
                                 </StackPanel>
-
-                                <StackPanel Grid.Column="2" Orientation="Horizontal">
-                                    <Button x:Name="RefreshButton" Content="Обновить списки" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0"
-                                            Click="OnRefreshClick" ToolTip="Собрать узлы из открытых источников и подписок" />
-                                    <Button x:Name="AddNodeManuallyButton" Content="+ Узел" Style="{StaticResource SmallButton}" Margin="0,0,8,0"
-                                            Click="OnAddNodeManuallyClick" ToolTip="Добавить ссылку на сервер вручную (vless://, vmess://…)" />
-                                    <Button x:Name="MaskingHelpButton" Content="?" Style="{StaticResource SmallButton}"
-                                            Click="OnMaskingHelpClick" ToolTip="Как пользоваться маскировкой и автопереключением" />
-                                </StackPanel>
                             </Grid>
 
-                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                                <TextBlock Text="Проверка:" VerticalAlignment="Center" Margin="0,0,8,0"
-                                           Foreground="{DynamicResource MutedStrongBrush}" />
-                                <Button x:Name="TestSelectedButton" Content="Выбранный" Style="{StaticResource SmallButton}" Margin="0,0,8,0"
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button x:Name="RefreshButton" Style="{StaticResource AccentSmallButton}" Margin="0,0,8,0"
+                                        Click="OnRefreshClick" ToolTip="Собрать узлы из открытых источников и подписок">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Path Width="15" Height="15" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,8,0"
+                                              Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                              Data="M17.65,6.35C16.2,4.9 14.21,4 12,4A8,8 0 0,0 4,12A8,8 0 0,0 12,20C15.73,20 18.84,17.45 19.73,14H17.65C16.83,16.33 14.61,18 12,18A6,6 0 0,1 6,12A6,6 0 0,1 12,6C13.66,6 15.14,6.69 16.22,7.78L13,11H20V4L17.65,6.35Z" />
+                                        <TextBlock Text="Обновить списки" VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="TestSelectedButton" Content="Выбранный" Style="{StaticResource AccentSmallButton}" Margin="0,0,8,0"
+                                        Visibility="Collapsed"
                                         Click="OnTestSelectedClick" ToolTip="Проверить задержку выбранного узла" />
                                 <Button x:Name="TestBatchButton" Content="Партия 500" Style="{StaticResource AccentSmallButton}" Margin="0,0,8,0"
                                         Click="OnTestClick" ToolTip="Проверить до 500 узлов — быстрый способ найти живые" />
-                                <Button x:Name="TestAllButton" Content="Все узлы" Style="{StaticResource SmallButton}"
+                                <Button x:Name="TestAllButton" Content="Все узлы" Style="{StaticResource AccentSmallButton}"
                                         Click="OnTestAllClick" ToolTip="Проверить все непроверенные и рабочие узлы (можно отменить)" />
-                                <Button x:Name="SpeedTestButton" Content="Скорость" Style="{StaticResource SmallButton}" Margin="8,0,0,0"
-                                        Click="OnSpeedTestClick"
-                                        ToolTip="Замерить пропускную способность: выбранный узел или 10 лучших рабочих. Задержка скорость не показывает" />
-                                <Border Width="1" Background="{DynamicResource TableGridLineBrush}" Margin="12,3,12,3" />
-                                <TextBlock Text="Через узел:" VerticalAlignment="Center" Margin="0,0,8,0"
-                                           Foreground="{DynamicResource MutedStrongBrush}" />
-                                <Button x:Name="ConnectSelectedButton" Content="Подключить" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0"
-                                        Click="OnConnectSelectedClick" ToolTip="Подключиться к выбранному узлу; если ничего не выбрано — к лучшему проверенному" />
-                                <Button x:Name="DisconnectButton" Content="Отключиться" Style="{StaticResource DangerButton}"
-                                        Click="OnDisconnectClick" Visibility="Collapsed"
-                                        ToolTip="Вернуть системный прокси и остановить ядро" />
                             </StackPanel>
 
-                            <TextBlock Style="{StaticResource HintText}" Margin="0,8,0,0"
-                                       Text="Совет: включите «Только маскированные», нажмите «Проверить всё» и подключайтесь. Цвета: жёлтый — маскированный, зелёный — рабочий, красный — непроверенный. Узлы, не открывшие ни один сайт, удаляются сразу. При сбое узел сменится сам." />
+                            <TextBlock Style="{StaticResource HintText}" Margin="0,10,0,0"
+                                       Text="Список узлов скрыт: приложение само выбирает проверенный узел — сначала по числу открытых заблокированных доменов, затем по задержке. «Все узлы» обновляет оценки; подключение — кнопкой в шапке." />
                         </StackPanel>
                     </Border>
 
-                    <TabControl x:Name="NodesTabs" SelectionChanged="OnNodesTabChanged">
+                    <Border DockPanel.Dock="Top" Padding="16,8,16,8">
+                        <StackPanel>
+                            <TextBlock x:Name="NodesSummaryText" FontSize="16" FontWeight="SemiBold" Text="Загрузка…" />
+                            <TextBlock x:Name="NodesAccessText" Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                            <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,4,0,0"
+                                       Text="Сортировка скрыта: рабочие → больше открытых доменов → меньшая задержка. Точные адреса и имена узлов не показываются." />
+                        </StackPanel>
+                    </Border>
+
+                    <TabControl x:Name="NodesTabs" SelectionChanged="OnNodesTabChanged" Visibility="Collapsed">
                         <TabItem x:Name="NodesUntestedTab" Header="Непроверенные" Style="{StaticResource AppTabItem}">
                             <Grid Margin="16,0,16,16">
                                 <DataGrid x:Name="NodesGrid" Style="{StaticResource AppDataGrid}" RowStyle="{StaticResource NodeRowStyle}"
@@ -525,6 +646,7 @@
                                                 <MenuItem Header="Проверить" Click="OnWorkingTestClick" />
                                                 <Separator />
                                                 <MenuItem Header="Копировать ссылку" Click="OnWorkingCopyLinkClick" />
+                                                <MenuItem Header="Экспорт для телефона…" Click="OnWorkingExportClick" />
                                                 <MenuItem Header="Удалить" Click="OnWorkingDeleteClick" />
                                             </ContextMenu>
                                         </DataGrid.ContextMenu>
@@ -534,7 +656,7 @@
                                                 Visibility="Collapsed" IsHitTestVisible="False">
                                         <TextBlock Text="Рабочих узлов пока нет" FontSize="15" FontWeight="SemiBold"
                                                    Foreground="{DynamicResource MutedStrongBrush}" HorizontalAlignment="Center" />
-                                        <TextBlock Text="Нажмите «Проверить всё» вверху — узлы, открывшие YouTube или Telegram, появятся здесь."
+                                        <TextBlock Text="Нажмите «Все узлы» вверху — узлы, открывшие YouTube или Telegram, появятся здесь."
                                                    Style="{StaticResource HintText}" Margin="0,6,0,0" HorizontalAlignment="Center" />
                                     </StackPanel>
                                 </Grid>
@@ -547,8 +669,8 @@
 
             <!-- ИСТОЧНИКИ -->
             <TabItem x:Name="SourcesTab" Header="Источники" Style="{StaticResource AppTabItem}">
-                <DockPanel Margin="16,12,16,16">
-                    <Border DockPanel.Dock="Top" Margin="0,0,0,10">
+                <DockPanel Margin="16,8,16,10">
+                    <Border DockPanel.Dock="Top" Margin="0,0,0,10" Visibility="Collapsed">
                         <StackPanel>
                             <TextBlock Style="{StaticResource SectionTitle}" Text="Автообновление источников" />
                         <CheckBox x:Name="AutoUpdateCheck" Content="Обновлять подписки при запуске, если данные устарели" Style="{StaticResource AppCheckBox}" Margin="0,4" />
@@ -591,34 +713,42 @@
                             </StackPanel>
                         </StackPanel>
                     </Border>
-                    <Border DockPanel.Dock="Bottom" Margin="0,12,0,0">
-                        <StackPanel>
-                            <TextBlock Style="{StaticResource SectionTitle}" Text="Добавить подписку или источник" />
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="220" />
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBox x:Name="NewSourceName" Style="{StaticResource AppTextBox}" Margin="0,0,8,0" ToolTip="Название (необязательно)" />
-                                <TextBox Grid.Column="1" x:Name="NewSourceUrl" Style="{StaticResource AppTextBox}" Margin="0,0,8,0"
-                                         ToolTip="Ссылка на подписку (v2rayN/Xray/Clash), raw-список или канал https://t.me/s/имя" />
-                                <Button Grid.Column="2" Content="Добавить" Style="{StaticResource BaseButton}" Click="OnAddSourceClick" />
-                            </Grid>
-                            <CheckBox x:Name="NewSourceMineCheck" IsChecked="True" Margin="0,8,0,0"
-                                      Style="{StaticResource AppCheckBox}"
-                                      Content="Это моя подписка (платная) — держать отдельно от публичных" />
-                            <TextBlock Style="{StaticResource HintText}" Margin="0,8,0,0"
-                                       Text="Можно вставить ссылку подписки от провайдера (Happ, v2rayN и т.п.) или ссылки на серверы (vless://, vmess://, trojan://, ss://, hysteria2://) — по одной в строке. Формат подписки определяется автоматически. Если провайдер отдаёт остаток трафика, он появится в колонке «Трафик»." />
-                        </StackPanel>
+                    <Border DockPanel.Dock="Bottom" Margin="0,6,0,0"
+                            Background="{DynamicResource PanelBrush}"
+                            BorderBrush="{DynamicResource TableGridLineBrush}" BorderThickness="1"
+                            CornerRadius="8" Padding="8,6">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="180" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="Новый источник" VerticalAlignment="Center" Margin="0,0,8,0"
+                                       Foreground="{DynamicResource MutedStrongBrush}" FontSize="12.5" FontWeight="SemiBold"
+                                       ToolTip="Название необязательно: пусто — имя возьмётся из адреса" />
+                            <TextBox Grid.Column="1" x:Name="NewSourceName" Style="{StaticResource AppTextBox}"
+                                     Margin="0,0,6,0" Padding="8,4" VerticalContentAlignment="Center"
+                                     ToolTip="Название (необязательно). Пусто — имя возьмётся из адреса." />
+                            <TextBox Grid.Column="2" x:Name="NewSourceUrl" Style="{StaticResource AppTextBox}"
+                                     Margin="0,0,6,0" Padding="8,4" Height="32" AcceptsReturn="True"
+                                     TextWrapping="NoWrap" VerticalScrollBarVisibility="Auto"
+                                     VerticalContentAlignment="Center"
+                                     ToolTip="Ссылка или несколько ссылок — по одной в строке: подписка, raw-список, канал t.me/s/… или vless://, vmess://, trojan://, ss://, hysteria2://." />
+                            <Button Grid.Column="3" Content="Добавить" Height="32" Padding="12,4"
+                                    Style="{StaticResource AccentSmallButton}" Click="OnAddSourceClick"
+                                    ToolTip="Добавить все ссылки из поля в список источников" />
+                        </Grid>
                     </Border>
 
-                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,10">
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,6">
                         <StackPanel Orientation="Horizontal">
-                            <Button Content="Найти новые источники" Style="{StaticResource AccentSmallButton}" Margin="0,0,8,0" Click="OnDiscoverClick" />
-                            <Button Content="Обновить выбранный" Style="{StaticResource SmallButton}" Margin="0,0,8,0" Click="OnRefreshSourceClick" />
-                            <Button Content="Проверить все источники" Style="{StaticResource SmallButton}" Margin="0,0,8,0" Click="OnCheckSourcesClick" />
-                            <Button Content="Удалить выбранный" Style="{StaticResource SmallButton}" Click="OnRemoveSourceClick" />
+                            <Button Content="Найти новые источники" Style="{StaticResource AccentSmallButton}" Margin="0,0,8,0"
+                                    Click="OnDiscoverClick" ToolTip="Искать новые источники в GitHub и на публичных сайтах" />
+                            <Button Content="Обновить выбранный" Style="{StaticResource AccentSmallButton}" Margin="0,0,8,0"
+                                    Click="OnRefreshSourceClick" ToolTip="Загрузить выбранный источник — появятся новые узлы" />
+                            <Button Content="Удалить выбранный" Style="{StaticResource AccentSmallButton}"
+                                    Click="OnRemoveSourceClick" ToolTip="Удалить источник из списка" />
                         </StackPanel>
                     </DockPanel>
 
@@ -646,23 +776,14 @@
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <GridViewColumn Header="Моя" Width="50">
-                                    <GridViewColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <CheckBox Style="{StaticResource AppCheckBox}" IsChecked="{Binding IsMine, UpdateSourceTrigger=PropertyChanged}"
-                                                      Checked="OnSourceMineToggled" Unchecked="OnSourceMineToggled" VerticalAlignment="Center"
-                                                      ToolTip="Личная подписка: отдельная группа и приоритет при подключении" />
-                                        </DataTemplate>
-                                    </GridViewColumn.CellTemplate>
-                                </GridViewColumn>
-                                <GridViewColumn Header="Название" Width="200">
+                                <GridViewColumn Header="Название" Width="220">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <TextBlock Text="{Binding Name}" ToolTip="{Binding Name}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <GridViewColumn Header="Адрес" Width="400">
+                                <GridViewColumn Header="Адрес" Width="440">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <TextBlock Text="{Binding UrlDisplay}" ToolTip="{Binding Url}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
@@ -670,8 +791,7 @@
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
                                 <GridViewColumn Header="Узлов" Width="70" DisplayMemberBinding="{Binding CountLabel}" />
-                                <GridViewColumn Header="Трафик" Width="170" DisplayMemberBinding="{Binding TrafficLabel}" />
-                                <GridViewColumn Header="Статус" Width="160">
+                                <GridViewColumn Header="Статус" Width="150">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
                                             <TextBlock Text="{Binding StatusLabel}" ToolTip="{Binding StatusLabel}"
@@ -685,9 +805,103 @@
                 </DockPanel>
             </TabItem>
 
+            <TabItem x:Name="TunTab" Header="Туннелирование" Style="{StaticResource AppTabItem}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="16,12,16,24" MaxWidth="720" HorizontalAlignment="Left">
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Туннелирование" />
+                        <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,10"
+                                   Text="Выберите, как направлять трафик: через системный прокси Windows или TUN-адаптер." />
+                        <RadioButton x:Name="SystemProxyModeRadio" GroupName="Tunnel" Style="{StaticResource AppRadioButton}" Margin="0,4"
+                                     Content="Системный прокси Windows — браузеры и приложения, уважающие настройки"
+                                     Checked="OnRoutingChanged" />
+                        <RadioButton x:Name="TunModeRadio" GroupName="Tunnel" Style="{StaticResource AppRadioButton}" Margin="0,4"
+                                     Content="TUN — весь трафик компьютера (нужны права администратора)"
+                                     Checked="OnRoutingChanged" />
+                        <CheckBox x:Name="StrictRouteCheck" Content="Строгая маршрутизация TUN (не давать обходить туннель)"
+                                  Style="{StaticResource AppCheckBox}" Margin="24,6,0,4" Checked="OnRoutingChanged" Unchecked="OnRoutingChanged" />
+                        <TextBlock Style="{StaticResource HintText}" Margin="24,0,0,0"
+                                   Text="TUN использует wintun.dll (около 750 КБ, скачается сам) и перехватывает трафик всех программ. Без прав администратора приложение предложит перезапуск с повышением." />
 
-            <!-- ДИАГНОСТИКА -->
-            <TabItem Header="Диагностика" Style="{StaticResource AppTabItem}">
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Какие веб-сайты туннелировать" Margin="0,20,0,8" />
+                        <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,6"
+                                   Text="Выберите режим и добавьте сайты. Они показываются плитками с иконками." />
+                        <RadioButton x:Name="RouteAllRadio" GroupName="Sites" Style="{StaticResource AppRadioButton}" Margin="0,4"
+                                     Content="Туннелировать все сайты" Checked="OnRoutingChanged" />
+                        <RadioButton x:Name="RouteOnlyRadio" GroupName="Sites" Style="{StaticResource AppRadioButton}" Margin="0,4"
+                                     Content="Туннелировать только сайты из списка" Checked="OnRoutingChanged" />
+                        <RadioButton x:Name="RouteExceptRadio" GroupName="Sites" Style="{StaticResource AppRadioButton}" Margin="0,4"
+                                     Content="Не туннелировать сайты из списка" Checked="OnRoutingChanged" />
+
+                        <Border Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource TableGridLineBrush}"
+                                BorderThickness="1" CornerRadius="8" Padding="10" Margin="0,8,0,0">
+                            <StackPanel>
+                                <UniformGrid x:Name="SiteChipsGrid" Columns="2" />
+                                <Grid Margin="0,8,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="NewSiteBox" Style="{StaticResource AppTextBox}"
+                                             ToolTip="Домен или ссылка: youtube.com, discord.com, t.me" />
+                                    <Button Grid.Column="1" Content="Добавить сайт" Style="{StaticResource AccentSmallButton}"
+                                            Margin="8,0,0,0" Click="OnAddSiteChipClick" />
+                                </Grid>
+                                <TextBlock Style="{StaticResource HintText}" Margin="0,6,0,0"
+                                           Text="Например: youtube.com, discord.com, t.me. Можно вставить ссылку — домен определится сам." />
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Какие приложения туннелировать" Margin="0,20,0,8" />
+                        <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,6"
+                                   Text="Выберите режим и добавьте приложения из запущенных процессов или укажите файл." />
+                        <RadioButton x:Name="AppAllRadio" GroupName="Apps" Style="{StaticResource AppRadioButton}" Margin="0,4"
+                                     Content="Туннелировать все приложения" Checked="OnRoutingChanged" />
+                        <RadioButton x:Name="AppOnlyRadio" GroupName="Apps" Style="{StaticResource AppRadioButton}" Margin="0,4"
+                                     Content="Туннелировать только выбранные приложения" Checked="OnRoutingChanged" />
+                        <RadioButton x:Name="AppExceptRadio" GroupName="Apps" Style="{StaticResource AppRadioButton}" Margin="0,4"
+                                     Content="Не туннелировать выбранные приложения" Checked="OnRoutingChanged" />
+
+                        <Border Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource TableGridLineBrush}"
+                                BorderThickness="1" CornerRadius="8" Padding="10" Margin="0,8,0,0">
+                            <StackPanel>
+                                <UniformGrid x:Name="AppChipsGrid" Columns="2" />
+                                <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                    <Button Content="Выбрать из процессов…" Style="{StaticResource AccentSmallButton}" Margin="0,0,8,0"
+                                            Click="OnPickProcessClick"
+                                            ToolTip="Выбрать запущенные приложения из списка процессов" />
+                                    <Button Content="Указать файл…" Style="{StaticResource AccentSmallButton}"
+                                            Click="OnPickShortcutClick"
+                                            ToolTip="Указать exe или ярлык — имя процесса добавится в список" />
+                                </StackPanel>
+                                <Grid Margin="0,6,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox x:Name="NewAppBox" Style="{StaticResource AppTextBox}"
+                                             ToolTip="Имя процесса: chrome.exe, Telegram.exe" />
+                                    <Button Grid.Column="1" Content="Добавить" Style="{StaticResource AccentSmallButton}"
+                                            Margin="8,0,0,0" Click="OnAddAppChipClick" />
+                                </Grid>
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Скрытое хранилище для совместимости с кодом и старыми настройками -->
+                        <TextBox x:Name="SiteListBox" Style="{StaticResource AppMultilineTextBox}" Height="1" Visibility="Collapsed" />
+                        <TextBox x:Name="AppListBox" Style="{StaticResource AppMultilineTextBox}" Height="1" Visibility="Collapsed" />
+                        <CheckBox x:Name="OnlyAppsCheck" Style="{StaticResource AppCheckBox}" Visibility="Collapsed"
+                                  Checked="OnRoutingChanged" Unchecked="OnRoutingChanged" />
+                        <CheckBox x:Name="ApplyProxyCheck" Style="{StaticResource AppCheckBox}" Visibility="Collapsed" />
+                        <TextBox x:Name="BypassBox" Style="{StaticResource AppTextBox}" Visibility="Collapsed" />
+                        <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                            <Button Content="Сохранить настройки" Style="{StaticResource PrimaryButton}" Click="OnSaveSettingsClick" />
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- ДИАГНОСТИКА: убрана из интерфейса, код оставлен для служебных проверок -->
+            <TabItem Header="Диагностика" Style="{StaticResource AppTabItem}" Visibility="Collapsed">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="16,12,16,16">
                         <TextBlock Style="{StaticResource SectionTitle}" Text="Что происходит сейчас" />
@@ -737,7 +951,8 @@
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
                                 <StackPanel Margin="16,12,16,24" MaxWidth="700" HorizontalAlignment="Left">
                                     <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,12"
-                                               Text="Порты, проверка узлов, SNI и TLS-фрагментация. Автообновление источников — в «Инструменты → Источники», правила туннеля — в «Подключение → Туннель»." />
+                                               Text="Здесь только выбор узла и фоновая проверка. Остальные параметры работают со значениями по умолчанию." />
+                        <StackPanel Visibility="Collapsed">
                         <TextBlock Style="{StaticResource SectionTitle}" Text="Порты и проверка" />
                         <Grid Margin="0,0,0,6">
                             <Grid.ColumnDefinitions>
@@ -789,6 +1004,8 @@
                                        ToolTip="Проверка узлов в списке идёт по YouTube и Telegram. Этот адрес используется при подключении, чтобы убедиться, что узел реально работает." />
                             <TextBox Grid.Column="1" x:Name="TestUrlBox" Style="{StaticResource AppTextBox}" />
                         </Grid>
+                        </StackPanel>
+                        <StackPanel Visibility="Collapsed">
                                     <TextBlock Style="{StaticResource SectionTitle}" Text="SNI-маскировка" Margin="0,20,0,6" />
                         <Grid Margin="0,0,0,10">
                             <Grid.ColumnDefinitions>
@@ -807,7 +1024,8 @@
                                   Style="{StaticResource AppCheckBox}" Margin="0,4"
                                   ToolTip="Дополнительное дробление записей TLS. Помогает, если одного fragment недостаточно" />
                         <TextBlock Style="{StaticResource HintText}" Margin="0,2,0,0"
-                                   Text="Работает только для трафика через прокси-узел и применяется при следующем подключении. Собственный обход DPI на WinDivert — в «Подключение → Свой обход DPI», TUN-обход — во вкладке «В разработке»." />
+                                   Text="Работает только для трафика через прокси-узел и применяется при следующем подключении. Собственный обход DPI на WinDivert — в «Обход блокировок → Обход DPI», TUN-обход — в «Обход блокировок → TUN-обход (Beta)»." />
+                        </StackPanel>
                                     <TextBlock Style="{StaticResource SectionTitle}" Text="Выбор узла" Margin="0,20,0,8" />
                         <CheckBox x:Name="AutoBestCheck" Content="Автоматически выбирать самый быстрый узел" Style="{StaticResource AppCheckBox}" Margin="0,4" />
                         <CheckBox x:Name="AutoFailoverCheck" Content="Автопереключение при сбое узла (другой камуфляж)" Style="{StaticResource AppCheckBox}" Margin="0,4"
@@ -817,21 +1035,23 @@
                         <CheckBox x:Name="OnlyMineConnectCheck" Content="Подключаться только к моим подпискам (личный сервер)" Style="{StaticResource AppCheckBox}" Margin="0,4"
                                   ToolTip="Игнорировать публичные бесплатные узлы и использовать только свои добавленные серверы" />
                         <CheckBox x:Name="TestAfterRefreshCheck" Content="Проверять задержки сразу после обновления списков" Style="{StaticResource AppCheckBox}" Margin="0,4" />
+                        <StackPanel Visibility="Collapsed">
                                     <TextBlock Style="{StaticResource SectionTitle}" Text="Защита и статистика" Margin="0,20,0,8" />
                         <CheckBox x:Name="KillSwitchCheck" Content="Kill switch: при падении ядра не выпускать трафик напрямую" Style="{StaticResource AppCheckBox}" Margin="0,4"
                                   ToolTip="Системный прокси останется на закрытом локальном порту: сайты не откроются, но трафик не пойдёт в обход узла. Вернуть интернет — кнопкой «Отключиться»" />
                         <CheckBox x:Name="ShowTrafficCheck" Content="Показывать скорость и трафик в шапке" Style="{StaticResource AppCheckBox}" Margin="0,4" />
                         <CheckBox x:Name="ShowExitInfoCheck" Content="Показывать страну и IP выхода после подключения" Style="{StaticResource AppCheckBox}" Margin="0,4"
                                   ToolTip="Один запрос через узел: полезно видеть, куда выпускает случайный бесплатный сервер" />
-                                    <TextBlock Style="{StaticResource SectionTitle}" Text="Проверка в простое" Margin="0,20,0,8" />
-                        <CheckBox x:Name="IdleTestCheck" Content="Проверять накопившиеся узлы в простое (компьютер не используется)" Style="{StaticResource AppCheckBox}" Margin="0,4"
-                                  ToolTip="Лёгкая проверка по 1–2 узла одновременно, только когда окно свёрнуто и нет ввода. При подключённом туннеле проверяются только уже загруженные узлы, без перезапуска ядра" />
+                        </StackPanel>
+                                    <TextBlock Style="{StaticResource SectionTitle}" Text="Фоновая проверка узлов" Margin="0,20,0,8" />
+                        <CheckBox x:Name="IdleTestCheck" Content="Проверять узлы в фоне, в том числе при работе (скрытый туннель)" Style="{StaticResource AppCheckBox}" Margin="0,4"
+                                  ToolTip="Отдельное ядро sing-box на своих портах: не трогает системный прокси и TUN, поэтому не мешает текущему подключению. В простое — крупные партии, при работе — частые маленькие" />
                         <Grid Margin="0,2,0,4">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="260" />
                                 <ColumnDefinition Width="120" />
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="Простой для проверки, мин" VerticalAlignment="Center" Foreground="{DynamicResource TextSoftBrush}" />
+                            <TextBlock Text="Считать компьютер занятым после, мин" VerticalAlignment="Center" Foreground="{DynamicResource TextSoftBrush}" />
                             <TextBox Grid.Column="1" x:Name="IdleMinutesBox" Style="{StaticResource AppTextBox}" />
                         </Grid>
                         <Grid Margin="0,0,0,4">
@@ -839,7 +1059,7 @@
                                 <ColumnDefinition Width="260" />
                                 <ColumnDefinition Width="120" />
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="Узлов за проход" VerticalAlignment="Center" Foreground="{DynamicResource TextSoftBrush}" />
+                            <TextBlock Text="Узлов за проход в простое" VerticalAlignment="Center" Foreground="{DynamicResource TextSoftBrush}" />
                             <TextBox Grid.Column="1" x:Name="IdleBatchBox" Style="{StaticResource AppTextBox}" />
                         </Grid>
                         <Grid Margin="0,0,0,4">
@@ -847,7 +1067,7 @@
                                 <ColumnDefinition Width="260" />
                                 <ColumnDefinition Width="120" />
                             </Grid.ColumnDefinitions>
-                            <TextBlock Text="Пауза между проходами, мин" VerticalAlignment="Center" Foreground="{DynamicResource TextSoftBrush}" />
+                            <TextBlock Text="Интервал фоновой проверки, мин" VerticalAlignment="Center" Foreground="{DynamicResource TextSoftBrush}" />
                             <TextBox Grid.Column="1" x:Name="IdleIntervalBox" Style="{StaticResource AppTextBox}" />
                         </Grid>
                         <Grid Margin="0,0,0,4">
@@ -865,17 +1085,83 @@
                                 </StackPanel>
                             </ScrollViewer>
                         </TabItem>
+
+                        <TabItem x:Name="GeneralTab" Style="{StaticResource AppTabItem}">
+                            <TabItem.Header>
+                                <StackPanel Orientation="Horizontal">
+                                    <Path Style="{StaticResource TabIcon}"
+                                          Data="M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.98C19.47,12.66 19.5,12.34 19.5,12C19.5,11.66 19.47,11.34 19.43,11.02L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.21,8.95 2.27,9.22 2.46,9.37L4.57,11.02C4.53,11.34 4.5,11.66 4.5,12C4.5,12.34 4.53,12.66 4.57,12.98L2.46,14.63C2.27,14.78 2.21,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.04 4.95,18.95L7.44,17.95C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.95L19.05,18.95C19.27,19.04 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.98Z" />
+                                    <TextBlock Text="Общие" VerticalAlignment="Center" />
+                                </StackPanel>
+                            </TabItem.Header>
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <StackPanel Margin="16,12,16,24" MaxWidth="620" HorizontalAlignment="Left">
+                                    <TextBlock Style="{StaticResource SectionTitle}" Text="Приложение" />
+                                    <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,8"
+                                               Text="Поведение окна, тема, данные приложения и ядро sing-box." />
+                                    <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,10"
+                                               Foreground="{DynamicResource WarningBrush}"
+                                               Text="Статус: бета-версия. Основные режимы проверены, но возможны сбои." />
+                                    <CheckBox x:Name="MinimizeTrayCheck" Content="Сворачивать в трей вместо закрытия" Style="{StaticResource AppCheckBox}" Margin="0,4" />
+                                    <CheckBox x:Name="LightThemeCheck" Content="Светлая тема" Style="{StaticResource AppCheckBox}" Margin="0,4" Checked="OnThemeChanged" Unchecked="OnThemeChanged" />
+                                    <CheckBox x:Name="AutostartCheck" Content="Запускать VieNLink при входе в Windows (в трее)" Style="{StaticResource AppCheckBox}" Margin="0,4"
+                                              Checked="OnAutostartChanged" Unchecked="OnAutostartChanged"
+                                              ToolTip="Ключ автозапуска текущего пользователя: права администратора не нужны" />
+                                    <TextBlock x:Name="AppVersionText" Style="{StaticResource HintText}" Margin="0,10,0,0" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                                        <Button Content="Сохранить настройки" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" Click="OnSaveSettingsClick" />
+                                        <Button Content="Открыть папку данных" Style="{StaticResource AccentSmallButton}" Click="OnOpenDataClick" />
+                                    </StackPanel>
+
+                                    <!-- Ядро обновляется автоматически при запуске, ручные кнопки скрыты. -->
+                                    <StackPanel Visibility="Collapsed">
+                                        <TextBlock Style="{StaticResource SectionTitle}" Text="Ядро sing-box" Margin="0,24,0,8" />
+                                        <TextBlock x:Name="CoreStatusText" Style="{StaticResource HintText}" Text="Проверка…" />
+                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                            <Button Content="Проверить / скачать ядро" Style="{StaticResource AccentSmallButton}" Margin="0,0,8,0" Click="OnEnsureCoreClick" />
+                                            <Button Content="Проверить обновление" Style="{StaticResource AccentSmallButton}" Click="OnCheckCoreUpdateClick"
+                                                    ToolTip="Сравнить установленное ядро с последним релизом sing-box на GitHub и обновить" />
+                                        </StackPanel>
+                                        <TextBlock x:Name="CoreUpdateText" Style="{StaticResource HintText}" Margin="0,8,0,0" TextWrapping="Wrap" />
+                                    </StackPanel>
+
+                                    <TextBlock Style="{StaticResource SectionTitle}" Text="Совместимость с приложениями" Margin="0,24,0,8" />
+                                    <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap"
+                                               Text="Приложения из Microsoft Store не видят прокси на 127.0.0.1 из-за изоляции loopback. Кнопка снимает это ограничение (нужны права администратора)." />
+                                    <Button Content="Разрешить локальный прокси приложениям Магазина" Style="{StaticResource AccentSmallButton}" Margin="0,8,0,0"
+                                            Click="OnStoreAppsLoopbackClick" />
+                                    <TextBlock x:Name="StoreLoopbackText" Style="{StaticResource HintText}" Margin="0,6,0,0" TextWrapping="Wrap" />
+
+                                    <TextBlock Style="{StaticResource SectionTitle}" Text="О безопасности" Margin="0,24,0,8" />
+                                    <TextBlock Style="{StaticResource HintText}"
+                                               Text="Узлы берутся из открытых источников и никем не проверяются: владелец сервера видит ваш трафик так же, как провайдер. Используйте бесплатные узлы для доступа к заблокированным сайтам, но не входите через них в банки и почту, если не доверяете узлу." />
+
+                                    <!-- Скрытые совместимые поля: автозапуск обходов убран из интерфейса. -->
+                                    <CheckBox x:Name="ZapretAutoStartCheck" Visibility="Collapsed" />
+                                    <CheckBox x:Name="DesyncAutoStartCheck" Visibility="Collapsed" />
+                                </StackPanel>
+                            </ScrollViewer>
+                        </TabItem>
                     </TabControl>
                 </DockPanel>
             </TabItem>
 
 
 
-            <TabItem Header="Журнал" Style="{StaticResource AppTabItem}">
+            <TabItem Style="{StaticResource AppTabItem}">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource TabIcon}"
+                              Data="M19,3H5C3.89,3 3,3.89 3,5V19A2,2 0 0,0 5,21H19A2,2 0 0,0 21,19V5C21,3.89 20.1,3 19,3M19,19H5V5H19V19M17,17H7V15H17V17M17,13H7V11H17V13M17,9H7V7H17V9Z" />
+                        <TextBlock Text="Журнал" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
                 <DockPanel Margin="16,12,16,16">
                     <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="0,0,0,8">
-                        <Button Content="Очистить" Style="{StaticResource SmallButton}" Margin="0,0,8,0" Click="OnClearLogClick" />
-                        <Button Content="Открыть папку журналов" Style="{StaticResource SmallButton}" Click="OnOpenLogsClick" />
+                        <Button Content="Очистить" Style="{StaticResource AccentSmallButton}" Margin="0,0,8,0" Click="OnClearLogClick" />
+                        <Button Content="Открыть папку журналов" Style="{StaticResource AccentSmallButton}" Click="OnOpenLogsClick" />
+                        <TextBlock Text="Хранятся последние 500 сообщений" VerticalAlignment="Center"
+                                   Margin="12,0,0,0" Foreground="{DynamicResource MutedStrongBrush}" />
                     </StackPanel>
                     <TextBox x:Name="LogBox" Style="{StaticResource AppTextBox}" IsReadOnly="True" AcceptsReturn="True"
                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
@@ -883,47 +1169,29 @@
                 </DockPanel>
             </TabItem>
 
-            <TabItem x:Name="GeneralTab" Header="Общие" Style="{StaticResource AppTabItem}">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <StackPanel Margin="16,12,16,24" MaxWidth="620" HorizontalAlignment="Left">
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="Приложение" />
-                        <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,8"
-                                   Text="Общие настройки: поведение окна, тема, папка данных, ядро sing-box и памятка по безопасности." />
-                        <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,10"
-                                   Foreground="{DynamicResource WarningBrush}"
-                                   Text="Статус: бета-версия. Основные режимы проверены, но возможны сбои — для постоянной работы лучше своя подписка или свой сервер." />
-                        <CheckBox x:Name="MinimizeTrayCheck" Content="Сворачивать в трей вместо закрытия" Style="{StaticResource AppCheckBox}" Margin="0,4" />
-                        <CheckBox x:Name="LightThemeCheck" Content="Светлая тема" Style="{StaticResource AppCheckBox}" Margin="0,4" Checked="OnThemeChanged" Unchecked="OnThemeChanged" />
-                        <CheckBox x:Name="AutostartCheck" Content="Запускать VieNLink при входе в Windows (в трее)" Style="{StaticResource AppCheckBox}" Margin="0,4"
-                                  Checked="OnAutostartChanged" Unchecked="OnAutostartChanged"
-                                  ToolTip="Ключ автозапуска текущего пользователя: права администратора не нужны" />
-                        <TextBlock x:Name="AppVersionText" Style="{StaticResource HintText}" Margin="0,10,0,0" />
-                        <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
-                            <Button Content="Сохранить настройки" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" Click="OnSaveSettingsClick" />
-                            <Button Content="Открыть папку данных" Style="{StaticResource BaseButton}" Click="OnOpenDataClick" />
+            <!-- Не вкладка, а кнопка в общем ряду: открывает плавающий виджет. -->
+            <TabItem x:Name="WidgetTab" Style="{StaticResource AppTabItem}" Focusable="False" IsTabStop="False"
+                     PreviewMouseLeftButtonDown="OnWidgetTabPreviewMouseDown">
+                <TabItem.Header>
+                    <Border x:Name="WidgetTabChrome" Background="{DynamicResource AccentSurfaceBrush}"
+                            BorderBrush="{DynamicResource AccentBorderBrush}"
+                            BorderThickness="1" CornerRadius="12" Padding="9,4">
+                        <StackPanel Orientation="Horizontal"
+                                    ToolTip="Показать или скрыть плавающий виджет обхода">
+                            <Path Width="15" Height="15" Stretch="Uniform" VerticalAlignment="Center"
+                                  Fill="{DynamicResource AccentBrush}"
+                                  Data="M3,3H21V21H3V3M5,5V19H19V5H5M7,7H17V9H7V7M7,11H17V13H7V11M7,15H13V17H7V15Z" />
+                            <TextBlock Text="Виджет" VerticalAlignment="Center" Margin="6,0,8,0"
+                                       Foreground="{DynamicResource AccentBrush}" FontWeight="SemiBold" />
+                            <Border x:Name="WidgetToggleTrack" Width="26" Height="14" CornerRadius="7"
+                                    Background="{DynamicResource MutedBrush}" VerticalAlignment="Center">
+                                <Ellipse x:Name="WidgetToggleKnob" Width="10" Height="10" Fill="White"
+                                         HorizontalAlignment="Left" Margin="2,0,0,0" />
+                            </Border>
                         </StackPanel>
-
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="Ядро sing-box" Margin="0,24,0,8" />
-                        <TextBlock x:Name="CoreStatusText" Style="{StaticResource HintText}" Text="Проверка…" />
-                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                            <Button Content="Проверить / скачать ядро" Style="{StaticResource SmallButton}" Margin="0,0,8,0" Click="OnEnsureCoreClick" />
-                            <Button Content="Проверить обновление" Style="{StaticResource SmallButton}" Click="OnCheckCoreUpdateClick"
-                                    ToolTip="Сравнить установленное ядро с последним релизом sing-box на GitHub и обновить" />
-                        </StackPanel>
-                        <TextBlock x:Name="CoreUpdateText" Style="{StaticResource HintText}" Margin="0,8,0,0" TextWrapping="Wrap" />
-
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="Совместимость с приложениями" Margin="0,24,0,8" />
-                        <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap"
-                                   Text="Приложения из Microsoft Store не видят прокси на 127.0.0.1 из-за изоляции loopback: в браузере сайт открывается, а в приложении — нет. Кнопка ниже снимает это ограничение для всех приложений текущего пользователя (нужны права администратора)." />
-                        <Button Content="Разрешить локальный прокси приложениям Магазина" Style="{StaticResource SmallButton}" Margin="0,8,0,0"
-                                Click="OnStoreAppsLoopbackClick" />
-                        <TextBlock x:Name="StoreLoopbackText" Style="{StaticResource HintText}" Margin="0,6,0,0" TextWrapping="Wrap" />
-
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="О безопасности" Margin="0,24,0,8" />
-                        <TextBlock Style="{StaticResource HintText}"
-                                   Text="Узлы берутся из открытых источников и никем не проверяются: владелец сервера видит ваш трафик так же, как провайдер. Используйте бесплатные узлы для доступа к заблокированным сайтам, но не входите через них в банки и почту, если не доверяете узлу. Соединения по HTTPS остаются зашифрованными до сайта, но сам факт посещения и SNI видны." />
-                    </StackPanel>
-                </ScrollViewer>
+                    </Border>
+                </TabItem.Header>
+                <Grid />
             </TabItem>
 
         </TabControl>

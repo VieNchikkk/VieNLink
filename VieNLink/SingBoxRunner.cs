@@ -155,6 +155,10 @@ internal sealed class SingBoxRunner : IAsyncDisposable
         {
             AppLog.Write("core", "Не удалось остановить sing-box при выходе", exception);
         }
+        finally
+        {
+            process?.Dispose();
+        }
     }
 
     private void Forward(string? line)

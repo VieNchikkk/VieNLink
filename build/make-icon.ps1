@@ -1,154 +1,179 @@
-#Requires -Version 5.1
-# Рисует иконку VieNLink (V + кольцо-связка) и собирает многоразмерный .ico
-# без внешних инструментов. Палитра совпадает с тёмной темой приложения.
-$ErrorActionPreference = 'Stop'
+# Генерация иконки VieNLink: монограмма «VL» одной лентой на тёмно-изумрудной
+# плашке. Выход: Assets/VieNLink.ico (16–256), Assets/VieNLink.png (512),
+# branding/vienlink-icon-src.png (1024) и branding/vienlink-wordmark.png.
+# Запуск: powershell -File build\make-icon.ps1
+param(
+    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+)
+
 Add-Type -AssemblyName System.Drawing
 
-$root = Split-Path -Parent $PSScriptRoot
-$assets = Join-Path $root 'VieNLink\Assets'
-New-Item -ItemType Directory -Path $assets -Force | Out-Null
+# Палитра: тёмный графит + изумрудный градиент, как в тёмной теме приложения.
+$BgTop     = [System.Drawing.Color]::FromArgb(255, 0x14, 0x24, 0x1C)
+$BgBottom  = [System.Drawing.Color]::FromArgb(255, 0x06, 0x0D, 0x0A)
+$Glow      = [System.Drawing.Color]::FromArgb(255, 0x2E, 0x7D, 0x52)
+$Border    = [System.Drawing.Color]::FromArgb(150, 0x3C, 0x5C, 0x4A)
+$InkTop    = [System.Drawing.Color]::FromArgb(255, 0xF6, 0xFF, 0xFA)
+$InkBottom = [System.Drawing.Color]::FromArgb(255, 0x7F, 0xE0, 0xAB)
+$Shadow    = [System.Drawing.Color]::FromArgb(255, 0x02, 0x0A, 0x06)
 
-$size = 1024
-$bmp = New-Object System.Drawing.Bitmap($size, $size)
-$g = [System.Drawing.Graphics]::FromImage($bmp)
-$g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-$g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-$g.Clear([System.Drawing.Color]::Transparent)
-
-$graphite = [System.Drawing.ColorTranslator]::FromHtml('#18191B')
-$borderColor = [System.Drawing.ColorTranslator]::FromHtml('#2C3035')
-$mint = [System.Drawing.ColorTranslator]::FromHtml('#9CCDB0')
-
-function New-RoundPen($color, $width) {
-    $pen = New-Object System.Drawing.Pen($color, [float]$width)
-    $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $pen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-    $pen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
-    return $pen
+function New-RoundedRectPath([System.Drawing.RectangleF]$rect, [float]$radius) {
+    $d = $radius * 2
+    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $path.AddArc($rect.X, $rect.Y, $d, $d, 180, 90)
+    $path.AddArc($rect.Right - $d, $rect.Y, $d, $d, 270, 90)
+    $path.AddArc($rect.Right - $d, $rect.Bottom - $d, $d, $d, 0, 90)
+    $path.AddArc($rect.X, $rect.Bottom - $d, $d, $d, 90, 90)
+    $path.CloseFigure()
+    return $path
 }
 
-try {
-    # Тёмный фон со скруглёнными углами и тонкой рамкой.
-    $r = 220
-    $round = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $round.AddArc(0, 0, $r * 2, $r * 2, 180, 90)
-    $round.AddArc($size - $r * 2, 0, $r * 2, $r * 2, 270, 90)
-    $round.AddArc($size - $r * 2, $size - $r * 2, $r * 2, $r * 2, 0, 90)
-    $round.AddArc(0, $size - $r * 2, $r * 2, $r * 2, 90, 90)
-    $round.CloseFigure()
+function New-IconBitmap([int]$size) {
+    # Рисуем в 4× (для крупных — в 2×) и уменьшаем: так сглаживаются края.
+    $ss = if ($size -ge 512) { 2 } else { 4 }
+    $S = [float]($size * $ss)
+    $bmp = New-Object System.Drawing.Bitmap([int]$S, [int]$S, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $g.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
 
-    $bg = New-Object System.Drawing.SolidBrush($graphite)
-    $g.FillPath($bg, $round)
-    $frame = New-Object System.Drawing.Pen($borderColor, 10)
-    $g.DrawPath($frame, $round)
+    # --- Плашка: скруглённый квадрат с градиентом ---
+    $rect = New-Object System.Drawing.RectangleF(0, 0, $S, $S)
+    $radius = [float]($S * 0.225)
+    $tile = New-RoundedRectPath $rect $radius
+    $bg = New-Object System.Drawing.Drawing2D.LinearGradientBrush($rect, $BgTop, $BgBottom, 55.0)
+    $g.FillPath($bg, $tile)
+    $bg.Dispose()
 
-    # Буква V.
-    $vPen = New-RoundPen $mint 142
-    $g.DrawLine($vPen, 300, 290, 512, 650)
-    $g.DrawLine($vPen, 512, 650, 724, 290)
+    # Фон уже содержит градиент; дополнительный отсвет даёт заметные полосы
+    # на 8-битном градиенте, поэтому обходимся без него.
 
-    # Связка: короткий поводок и кольцо под вершиной V.
-    $linkPen = New-RoundPen $mint 88
-    $g.DrawLine($linkPen, 512, 650, 512, 725)
+    # --- Тонкая внутренняя рамка ---
+    $inset = [float]($S * 0.045)
+    $frameRect = New-Object System.Drawing.RectangleF($inset, $inset, ($S - $inset * 2), ($S - $inset * 2))
+    $frame = New-RoundedRectPath $frameRect ([float]($S * 0.195))
+    $framePen = New-Object System.Drawing.Pen($Border, [float]($S * 0.0045))
+    $g.DrawPath($framePen, $frame)
+    $framePen.Dispose()
+    $frame.Dispose()
 
-    $hole = New-Object System.Drawing.SolidBrush($graphite)
-    $g.FillEllipse($hole, 512 - 104, 800 - 104, 208, 208)
-    $ringPen = New-RoundPen $mint 52
-    $g.DrawEllipse($ringPen, 512 - 104, 800 - 104, 208, 208)
+    # --- Монограмма «VL»: одна непрерывная лента V → L ---
+    # Точки в системе 1024×1024.
+    $u = [float]($S / 1024.0)
+    $linePoints = [System.Drawing.PointF[]]@(
+        (New-Object System.Drawing.PointF([float](198 * $u), [float](322 * $u))),
+        (New-Object System.Drawing.PointF([float](398 * $u), [float](706 * $u))),
+        (New-Object System.Drawing.PointF([float](598 * $u), [float](322 * $u))),
+        (New-Object System.Drawing.PointF([float](598 * $u), [float](712 * $u))),
+        (New-Object System.Drawing.PointF([float](846 * $u), [float](712 * $u)))
+    )
 
-    $bg.Dispose(); $frame.Dispose(); $vPen.Dispose(); $linkPen.Dispose()
-    $hole.Dispose(); $ringPen.Dispose(); $round.Dispose()
-}
-finally {
-    $g.Dispose()
-}
+    $stroke = [float]($S * 0.096)
 
-$pngPath = Join-Path $assets 'VieNLink.png'
-$bmp.Save($pngPath, [System.Drawing.Imaging.ImageFormat]::Png)
-
-# Собираем .ico: DIB-кадры 16…256. PNG-кадры внутри ICO GDI+ читает как «шум»,
-# поэтому пишем классический формат: BITMAPINFOHEADER + BGRA + AND-маска.
-$sizes = 16, 20, 24, 32, 40, 48, 64, 128, 256
-$frames = New-Object System.Collections.Generic.List[byte[]]
-foreach ($s in $sizes) {
-    $small = New-Object System.Drawing.Bitmap($s, $s, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-    $sg = [System.Drawing.Graphics]::FromImage($small)
-    $sg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-    $sg.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
-    $sg.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-    $sg.Clear([System.Drawing.Color]::Transparent)
-    $sg.DrawImage($bmp, 0, 0, $s, $s)
-    $sg.Dispose()
-
-    # Читаем BGRA-пиксели и переворачиваем строки: в DIB строки идут снизу вверх.
-    $rect = New-Object System.Drawing.Rectangle(0, 0, $s, $s)
-    $locked = $small.LockBits($rect, [System.Drawing.Imaging.ImageLockMode]::ReadOnly,
-        [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-    $stride = [Math]::Abs($locked.Stride)
-    $pixels = New-Object byte[] ($stride * $s)
-    [System.Runtime.InteropServices.Marshal]::Copy($locked.Scan0, $pixels, 0, $pixels.Length)
-    $small.UnlockBits($locked)
-    $small.Dispose()
-
-    $xor = New-Object byte[] ($s * $s * 4)
-    for ($y = 0; $y -lt $s; $y++) {
-        [Array]::Copy($pixels, $y * $stride, $xor, ($s - 1 - $y) * $s * 4, $s * 4)
+    # Тень: несколько смещённых полупрозрачных проходов.
+    $shadowPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(30, $Shadow.R, $Shadow.G, $Shadow.B), $stroke)
+    $shadowPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $shadowPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $shadowPen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+    foreach ($pass in 1..4) {
+        $shadowPen.Width = [float]($stroke * (1.0 + 0.06 * $pass))
+        $g.DrawLines($shadowPen, $linePoints)
     }
+    $shadowPen.Dispose()
 
-    # AND-маска: для 32bpp она не используется (прозрачность в альфе), но обязательна.
-    $maskStride = [int]([Math]::Floor(($s + 31) / 32) * 4)
-    $and = New-Object byte[] ($maskStride * $s)
+    $g.TranslateTransform(0, [float](14 * $u))
+    $shadowPen2 = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(45, $Shadow.R, $Shadow.G, $Shadow.B), [float]($stroke * 1.02))
+    $shadowPen2.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $shadowPen2.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $shadowPen2.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+    $g.DrawLines($shadowPen2, $linePoints)
+    $shadowPen2.Dispose()
+    $g.ResetTransform()
 
-    $ms = New-Object System.IO.MemoryStream
-    $bw = New-Object System.IO.BinaryWriter($ms)
-    $bw.Write([UInt32]40)          # biSize
-    $bw.Write([Int32]$s)           # biWidth
-    $bw.Write([Int32]($s * 2))     # biHeight (XOR + AND)
-    $bw.Write([UInt16]1)           # biPlanes
-    $bw.Write([UInt16]32)          # biBitCount
-    $bw.Write([UInt32]0)           # biCompression = BI_RGB
-    $bw.Write([UInt32]$xor.Length) # biSizeImage
-    $bw.Write([Int32]0); $bw.Write([Int32]0)
-    $bw.Write([UInt32]0); $bw.Write([UInt32]0)
-    $bw.Write($xor)
-    $bw.Write($and)
-    $bw.Flush()
-    $frames.Add($ms.ToArray())
-    $ms.Dispose()
+    # Сама лента: градиент от тёплого белого к мятному.
+    $inkRect = New-Object System.Drawing.RectangleF(0, [float]($S * 0.22), $S, [float]($S * 0.62))
+    $inkBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush($inkRect, $InkTop, $InkBottom, 90.0)
+    $inkPen = New-Object System.Drawing.Pen($inkBrush, $stroke)
+    $inkPen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $inkPen.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $inkPen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+    $g.DrawLines($inkPen, $linePoints)
+    $inkPen.Dispose()
+    $inkBrush.Dispose()
+
+    $g.Dispose()
+
+    if ($ss -eq 1 -and $S -eq $size) { return $bmp }
+
+    $result = New-Object System.Drawing.Bitmap($size, $size, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $rg = [System.Drawing.Graphics]::FromImage($result)
+    $rg.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $rg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+    $rg.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $rg.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+    $rg.DrawImage($bmp, (New-Object System.Drawing.RectangleF(0, 0, $size, $size)))
+    $rg.Dispose()
+    $bmp.Dispose()
+    return $result
 }
 
-$icoPath = Join-Path $assets 'VieNLink.ico'
+function Get-PngBytes([System.Drawing.Bitmap]$bmp) {
+    $ms = New-Object System.IO.MemoryStream
+    $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bytes = $ms.ToArray()
+    $ms.Dispose()
+    return $bytes
+}
+
+# --- Исходник 1024 ---
+$src = New-IconBitmap 1024
+$src.Save((Join-Path $RepoRoot 'branding\vienlink-icon-src.png'), [System.Drawing.Imaging.ImageFormat]::Png)
+$src.Dispose()
+
+# --- PNG 512 для Assets и компоновки логотипа ---
+$png512 = New-IconBitmap 512
+$png512.Save((Join-Path $RepoRoot 'VieNLink\Assets\VieNLink.png'), [System.Drawing.Imaging.ImageFormat]::Png)
+$png512.Dispose()
+
+# --- Многоразмерный ICO (PNG-записи, работает на Windows Vista+) ---
+$sizes = @(16, 24, 32, 48, 64, 128, 256)
+$pngs = New-Object 'System.Collections.Generic.List[byte[]]'
+foreach ($sz in $sizes) {
+    $b = New-IconBitmap $sz
+    $pngs.Add((Get-PngBytes $b))
+    $b.Dispose()
+}
+
+$icoPath = Join-Path $RepoRoot 'VieNLink\Assets\VieNLink.ico'
 $fs = [System.IO.File]::Create($icoPath)
 $bw = New-Object System.IO.BinaryWriter($fs)
 try {
-    $bw.Write([UInt16]0)          # reserved
-    $bw.Write([UInt16]1)          # icon
-    $bw.Write([UInt16]$sizes.Count)
+    $bw.Write([uint16]0)          # reserved
+    $bw.Write([uint16]1)          # type: icon
+    $bw.Write([uint16]$sizes.Count)
     $offset = 6 + 16 * $sizes.Count
     for ($i = 0; $i -lt $sizes.Count; $i++) {
-        $s = $sizes[$i]
-        $bw.Write([byte]$(if ($s -ge 256) { 0 } else { $s }))
-        $bw.Write([byte]$(if ($s -ge 256) { 0 } else { $s }))
-        $bw.Write([byte]0)        # colors
-        $bw.Write([byte]0)        # reserved
-        $bw.Write([UInt16]1)      # planes
-        $bw.Write([UInt16]32)     # bpp
-        $bw.Write([UInt32]$frames[$i].Length)
-        $bw.Write([UInt32]$offset)
-        $offset += $frames[$i].Length
+        $sz = $sizes[$i]
+        $bw.Write([byte]($(if ($sz -ge 256) { 0 } else { $sz })))  # width (0 = 256)
+        $bw.Write([byte]($(if ($sz -ge 256) { 0 } else { $sz })))  # height
+        $bw.Write([byte]0)          # palette
+        $bw.Write([byte]0)          # reserved
+        $bw.Write([uint16]1)        # planes
+        $bw.Write([uint16]32)       # bpp
+        $bw.Write([uint32]$pngs[$i].Length)
+        $bw.Write([uint32]$offset)
+        $offset += $pngs[$i].Length
     }
-
-    foreach ($frame in $frames) {
-        $bw.Write($frame)
-    }
+    foreach ($p in $pngs) { $bw.Write($p) }
 }
 finally {
     $bw.Dispose()
     $fs.Dispose()
-    $bmp.Dispose()
 }
 
-$icon = New-Object System.Drawing.Icon($icoPath)
-Write-Host "PNG: $pngPath"
-Write-Host "ICO: $icoPath (кадры: $($sizes -join ', '); размер значка: $($icon.Width)x$($icon.Height))"
-$icon.Dispose()
+Write-Output 'Иконка сгенерирована:'
+Write-Output "  $icoPath"
+Write-Output "  $(Join-Path $RepoRoot 'VieNLink\Assets\VieNLink.png')"
+Write-Output "  $(Join-Path $RepoRoot 'branding\vienlink-icon-src.png')"

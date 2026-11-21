@@ -33,8 +33,8 @@ public partial class MainWindow
         _settings.ConnectOnlyVerified = OnlyVerifiedConnectCheck.IsChecked == true;
         _settings.ConnectOnlyMine = OnlyMineConnectCheck.IsChecked == true;
         _settings.ZapretAutoStart = ZapretAutoStartCheck.IsChecked == true;
-        _settings.ZapretGameMode = ZapretGameModeCheck.IsChecked == true;
         _settings.DesyncAutoStart = DesyncAutoStartCheck.IsChecked == true;
+        _settings.ZapretBlockQuic = ZapretBlockQuicCheck.IsChecked == true;
         _settings.DesyncBlockQuic = DesyncBlockQuicCheck.IsChecked == true;
         _settings.TunBypassBlockQuic = TunBypassBlockQuicCheck.IsChecked == true;
         _settings.TunBypassAutoStart = TunBypassAutoStartCheck.IsChecked == true;
@@ -93,6 +93,7 @@ public partial class MainWindow
     {
         _settings.Theme = LightThemeCheck.IsChecked == true ? "Light" : "Dark";
         App.ApplyTheme(_settings.Theme);
+        WindowChromeTheme.Apply(this);
         SaveSettings();
     }
 

@@ -67,6 +67,10 @@ internal static class Program
                 var probeLimit = args.Length > 1 && int.TryParse(args[1], out var probeParsed) ? probeParsed : 120;
                 await RunProbeAsync(probeLimit);
                 break;
+            case "hiddenprobe":
+                var hiddenLimit = args.Length > 1 && int.TryParse(args[1], out var hiddenParsed) ? hiddenParsed : 5;
+                await RunHiddenProbeAsync(hiddenLimit);
+                break;
             case "cache":
                 RunCacheStats();
                 break;
@@ -91,6 +95,9 @@ internal static class Program
                 break;
             case "checkconfigs":
                 await RunConfigChecksAsync();
+                break;
+            case "export":
+                await RunExportAsync();
                 break;
             case "statuslogic":
                 await RunStatusLogicAsync();
@@ -226,6 +233,23 @@ internal static class Program
 
         var multi = DesyncService.SplitPoints(DesyncTcpMode.MultiSplit, hello);
         Check(multi.Length >= 2 && multi.SequenceEqual(multi.OrderBy(value => value)), "мультиразрез: точки по возрастанию");
+
+        Check(DesyncService.TryBuildIpFragments(packet, out var ipFragments) && ipFragments.Count >= 2,
+            "IP-фрагментация: пакет разбит");
+        if (ipFragments.Count >= 2)
+        {
+            var ipHeader = (packet[0] & 0x0F) * 4;
+            var total = BinaryPrimitives.ReadUInt16BigEndian(packet.AsSpan(2, 2));
+            Check((BinaryPrimitives.ReadUInt16BigEndian(ipFragments[0].AsSpan(6, 2)) & 0x2000) != 0,
+                "IP-фрагментация: MF у первого");
+            Check((BinaryPrimitives.ReadUInt16BigEndian(ipFragments[^1].AsSpan(6, 2)) & 0x2000) == 0,
+                "IP-фрагментация: MF снят у последнего");
+            var rebuilt = ipFragments.SelectMany(fragment => fragment.Skip(ipHeader)).ToArray();
+            Check(rebuilt.SequenceEqual(packet.AsSpan(ipHeader, total - ipHeader).ToArray()),
+                "IP-фрагментация: полезная нагрузка собирается без потерь");
+            Check(Checksum(ipFragments[0].AsSpan(0, ipHeader)) == 0,
+                "IP-фрагментация: IP-чексумма верна");
+        }
 
         var fake = DesyncService.BuildFakeClientHello(packet, hello);
         Check(fake[8] == 1, "фейк: TTL 1");
@@ -445,8 +469,9 @@ internal static class Program
             "https://cp.cloudflare.com/generate_204",
         };
         var strategies = DesyncService.Strategies
-            .Where(strategy => strategy.Tcp == DesyncTcpMode.FakeMultiDisorder &&
-                               strategy.FakeTtl is 64 or 128)
+            .Where(strategy => (strategy.Tcp == DesyncTcpMode.FakeMultiDisorder &&
+                                strategy.FakeTtl is 64 or 128) ||
+                               strategy.Tcp == DesyncTcpMode.IpFrag)
             .ToList();
 
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(6));
@@ -1945,6 +1970,15 @@ internal static class Program
         """;
         var subscriptions = SourceDiscoveryService.ExtractSubscriptionUrls(articleHtml);
         Check(subscriptions.Count == 3, "автопоиск сайтов: ссылки подписок " + string.Join(", ", subscriptions));
+
+        Console.WriteLine("zapret:");
+        var zapretHostlist = Path.Combine(Path.GetTempPath(), "vienlink-zapret-test-hosts.txt");
+        File.WriteAllLines(zapretHostlist, TlsHello.TargetDomains);
+        var zapretArgs = ZapretService.BuildArguments(0, gameMode: false, zapretHostlist);
+        var hostlistCount = zapretArgs.Count(arg => arg.StartsWith("--hostlist=", StringComparison.Ordinal));
+        Check(hostlistCount >= 2, $"zapret: hostlist во всех TCP-правилах ({hostlistCount})");
+        Check(zapretArgs.Any(arg => arg.Contains("youtube.com", StringComparison.OrdinalIgnoreCase)) == false,
+            "zapret: домены не подставлены в аргументы, только путь к hostlist");
     }
 
     /// <summary>
@@ -2202,7 +2236,7 @@ internal static class Program
         Check(dead.FailCount == 1, "счётчик провалов выставлен");
         Check(dead.YoutubeOk == false && dead.TelegramOk == false, "обе отметки — отказ");
 
-        // 3. Узел, который уже был рабочим, получает 10 попыток, затем удаляется.
+        // 3. Узел, который уже был рабочим, получает несколько попыток, затем удаляется.
         var retried = DirectNode("direct-c");
         NodeHealth.RegisterSuccess(retried);
         var removedAt = 0;
@@ -2220,8 +2254,10 @@ internal static class Program
             }
         }
 
-        Check(removedAt == NodeLimits.RemoveAfterFailures, "рабочий узел удаляется только на 10-м провале");
-        Check(retried.Status == NodeStatus.Dead, "после 10 провалов → нерабочий");
+        Check(removedAt == NodeLimits.RemoveAfterFailures,
+            $"рабочий узел удаляется только на {NodeLimits.RemoveAfterFailures}-м провале");
+        Check(retried.Status == NodeStatus.Dead,
+            $"после {NodeLimits.RemoveAfterFailures} провалов → нерабочий");
         NodeHealth.RegisterSuccess(retried);
         Check(retried.Status == NodeStatus.Working && retried.FailCount == 0,
             "успешная проверка обнуляет счётчик");
@@ -2274,12 +2310,15 @@ internal static class Program
             listener.Stop();
         }
 
-        Check(MtProtoRetention.IsExpired(new MtProtoProxy { Status = MtProtoStatus.Dead, DeadAtUtc = now.AddDays(-15) }, now),
-            "нерабочий MTProto старше 14 дней удаляется");
-        Check(!MtProtoRetention.IsExpired(new MtProtoProxy { Status = MtProtoStatus.Dead, DeadAtUtc = now.AddDays(-13) }, now),
+        Check(MtProtoRetention.IsExpired(new MtProtoProxy { Status = MtProtoStatus.Dead, DeadAtUtc = now.AddHours(-25) }, now),
+            "нерабочий MTProto старше 24 часов удаляется");
+        Check(!MtProtoRetention.IsExpired(new MtProtoProxy { Status = MtProtoStatus.Dead, DeadAtUtc = now.AddHours(-23) }, now),
             "свежий нерабочий MTProto остаётся");
         Check(!MtProtoRetention.IsExpired(new MtProtoProxy { Status = MtProtoStatus.Working, DeadAtUtc = now.AddDays(-30) }, now),
             "рабочий MTProto не удаляется");
+        Check(MtProtoSchedule.WorkingRecheckMinutes < MtProtoSchedule.DeadRecheckHours * 60,
+            "рабочие MTProto проверяются чаще нерабочих");
+        Check(MtProtoRetention.DeadHours == 24, "нерабочий MTProto хранится 24 часа");
 
         var deadOverflow = Enumerable.Range(0, 4)
             .Select(i => new MtProtoProxy { Status = MtProtoStatus.Dead, DeadAtUtc = now.AddHours(-i) })
@@ -2288,6 +2327,61 @@ internal static class Program
         Check(trimmedDead == 2 && deadOverflow.Count == 2, "лимит MTProto: лишние нерабочие удаляются");
 
         await manager.DisconnectAsync();
+    }
+
+    /// <summary>
+    /// Экспорт профиля для телефона: ссылка исходного формата и конфиг sing-box.
+    /// Конфиг проверяется настоящим `sing-box check` в двух вариантах — с TUN и без.
+    /// </summary>
+    private static async Task RunExportAsync()
+    {
+        Console.WriteLine("Экспорт профиля (ссылка + конфиг для Android-клиентов):");
+        var nodes = new List<(string Name, ProxyNode? Node)>
+        {
+            ("vless + reality", LinkParser.Parse(
+                "vless://11111111-2222-3333-4444-555555555555@1.2.3.4:443?security=reality&pbk=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&sid=ab&fp=firefox&sni=www.microsoft.com#E", "t")),
+            ("trojan + ws", LinkParser.Parse("trojan://pass@example.com:8443?sni=example.com&type=ws&path=%2Ft#E", "t")),
+            ("hysteria2", LinkParser.Parse("hysteria2://pass@example.com:443?sni=example.com&insecure=1#E", "t")),
+        };
+
+        var parsed = new List<ProxyNode>();
+        foreach (var (name, node) in nodes)
+        {
+            if (node is null)
+            {
+                Check(false, name + " — ссылка не разобралась");
+                continue;
+            }
+
+            parsed.Add(node);
+            var link = ProfileExport.BuildShareLink(node);
+            Check(link.StartsWith(node.Protocol, StringComparison.OrdinalIgnoreCase),
+                name + " — ссылка: " + (link.Length <= 60 ? link : link[..60] + "…"));
+
+            var path = Path.Combine(Path.GetTempPath(), "vienlink-export.json");
+            foreach (var tunnel in new[] { true, false })
+            {
+                var json = ProfileExport.BuildConfig(node, tunnel);
+                SingBoxConfigBuilder.WriteToFile(path, json);
+                try
+                {
+                    await SingBoxRunner.CheckConfigAsync(path, CancellationToken.None);
+                    var expectTun = tunnel ? json.Contains("\"tun\"", StringComparison.Ordinal) : !json.Contains("\"tun\"", StringComparison.Ordinal);
+                    Check(expectTun, name + (tunnel ? " — конфиг с TUN" : " — конфиг без TUN") + " проходит sing-box check");
+                }
+                catch (Exception exception)
+                {
+                    Check(false, name + (tunnel ? " — TUN" : " — mixed") + ": " + exception.Message);
+                }
+            }
+
+            Check(ProfileExport.SuggestFileName(node).StartsWith("vienlink-", StringComparison.Ordinal),
+                name + " — имя файла: " + ProfileExport.SuggestFileName(node));
+        }
+
+        var list = ProfileExport.BuildLinkList(parsed);
+        var lines = list.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
+        Check(lines == parsed.Count, "список ссылок: " + lines + " строк");
     }
 
     /// <summary>Проверяет все варианты конфига настоящим `sing-box check` (без прав администратора).</summary>
@@ -2675,6 +2769,56 @@ internal static class Program
     }
 
     /// <summary>Проверка маскировки на реальном кэше: тестирует узлы и подключается к лучшему.</summary>
+    /// <summary>
+    /// Скрытая проверка: отдельный процесс sing-box на своих портах, без системного прокси.
+    /// Берём уже рабочие узлы, чтобы отличить «ядро не работает» от «узлы мертвы».
+    /// </summary>
+    private static async Task RunHiddenProbeAsync(int limit)
+    {
+        var cached = NodeSourceService.LoadCache();
+        var candidates = cached
+            .Where(node => node.Status == NodeStatus.Working && node.DelayMs is not null)
+            .OrderByDescending(node => node.OpenDomains)
+            .ThenBy(node => node.DelayMs)
+            .Take(Math.Clamp(limit, 1, 50))
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            Console.WriteLine("В кэше нет рабочих узлов — сначала проверьте узлы в приложении.");
+            _failed++;
+            return;
+        }
+
+        Console.WriteLine($"Скрытая проверка {candidates.Count} рабочих узлов на отдельных портах…");
+        var settings = new AppSettings();
+        await using var probe = new HiddenProbeService();
+        var summary = await probe.TestAsync(
+            candidates,
+            settings,
+            new Progress<string>(line => Console.WriteLine("    " + line)),
+            null,
+            CancellationToken.None,
+            concurrency: 3,
+            timeoutMs: 4000);
+
+        Console.WriteLine($"Скрытое ядро: рабочих {summary.Working} из {summary.Total}, " +
+                          $"лучший открывает доменов {summary.BestDomains}");
+        var best = candidates
+            .Where(node => node.DelayMs is not null)
+            .OrderByDescending(node => node.OpenDomains)
+            .ThenBy(node => node.DelayMs)
+            .FirstOrDefault();
+        if (best is null || summary.Working == 0)
+        {
+            Console.WriteLine("Скрытая проверка не открыла ни одного узла.");
+            _failed++;
+            return;
+        }
+
+        Console.WriteLine($"Лучший: {best.Name} — {best.DelayMs} мс, доменов {best.OpenDomains}, " +
+                          $"YouTube={best.YoutubeOk}, Telegram={best.TelegramOk}, Discord={best.DiscordOk}");
+    }
+
     private static async Task RunProbeAsync(int limit)
     {
         var cached = NodeSourceService.LoadCache();

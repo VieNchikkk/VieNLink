@@ -20,8 +20,12 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: Сборка
-        run: dotnet build VieNLink.slnx --nologo
+      # Android-клиент собирается отдельным toolchain (workload android + libbox.aar),
+      # поэтому CI проверяет Windows-приложение и общий SelfTest.
+      - name: Сборка Windows
+        run: |
+          dotnet build VieNLink/VieNLink.csproj --nologo
+          dotnet build VieNLink.SelfTest/VieNLink.SelfTest.csproj --nologo
 
       - name: Тесты парсеров и конфига
         run: dotnet run --project VieNLink.SelfTest -- parsers

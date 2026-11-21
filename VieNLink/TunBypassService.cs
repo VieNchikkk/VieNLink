@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Sockets;
@@ -173,6 +174,68 @@ internal sealed class TunBypassService : IAsyncDisposable
 
         var average = times.Count == 0 ? 0 : (int)times.Average();
         return new DesyncProbeResult(index, name, ok, ProbeUrls.Length, average, youtube, telegram);
+    }
+
+    /// <summary>
+    /// Скорость через TUN отдельным процессом curl.exe: трафик самого VieNLink.exe
+    /// исключён из TUN правилом process_name.
+    /// </summary>
+    public static async Task<double?> MeasureSpeedAsync(CancellationToken cancellationToken)
+    {
+        var urls = new[]
+        {
+            "https://speed.cloudflare.com/__down?bytes=3000000",
+            "https://proof.ovh.net/files/1Mb.dat",
+            "https://speedtest.selectel.ru/10MB",
+        };
+
+        foreach (var url in urls)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var startInfo = new ProcessStartInfo("curl.exe")
+                {
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true,
+                };
+                foreach (var argument in new[]
+                         {
+                             "-4", "-s", "-o", "NUL", "-w", "%{speed_download}",
+                             "--max-time", "15", "--noproxy", "*", "--http1.1", url,
+                         })
+                {
+                    startInfo.ArgumentList.Add(argument);
+                }
+
+                using var process = Process.Start(startInfo);
+                if (process is null)
+                {
+                    continue;
+                }
+
+                var output = await process.StandardOutput.ReadToEndAsync(cancellationToken);
+                await process.WaitForExitAsync(cancellationToken);
+                var text = output.Trim().Replace(',', '.');
+                if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var bytesPerSecond) &&
+                    bytesPerSecond > 0)
+                {
+                    return Math.Round(bytesPerSecond * 8 / 1_000_000, 1);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (exception is Win32Exception or OperationCanceledException)
+            {
+                AppLog.Write("tun-bypass", "Замер скорости TUN не удался", exception);
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

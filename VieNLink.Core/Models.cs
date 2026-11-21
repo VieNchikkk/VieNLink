@@ -56,6 +56,14 @@ internal sealed class ProxyNode
 
     public bool? TelegramOk { get; set; }
 
+    /// <summary>Универсальный доступ (Cloudflare): главный признак пригодности узла.</summary>
+    public bool? UniversalOk { get; set; }
+
+    public bool? DiscordOk { get; set; }
+
+    /// <summary>Сколько заблокированных доменов открылось через узел — главный показатель качества.</summary>
+    public int OpenDomains { get; set; }
+
     public NodeStatus Status { get; set; } = NodeStatus.Unknown;
 
     /// <summary>
@@ -214,7 +222,17 @@ internal static class NodeDedup
             target.CheckedAtUtc = source.CheckedAtUtc;
             target.YoutubeOk = source.YoutubeOk;
             target.TelegramOk = source.TelegramOk;
+            target.UniversalOk = source.UniversalOk;
+            target.DiscordOk = source.DiscordOk;
             target.Status = source.Status;
+        }
+        else
+        {
+            // Доступ по сервисам объединяем: у дублей он мог проверяться в разное время.
+            target.YoutubeOk = MergeAccess(target.YoutubeOk, source.YoutubeOk);
+            target.TelegramOk = MergeAccess(target.TelegramOk, source.TelegramOk);
+            target.UniversalOk = MergeAccess(target.UniversalOk, source.UniversalOk);
+            target.DiscordOk = MergeAccess(target.DiscordOk, source.DiscordOk);
         }
 
         if (target.SpeedMbps is null && source.SpeedMbps is not null)
@@ -224,6 +242,7 @@ internal static class NodeDedup
 
         target.IsMine |= source.IsMine;
         target.FailCount = Math.Max(target.FailCount, source.FailCount);
+        target.OpenDomains = Math.Max(target.OpenDomains, source.OpenDomains);
         if (source.LastSeenUtc is { } seen &&
             (target.LastSeenUtc is null || seen > target.LastSeenUtc))
         {
@@ -232,6 +251,10 @@ internal static class NodeDedup
 
         MergeSource(target, source.SourceName);
     }
+
+    /// <summary>Доступ считается открытым, если он подтверждён хотя бы у одного дубля.</summary>
+    private static bool? MergeAccess(bool? target, bool? source) =>
+        target == true || source == true ? true : target ?? source;
 
     /// <summary>Названия источников объединяются без повторов: видно, что узел популярен.</summary>
     public static void MergeSource(ProxyNode node, string sourceName)
@@ -272,6 +295,9 @@ internal static class NodeHealth
         node.DelayMs = null;
         node.YoutubeOk = false;
         node.TelegramOk = false;
+        node.UniversalOk = false;
+        node.DiscordOk = false;
+        node.OpenDomains = 0;
 
         // Узел ещё ни разу не открывал сайты — не храним его вовсе.
         if (node.Status != NodeStatus.Working)
@@ -308,7 +334,7 @@ internal static class NodeHealth
 /// </summary>
 internal static class NodeLimits
 {
-    public const int DefaultMaxTotal = 15000;
+    public const int DefaultMaxTotal = 12000;
 
     /// <summary>
     /// Сколько вариантов одного сервера:порта оставлять. У бесплатных CDN под одним
@@ -320,11 +346,12 @@ internal static class NodeLimits
     /// После скольких неудачных проверок подряд убирается узел, который раньше работал.
     /// Непроверенные узлы удаляются с первого провала — держать их в списке незачем.
     /// </summary>
-    public const int RemoveAfterFailures = 10;
+    public const int RemoveAfterFailures = 5;
 
     /// <summary>
     /// Оставляет не больше <paramref name="max"/> узлов: сначала личные, затем проверенные
-    /// (рабочие), затем лучшие по маскировке и свежести. Возвращает число отброшенных.
+    /// (рабочие), затем самые свежие, затем лучшие по маскировке и задержке.
+    /// Возвращает число отброшенных.
     /// </summary>
     public static (List<ProxyNode> Nodes, int Trimmed) Trim(IEnumerable<ProxyNode> nodes, int max)
     {
@@ -338,8 +365,9 @@ internal static class NodeLimits
         var kept = list
             .OrderByDescending(node => node.IsMine)
             .ThenByDescending(node => node.Status == NodeStatus.Working || node.DelayMs is not null)
-            .ThenByDescending(NodeRanking.Score)
+            .ThenByDescending(node => node.OpenDomains)
             .ThenByDescending(node => node.LastSeenUtc ?? DateTime.MinValue)
+            .ThenByDescending(NodeRanking.Score)
             .ThenBy(node => node.DelayMs ?? int.MaxValue)
             .Take(cap)
             .ToList();
@@ -401,6 +429,14 @@ internal enum SiteRouteMode
     AllExceptListed,
 }
 
+/// <summary>Что делать с приложениями: все, только из списка или все, кроме списка.</summary>
+internal enum AppRouteMode
+{
+    All,
+    OnlyListed,
+    AllExceptListed,
+}
+
 /// <summary>
 /// Версии схем файлов данных. Увеличиваются при изменении формата, которое
 /// требует миграции; по ним приложение понимает, что файл от старой или новой версии.
@@ -408,7 +444,10 @@ internal enum SiteRouteMode
 internal static class SchemaVersions
 {
     public const int Settings = 1;
-    public const int NodeCache = 1;
+
+    /// <summary>2 — добавлены необязательные отметки UniversalOk/DiscordOk; старый кэш читается как есть.</summary>
+    public const int NodeCache = 2;
+
     public const int MtProtoCache = 1;
 }
 
@@ -469,6 +508,9 @@ internal sealed class AppSettings
     /// <summary>Добавлять обход UDP для игр: QUIC, STUN, WireGuard.</summary>
     public bool ZapretGameMode { get; set; }
 
+    /// <summary>Блокировать QUIC (UDP/443) на время работы zapret, чтобы видео шло по TCP.</summary>
+    public bool ZapretBlockQuic { get; set; } = true;
+
     /// <summary>Прописывать системный прокси Windows (WinINET).</summary>
     public bool ApplySystemProxy { get; set; } = true;
 
@@ -484,8 +526,11 @@ internal sealed class AppSettings
     /// <summary>Список доменов (по одному в строке) для режимов «только» и «кроме».</summary>
     public string SiteList { get; set; } = string.Empty;
 
-    /// <summary>Ограничить проксирование списком процессов.</summary>
+    /// <summary>Ограничить проксирование списком процессов (старое поле, совместимость).</summary>
     public bool OnlySelectedApps { get; set; }
+
+    /// <summary>Режим приложений: все, только из списка или все, кроме списка.</summary>
+    public AppRouteMode AppRouteMode { get; set; } = AppRouteMode.All;
 
     /// <summary>Имена процессов (по одному в строке), которым разрешён прокси.</summary>
     public string AppList { get; set; } = string.Empty;
@@ -554,7 +599,7 @@ internal sealed class AppSettings
     /// Сколько суток хранить узел, который перестал приходить из источников.
     /// Свежие данные важнее объёма: старые узлы удаляются из кэша.
     /// </summary>
-    public int KeepUnseenNodeDays { get; set; } = 3;
+    public int KeepUnseenNodeDays { get; set; } = 7;
 
     /// <summary>Периодическое обновление списков во время работы, в минутах (0 — выключено).</summary>
     public int AutoRefreshMinutes { get; set; } = 120;
@@ -572,11 +617,32 @@ internal sealed class AppSettings
     /// <summary>Тема оформления: Dark или Light.</summary>
     public string Theme { get; set; } = "Dark";
 
+    /// <summary>Положение главного окна; null — открыть по центру экрана.</summary>
+    public double? WindowLeft { get; set; }
+
+    /// <summary>Положение главного окна; null — открыть по центру экрана.</summary>
+    public double? WindowTop { get; set; }
+
+    /// <summary>Положение плавающего виджета; null — правый нижний угол рабочей области.</summary>
+    public double? WidgetLeft { get; set; }
+
+    /// <summary>Положение плавающего виджета; null — правый нижний угол рабочей области.</summary>
+    public double? WidgetTop { get; set; }
+
+    /// <summary>Виджет свёрнут в компактную строку с названием режима.</summary>
+    public bool WidgetCollapsed { get; set; }
+
     /// <summary>Ограничение числа узлов, попадающих в конфиг ядра.</summary>
     public int MaxNodesInConfig { get; set; } = 400;
 
     /// <summary>Общий лимит списка узлов: больше не добавляем, пока накопленные не проверены.</summary>
     public int MaxTotalNodes { get; set; } = NodeLimits.DefaultMaxTotal;
+
+    /// <summary>
+    /// Копия настроек для скрытой проверки: она меняет режим на системный прокси/всё,
+    /// не затрагивая настоящие настройки пользователя.
+    /// </summary>
+    public AppSettings Clone() => (AppSettings)MemberwiseClone();
 }
 
 /// <summary>Кэш разобранных узлов, чтобы приложение открывалось мгновенно.</summary>
@@ -605,9 +671,14 @@ internal sealed class CachedNode
     public bool AllowInsecure { get; set; }
     public bool? YoutubeOk { get; set; }
     public bool? TelegramOk { get; set; }
+    public bool? UniversalOk { get; set; }
+    public bool? DiscordOk { get; set; }
+
+    /// <summary>Сколько заблокированных доменов открылось через узел — главный показатель качества.</summary>
+    public int OpenDomains { get; set; }
     public NodeStatus Status { get; set; }
 
-    /// <summary>Неудачных проверок подряд: узел удаляется, когда их накопится 10.</summary>
+    /// <summary>Неудачных проверок подряд: узел удаляется, когда их накопится 5.</summary>
     public int FailCount { get; set; }
 }
 
@@ -640,7 +711,7 @@ internal sealed class MtProtoProxy
     /// <summary>Не проверялся, отвечает или уже признан нерабочим.</summary>
     public MtProtoStatus Status { get; set; } = MtProtoStatus.Unknown;
 
-    /// <summary>Когда прокси перестал отвечать; через 14 дней такие удаляются.</summary>
+    /// <summary>Когда прокси перестал отвечать; через 24 часа такие удаляются.</summary>
     public DateTime? DeadAtUtc { get; set; }
 
     public string Link => $"tg://proxy?server={Server}&port={Port}&secret={Secret}";
@@ -661,7 +732,8 @@ internal enum MtProtoStatus
 /// <summary>Сроки хранения нерабочих MTProto-прокси.</summary>
 internal static class MtProtoRetention
 {
-    public const int DeadDays = 14;
+    /// <summary>Нерабочий прокси удаляется через сутки: за это время он ещё может ожить.</summary>
+    public const int DeadHours = 24;
 
     /// <summary>Сколько нерабочих MTProto-прокси держим максимум.</summary>
     public const int MaxDead = 500;
@@ -669,7 +741,7 @@ internal static class MtProtoRetention
     public static bool IsExpired(MtProtoProxy proxy, DateTime nowUtc) =>
         proxy.Status == MtProtoStatus.Dead &&
         proxy.DeadAtUtc is { } dead &&
-        nowUtc - dead > TimeSpan.FromDays(DeadDays);
+        nowUtc - dead > TimeSpan.FromHours(DeadHours);
 
     /// <summary>Оставляет не больше max самых свежих нерабочих прокси; возвращает число удалённых.</summary>
     public static int TrimDead(List<MtProtoProxy> proxies, int max = MaxDead)
@@ -687,6 +759,28 @@ internal static class MtProtoRetention
         proxies.RemoveAll(p => drop.Contains(p));
         return drop.Count;
     }
+}
+
+/// <summary>
+/// Автономное обслуживание MTProto: сбор каналов через RSS, проверка рабочих и редкая
+/// проверка нерабочих. Интервалы не настраиваются — приложение работает без ручных кнопок.
+/// </summary>
+internal static class MtProtoSchedule
+{
+    /// <summary>Как часто читаем каналы через RSS.</summary>
+    public const int CollectMinutes = 10;
+
+    /// <summary>Рабочие прокси проверяем чаще, чтобы быстро замечать умершие.</summary>
+    public const int WorkingRecheckMinutes = 10;
+
+    /// <summary>Нерабочие проверяем изредка — вдруг ожил.</summary>
+    public const int DeadRecheckHours = 6;
+
+    /// <summary>Сколько рабочих прокси проверяем за один проход.</summary>
+    public const int WorkingBatch = 20;
+
+    /// <summary>Сколько нерабочих прокси проверяем за один проход.</summary>
+    public const int DeadBatch = 20;
 }
 
 internal sealed class MtProtoCache

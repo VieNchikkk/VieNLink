@@ -29,8 +29,8 @@ internal sealed class TrayIconService : IDisposable
         _blockedIcon = WithStatusDot(_baseIcon, Color.FromArgb(0xD9, 0x3A, 0x3A));
 
         _toggleItem = new ToolStripMenuItem("Подключиться", null, (_, _) => ToggleRequested?.Invoke());
-        _nodesItem = new ToolStripMenuItem("Узлы");
-        _nodesItem.DropDownItems.Add(new ToolStripMenuItem("Список ещё не проверен") { Enabled = false });
+        _nodesItem = new ToolStripMenuItem("Автовыбор узла");
+        _nodesItem.DropDownItems.Add(new ToolStripMenuItem("Узлы ещё не проверены") { Enabled = false });
 
         var menu = new ContextMenuStrip();
         menu.Items.Add(new ToolStripMenuItem("Показать VieNLink", null, (_, _) => ShowRequested?.Invoke()));
@@ -74,7 +74,7 @@ internal sealed class TrayIconService : IDisposable
                 : AppInfo.DisplayName + " — отключено";
     }
 
-    /// <summary>Быстрое переключение без открытия окна: до восьми лучших узлов.</summary>
+    /// <summary>Быстрое подключение без открытия окна: один лучший узел, без списка адресов.</summary>
     public void UpdateNodes(IReadOnlyList<ProxyNode> nodes, string? currentId)
     {
         _nodesItem.DropDownItems.Clear();
@@ -84,31 +84,12 @@ internal sealed class TrayIconService : IDisposable
             return;
         }
 
-        foreach (var node in nodes)
-        {
-            var id = node.Id;
-            var label = (id == currentId ? "✓ " : string.Empty) + node.Name;
-            if (label.Length > 60)
-            {
-                label = label[..57] + "…";
-            }
-
-            var details = node.Server + ":" + node.Port;
-            if (node.DelayMs is { } delay)
-            {
-                details += " · " + delay + " мс";
-            }
-
-            if (node.SpeedMbps is { } speed)
-            {
-                details += " · " + speed.ToString("0.0") + " Мбит/с";
-            }
-
-            _nodesItem.DropDownItems.Add(new ToolStripMenuItem(label, null, (_, _) => NodeSelected?.Invoke(id))
-            {
-                ToolTipText = details,
-            });
-        }
+        var best = nodes[0];
+        var label = best.DelayMs is { } delay
+            ? $"Подключить лучший · {delay} мс"
+            : "Подключить лучший";
+        _nodesItem.DropDownItems.Add(new ToolStripMenuItem(label, null,
+            (_, _) => NodeSelected?.Invoke(best.Id)));
 
         if (_connected && !string.IsNullOrEmpty(currentId))
         {

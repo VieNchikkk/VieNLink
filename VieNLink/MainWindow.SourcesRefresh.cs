@@ -25,7 +25,7 @@ public partial class MainWindow
             return;
         }
 
-        if (!BeginOperation())
+        if (!BeginOperation("обновление списков"))
         {
             return;
         }
@@ -129,7 +129,7 @@ public partial class MainWindow
 
     private async void OnTestClick(object sender, RoutedEventArgs e)
     {
-        if (!BeginOperation())
+        if (!BeginOperation("проверку партии узлов"))
         {
             return;
         }
@@ -163,7 +163,7 @@ public partial class MainWindow
 
     private async void OnTestAllClick(object sender, RoutedEventArgs e)
     {
-        if (!BeginOperation())
+        if (!BeginOperation("проверку всех узлов"))
         {
             return;
         }
@@ -218,7 +218,7 @@ public partial class MainWindow
             return;
         }
 
-        if (!BeginOperation())
+        if (!BeginOperation("проверку узла"))
         {
             return;
         }
@@ -244,15 +244,18 @@ public partial class MainWindow
 
     private async Task RunTestAsync(IReadOnlyList<ProxyNode> nodes, string title)
     {
-        // При активном туннеле нельзя пересобирать конфиг ядра: проверяем только
-        // уже загруженные узлы через Clash API, иначе соединение оборвётся.
         var connected = _manager.IsConnected;
-        if (connected)
+        var tunConnected = connected && _settings.TunnelMode == TunnelMode.Tun;
+
+        // При активном TUN трафик скрытого ядра ушёл бы в туннель — проверяем
+        // только уже загруженные узлы. В системном прокси основное ядро не трогаем:
+        // проверка идёт через скрытое ядро на отдельных портах.
+        if (tunConnected)
         {
             var loaded = nodes.Where(node => _manager.IsNodeLoaded(node)).ToList();
             if (loaded.Count == 0)
             {
-                SetStatus("Проверка недоступна", "При активном туннеле проверяются только загруженные узлы. Отключитесь, чтобы проверить остальные.");
+                SetStatus("Проверка недоступна", "При активном TUN проверяются только загруженные узлы. Отключитесь, чтобы проверить остальные.");
                 return;
             }
 
@@ -262,27 +265,9 @@ public partial class MainWindow
         SetStatus(title, $"0 из {nodes.Count}…");
         var progress = new Progress<string>(line => StatusDetail.Text = line);
 
-        // При включённом zapret TLS-пробы идут через WinDivert и могут искажать результат:
-        // на время проверки обход DPI снимаем, затем возвращаем.
-        var zapretWasRunning = !connected && _zapret.IsRunning;
-        if (zapretWasRunning)
-        {
-            _zapret.Stop();
-            UpdateZapretUi();
-            AppendLog("Обход DPI приостановлен на время проверки узлов");
-        }
-
-        // Свой обход DPI тоже искажает рукопожатие с проверяемыми узлами:
-        // на время проверки снимаем и возвращаем после.
-        var desyncStrategy = !connected && _desync.IsRunning ? _desync.CurrentStrategy : null;
-        if (desyncStrategy is not null)
-        {
-            _desync.Stop();
-            UpdateDesyncUi();
-            AppendLog("Свой обход DPI приостановлен на время проверки узлов");
-        }
-
-        // TUN-обход перехватывает весь трафик и тоже мешает проверке узлов.
+        // TUN-обход перехватывает весь трафик, включая скрытое ядро: на время ручной
+        // проверки снимаем его и возвращаем после. zapret и свой обход DPI не трогаем —
+        // они ограничены целевыми доменами и соединения к серверам узлов не затрагивают.
         var tunBypassMode = !connected && _tunBypass.IsRunning ? _tunBypass.Mode : (StreamFragmentMode?)null;
         if (tunBypassMode is not null)
         {
@@ -298,10 +283,13 @@ public partial class MainWindow
         TestSummary summary;
         try
         {
-            summary = connected
+            summary = tunConnected
                 ? await _manager.TestLoadedNodesAsync(
                     nodes, progress, OnNodeTested, _operation!.Token, concurrency: 8, timeoutMs: 3000)
-                : await _manager.TestNodesAsync(nodes, progress, OnNodeTested, _operation!.Token);
+                : await _probe.TestAsync(
+                    nodes, _settings, progress, OnNodeTested, _operation!.Token,
+                    concurrency: _zapret.IsRunning || _desync.IsRunning ? 3 : 8,
+                    timeoutMs: 3000);
         }
         finally
         {
@@ -313,37 +301,6 @@ public partial class MainWindow
             }
 
             await RepartitionAndSaveAsync();
-
-            if (zapretWasRunning)
-            {
-                try
-                {
-                    await _zapret.StartAsync(null, CancellationToken.None,
-                        _settings.ZapretPreset, _settings.ZapretGameMode);
-                    AppendLog("Обход DPI снова включён после проверки");
-                }
-                catch (Exception exception)
-                {
-                    AppLog.Write("zapret", "Не удалось вернуть обход после проверки", exception);
-                }
-
-                UpdateZapretUi();
-            }
-
-            if (desyncStrategy is not null && !_closing)
-            {
-                try
-                {
-                    _desync.Start(desyncStrategy, null, _settings.DesyncBlockQuic);
-                    AppendLog("Свой обход DPI снова включён после проверки");
-                }
-                catch (Exception exception)
-                {
-                    AppLog.Write("desync", "Не удалось вернуть свой обход после проверки", exception);
-                }
-
-                UpdateDesyncUi();
-            }
 
             if (tunBypassMode is { } bypassMode && !_closing)
             {
@@ -364,7 +321,9 @@ public partial class MainWindow
         }
 
         var working = summary.Working;
-        StatusDetail.Text = $"Проверено {summary.Total}: YouTube {summary.YoutubeOk}, Telegram {summary.TelegramOk}, рабочих {working}";
+        StatusDetail.Text = $"Проверено {summary.Total}: YouTube {summary.YoutubeOk}, " +
+                            $"Telegram {summary.TelegramOk}, лучший открывает доменов {summary.BestDomains}, " +
+                            $"рабочих {working}";
         FooterText.Text = working > 0
             ? $"Рабочих узлов: {working}. Подключение — 127.0.0.1:{_manager.ActiveMixedPort}"
             : "Рабочих узлов не найдено: нерабочие узлы удалены из списка";

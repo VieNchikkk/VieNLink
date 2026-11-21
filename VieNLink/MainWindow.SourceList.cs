@@ -16,14 +16,73 @@ public partial class MainWindow
 
     private async void OnAddSourceClick(object sender, RoutedEventArgs e)
     {
-        var url = NewSourceUrl.Text.Trim();
+        var lines = NewSourceUrl.Text
+            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(line => line.Length > 0)
+            .ToList();
+        if (lines.Count == 0)
+        {
+            MessageBox.Show(
+                this,
+                "Вставьте ссылку на подписку, список, канал t.me или ссылку на сервер (vless://, vmess://, trojan://, ss://, hysteria2://).",
+                "VieNLink",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        var baseName = NewSourceName.Text.Trim();
+        var added = 0;
+        var errors = new List<string>();
+        for (var index = 0; index < lines.Count; index++)
+        {
+            var name = baseName.Length == 0
+                ? string.Empty
+                : lines.Count == 1
+                    ? baseName
+                    : $"{baseName} {index + 1}";
+            var (ok, error) = await TryAddSourceAsync(lines[index], name);
+            if (ok)
+            {
+                added++;
+            }
+            else if (!string.IsNullOrWhiteSpace(error))
+            {
+                errors.Add(error!);
+            }
+        }
+
+        if (added > 0)
+        {
+            NewSourceName.Clear();
+            NewSourceUrl.Clear();
+            FooterText.Text = added == 1 ? "Источник добавлен" : $"Добавлено источников: {added}";
+        }
+
+        if (errors.Count > 0)
+        {
+            MessageBox.Show(
+                this,
+                "Не удалось добавить:\n" + string.Join("\n", errors.Take(5)) +
+                (errors.Count > 5 ? $"\n… и ещё {errors.Count - 5}" : string.Empty),
+                "VieNLink",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>Добавляет один источник: подписку, список, канал или ссылку на сервер.</summary>
+    private async Task<(bool Ok, string? Error)> TryAddSourceAsync(string rawUrl, string name)
+    {
+        var url = rawUrl.Trim();
 
         // Happ умеет импортировать подписку ссылкой happ://add/… — поддержим тот же формат.
         if (url.StartsWith("happ://add/", StringComparison.OrdinalIgnoreCase))
         {
             var payload = Uri.UnescapeDataString(url["happ://add/".Length..]);
             if (!payload.StartsWith("http", StringComparison.OrdinalIgnoreCase) &&
-                Base64Util.TryDecode(payload, out var decoded) && decoded.TrimStart().StartsWith("http", StringComparison.OrdinalIgnoreCase))
+                Base64Util.TryDecode(payload, out var decoded) &&
+                decoded.TrimStart().StartsWith("http", StringComparison.OrdinalIgnoreCase))
             {
                 payload = decoded.Trim();
             }
@@ -31,49 +90,35 @@ public partial class MainWindow
             url = payload;
         }
 
-        // Можно вставить одну ссылку на сервер (например, скопированную из Happ).
+        if (_sources.Any(s => s.Url.Equals(url, StringComparison.OrdinalIgnoreCase)))
+        {
+            return (false, $"уже добавлен: {url}");
+        }
+
+        // Можно вставить ссылку на сервер (например, скопированную из Happ).
         var scheme = url.Contains("://", StringComparison.Ordinal)
             ? url[..url.IndexOf("://", StringComparison.Ordinal)].ToLowerInvariant()
             : string.Empty;
         if (scheme is "vless" or "vmess" or "trojan" or "ss" or "hysteria2" or "hy2")
         {
-            var nodeName = NewSourceName.Text.Trim();
-            if (nodeName.Length == 0)
-            {
-                nodeName = "Мой узел";
-            }
-
             var singleSource = new SourceDefinition
             {
-                Name = nodeName,
+                Name = name.Length == 0 ? "Мой узел" : name,
                 Url = url,
                 Kind = SourceKind.SingleLink,
-                IsMine = NewSourceMineCheck.IsChecked == true,
+                IsMine = true,
             };
-            _sources.Add(singleSource);
-            _sourceRows.Add(new SourceRow(singleSource));
-            NodeSourceService.SaveSources(_sources);
-            NewSourceName.Clear();
-            NewSourceUrl.Clear();
-            FooterText.Text = "Добавлен узел: " + nodeName;
-
+            AddSource(singleSource);
             await LoadSingleSourceAsync(singleSource);
-            return;
+            return (true, null);
         }
 
-        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) || (uri.Scheme != "http" && uri.Scheme != "https"))
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
+            (uri.Scheme != "http" && uri.Scheme != "https"))
         {
-            MessageBox.Show(this, "Укажите ссылку http(s) на подписку, список или канал t.me/s/…", "VieNLink", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
+            return (false, $"не похоже на ссылку: {url}");
         }
 
-        if (_sources.Any(s => s.Url.Equals(url, StringComparison.OrdinalIgnoreCase)))
-        {
-            MessageBox.Show(this, "Такой источник уже добавлен.", "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
-            return;
-        }
-
-        var name = NewSourceName.Text.Trim();
         if (name.Length == 0)
         {
             name = uri.Host.Equals("t.me", StringComparison.OrdinalIgnoreCase)
@@ -86,22 +131,24 @@ public partial class MainWindow
             Name = name,
             Url = url,
             Kind = uri.Host.Equals("t.me", StringComparison.OrdinalIgnoreCase) ? SourceKind.Telegram : SourceKind.Auto,
-            IsMine = NewSourceMineCheck.IsChecked == true,
+            IsMine = true,
         };
+        AddSource(source);
+        await LoadSingleSourceAsync(source);
+        return (true, null);
+    }
+
+    private void AddSource(SourceDefinition source)
+    {
         _sources.Add(source);
         _sourceRows.Add(new SourceRow(source));
         NodeSourceService.SaveSources(_sources);
-        NewSourceName.Clear();
-        NewSourceUrl.Clear();
-        FooterText.Text = "Источник добавлен: " + name;
-
-        await LoadSingleSourceAsync(source);
     }
 
     /// <summary>Сразу загружает одну подписку, чтобы после вставки ссылки появились узлы.</summary>
     private async Task LoadSingleSourceAsync(SourceDefinition source)
     {
-        if (!BeginOperation())
+        if (!BeginOperation("загрузку источника"))
         {
             return;
         }
@@ -225,29 +272,9 @@ public partial class MainWindow
 
     private void OnSourceToggled(object sender, RoutedEventArgs e) => NodeSourceService.SaveSources(_sources);
 
-    /// <summary>Отметка «моя подписка»: сохраняем, перегруппировываем список и обновляем узлы.</summary>
-    private void OnSourceMineToggled(object sender, RoutedEventArgs e)
-    {
-        if (sender is FrameworkElement { DataContext: SourceRow row })
-        {
-            foreach (var nodeRow in AllRows.Where(r => r.Node.SourceName.Contains(row.Source.Name, StringComparison.Ordinal)))
-            {
-                nodeRow.Node.IsMine = row.Source.IsMine;
-            }
-
-            _view?.Refresh();
-            _workingView?.Refresh();
-            NodeSourceService.SaveCache(AllRows.Select(r => r.Node));
-            UpdateSummary();
-        }
-
-        NodeSourceService.SaveSources(_sources);
-        (SourcesList.ItemsSource as ICollectionView)?.Refresh();
-    }
-
     private async void OnCheckSourcesClick(object sender, RoutedEventArgs e)
     {
-        if (!BeginOperation())
+        if (!BeginOperation("проверку источников"))
         {
             return;
         }
@@ -408,7 +435,7 @@ public partial class MainWindow
             "Как пользоваться\n\n" +
             "1. Нажмите «Обновить списки».\n" +
             "2. Включите «Только маскированные» — останутся узлы, чей трафик похож на обычный HTTPS.\n" +
-            "3. Нажмите «Проверить всё». Узлы с ✓ появятся в подвкладке «Рабочие».\n" +
+            "3. Нажмите «Все узлы». Узлы с ✓ появятся в подвкладке «Рабочие».\n" +
             "4. Нажмите «Подключиться» — приложение само выберет быстрый и маскированный узел.\n\n" +
             "Что означают колонки\n" +
             "• Маскировка — REALITY · Vision, WS · TLS · uTLS, Hysteria2 · obfs, TLS или «без TLS».\n" +

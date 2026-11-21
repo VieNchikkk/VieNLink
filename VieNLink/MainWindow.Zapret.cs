@@ -5,6 +5,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 
@@ -14,114 +15,90 @@ public partial class MainWindow
 {
     // ---------- обход DPI (zapret) ----------
 
+    private const int StrategyRows = 5;
+
+    /// <summary>
+    /// Список стратегий — только для информации. Порядок автоматический: лучшие по
+    /// накопленному качеству сверху, остальные — по истории удачных запусков.
+    /// </summary>
     private void BuildZapretPresetList()
     {
-        ZapretPresetPanel.Children.Clear();
-        for (var index = 0; index < ZapretService.Presets.Count; index++)
+        if (ZapretPresetPanel is null)
         {
-            var radio = new RadioButton
-            {
-                Content = ZapretService.Presets[index].Name,
-                GroupName = "ZapretPreset",
-                Tag = index,
-                Style = (Style)FindResource("AppRadioButton"),
-                Margin = new Thickness(0, 1, 10, 1),
-                FontSize = 12.5,
-            };
-            radio.Checked += OnZapretPresetChecked;
-            ZapretPresetPanel.Children.Add(radio);
+            return;
         }
 
-        SelectZapretPresetRadio(_settings.ZapretPreset);
+        ZapretPresetPanel.Children.Clear();
+        var order = ZapretService.GetPriorityOrder();
+        var columns = Math.Max(1, (order.Count + StrategyRows - 1) / StrategyRows);
+        ZapretPresetPanel.Rows = StrategyRows;
+        ZapretPresetPanel.Columns = columns;
+
+        // UniformGrid заполняет построчно, а нужен «столбиками» по 5: раскладываем
+        // элементы в массив по колонкам и добавляем в построчном порядке.
+        var cells = new TextBlock?[StrategyRows * columns];
+        for (var position = 0; position < order.Count; position++)
+        {
+            var index = order[position];
+            var preset = ZapretService.Presets[index];
+            var item = new TextBlock
+            {
+                Tag = (Index: index, Number: position + 1),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 1, 12, 1),
+                FontSize = 11.5,
+                VerticalAlignment = VerticalAlignment.Top,
+                ToolTip = preset.Name,
+            };
+            cells[(position % StrategyRows) * columns + position / StrategyRows] = item;
+        }
+
+        for (var cell = 0; cell < cells.Length; cell++)
+        {
+            ZapretPresetPanel.Children.Add(cells[cell] ?? new TextBlock { Visibility = Visibility.Hidden });
+        }
+
+        UpdateZapretStrategyInfo(_settings.ZapretPreset);
     }
 
-    private void SelectZapretPresetRadio(int index)
+    private void UpdateZapretStrategyInfo(int index)
     {
-        var green = (Brush)FindResource("AccentBrush");
-        foreach (var radio in ZapretPresetPanel.Children.OfType<RadioButton>())
+        if (ZapretPresetPanel is null)
         {
-            var isChosen = radio.Tag is int value && value == index;
-            radio.IsChecked = isChosen;
-            var presetName = radio.Tag is int tag && tag >= 0 && tag < ZapretService.Presets.Count
-                ? ZapretService.Presets[tag].Name
-                : string.Empty;
-            radio.Content = isChosen ? "★ " + presetName : presetName;
-            if (isChosen)
+            return;
+        }
+
+        var green = (Brush)FindResource("AccentBrush");
+        var muted = (Brush)FindResource("MutedStrongBrush");
+        foreach (var item in ZapretPresetPanel.Children.OfType<TextBlock>())
+        {
+            if (item.Tag is not (int presetIndex, int number) ||
+                presetIndex < 0 || presetIndex >= ZapretService.Presets.Count)
             {
-                radio.Foreground = green;
-                radio.FontWeight = FontWeights.SemiBold;
+                continue;
             }
-            else
-            {
-                radio.ClearValue(ForegroundProperty);
-                radio.ClearValue(FontWeightProperty);
-            }
+
+            var chosen = presetIndex == index;
+            item.Text = $"{number}. {(chosen ? "★ " : string.Empty)}{ZapretService.Presets[presetIndex].Name}";
+            item.Foreground = chosen ? green : muted;
+            item.FontWeight = chosen ? FontWeights.SemiBold : FontWeights.Normal;
         }
     }
 
     private static string Mark(bool ok) => ok ? "✓" : "—";
 
-    /// <summary>Итоги автоподбора: рабочие для YouTube стратегии — зелёным, выбранная — со звёздочкой.</summary>
-    private void ShowZapretResults(IReadOnlyList<ZapretProbeResult> results, int? chosenIndex)
-    {
-        ZapretResultsPanel.Children.Clear();
-        var green = (Brush)FindResource("AccentBrush");
-        var muted = (Brush)FindResource("MutedStrongBrush");
-        foreach (var result in results
-                     .OrderByDescending(item => item.YoutubeOk)
-                     .ThenByDescending(item => item.Ok)
-                     .ThenBy(item => item.AverageMs))
-        {
-            var text = $"{result.Name}: {result.Ok}/{result.Total} " +
-                       $"(YouTube {Mark(result.YoutubeOk)}, Telegram {Mark(result.TelegramOk)}, " +
-                       $"Discord {Mark(result.DiscordOk)}), {result.AverageMs} мс";
-            var line = new TextBlock
-            {
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 2, 0, 0),
-                Foreground = result.YoutubeOk ? green : muted,
-            };
-            if (result.Index == chosenIndex)
-            {
-                line.FontWeight = FontWeights.SemiBold;
-                line.Foreground = green;
-                text = "★ " + text;
-            }
-
-            line.Text = text;
-            ZapretResultsPanel.Children.Add(line);
-        }
-    }
-
-    private void OnZapretPresetChecked(object sender, RoutedEventArgs e)
-    {
-        if (_loadingSettings || sender is not RadioButton { Tag: int index })
-        {
-            return;
-        }
-
-        _settings.ZapretPreset = index;
-        SaveSettings();
-        UpdateZapretUi();
-        if (_zapret.IsRunning)
-        {
-            _ = StartZapretAsync(false);
-        }
-    }
-
-    private void OnZapretGameModeChanged(object sender, RoutedEventArgs e)
+    private void OnZapretBlockQuicChanged(object sender, RoutedEventArgs e)
     {
         if (_loadingSettings)
         {
             return;
         }
 
-        _settings.ZapretGameMode = ZapretGameModeCheck.IsChecked == true;
+        _settings.ZapretBlockQuic = ZapretBlockQuicCheck.IsChecked == true;
         SaveSettings();
-        UpdateZapretUi();
         if (_zapret.IsRunning)
         {
-            _ = StartZapretAsync(false);
+            ZapretTuneText.Text = "Блокировка QUIC применится после перезапуска обхода.";
         }
     }
 
@@ -137,24 +114,22 @@ public partial class MainWindow
         var admin = IsAdministrator();
         var preset = _settings.ZapretPreset >= 0 && _settings.ZapretPreset < ZapretService.Presets.Count
             ? ZapretService.Presets[_settings.ZapretPreset].Name
-            : "не подобрана";
+            : "подберётся автоматически";
         ZapretStatusText.Text =
             $"Установлен: {(installed ? "да" : "нет")} · запущен: {(running ? "да" : "нет")} · " +
-            $"права администратора: {(admin ? "есть" : "нет")} · стратегия: {preset}" +
-            (_settings.ZapretGameMode ? " · игровой режим" : string.Empty);
+            $"права администратора: {(admin ? "есть" : "нет")} · стратегия: {preset}";
 
         if (ZapretActiveText is not null)
         {
             if (running)
             {
                 ZapretActiveText.Foreground = (Brush)FindResource("AccentBrush");
-                ZapretActiveText.Text = $"Сейчас применяется: «{preset}»" +
-                    (_settings.ZapretGameMode ? " · игровой режим" : string.Empty);
+                ZapretActiveText.Text = $"Сейчас применяется: «{preset}»";
             }
             else
             {
                 ZapretActiveText.ClearValue(ForegroundProperty);
-                ZapretActiveText.Text = "Обход DPI выключен — ни одна стратегия сейчас не применяется.";
+                ZapretActiveText.Text = "Обход DPI выключен — при включении стратегия подберётся сама.";
             }
         }
 
@@ -164,6 +139,7 @@ public partial class MainWindow
             BypassButton.Style = (Style)FindResource(running ? "DangerButton" : "PrimaryButton");
         }
 
+        UpdateHeaderState();
         ZapretStateChanged?.Invoke();
     }
 
@@ -172,8 +148,6 @@ public partial class MainWindow
     internal bool ZapretRunning => _zapret.IsRunning;
 
     internal bool ZapretBusy => _busy;
-
-    internal bool ZapretGameModeEnabled => _settings.ZapretGameMode;
 
     /// <summary>Строка состояния для виджета.</summary>
     internal string ZapretStatusLine
@@ -187,13 +161,96 @@ public partial class MainWindow
 
             if (!_zapret.IsRunning)
             {
-                return "Выключен. Включите обход или подберите стратегию.";
+                return "Выключен. Включите обход — стратегия подберётся сама.";
             }
 
             var index = Math.Clamp(_settings.ZapretPreset, 0, ZapretService.Presets.Count - 1);
-            return $"Включён: «{ZapretService.Presets[index].Name}»" +
-                   (_settings.ZapretGameMode ? " · игровой режим" : string.Empty);
+            return $"Включён: «{ZapretService.Presets[index].Name}»";
         }
+    }
+
+    internal int YoutubeNodeCount { get; private set; }
+
+    internal int DiscordNodeCount { get; private set; }
+
+    internal int UniversalNodeCount { get; private set; }
+
+    internal int TelegramNodeCount { get; private set; }
+
+    /// <summary>Флаг страны и уровень сигнала текущего подключения для свёрнутого виджета.</summary>
+    internal string WidgetMiniInfoText
+    {
+        get
+        {
+            var node = _manager.CurrentNode;
+            if (node is null || !_manager.IsConnected)
+            {
+                return "—";
+            }
+
+            var (flag, _) = ExtractCountryFlag(node.Name);
+            var stars = RateConnection(node).Stars;
+            var bars = stars switch
+            {
+                >= 5 => "▂▄▆█",
+                4 => "▂▄▆",
+                3 => "▂▄",
+                2 => "▂",
+                _ => "▁",
+            };
+            return (flag.Length == 0 ? "🌐" : flag) + " " + bars;
+        }
+    }
+
+    internal bool IsServiceConnected(string service)
+    {
+        var node = _manager.CurrentNode;
+        if (node is null || !_manager.IsConnected)
+        {
+            return false;
+        }
+
+        return service switch
+        {
+            "youtube" => node.YoutubeOk == true,
+            "discord" => node.DiscordOk == true,
+            "telegram" => node.TelegramOk == true,
+            _ => node.UniversalOk == true || node.DelayMs is not null,
+        };
+    }
+
+    internal async Task WidgetConnectServiceAsync(string service)
+    {
+        ApplyRoutingSettingsFromUi();
+        SaveSettings();
+
+        if (_settings.TunnelMode == TunnelMode.Tun && !IsAdministrator())
+        {
+            AskElevation();
+            return;
+        }
+
+        var node = PickNodeForService(service);
+        if (node is null)
+        {
+            var name = service switch
+            {
+                "youtube" => "YouTube",
+                "telegram" => "Telegram",
+                "discord" => "Discord",
+                _ => "универсальным доступом",
+            };
+            MessageBox.Show(
+                _zapretWidget is { IsVisible: true } ? (Window)_zapretWidget : this,
+                $"Нет проверенных узлов с доступом: {name}.\n\n" +
+                "Обновите списки и нажмите «Все узлы» на вкладке «Узлы».",
+                "VieNLink",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+            return;
+        }
+
+        await ConnectAsync(node);
     }
 
     internal Task WidgetToggleZapretAsync()
@@ -282,8 +339,7 @@ public partial class MainWindow
             if (_zapret.IsRunning)
             {
                 var index = Math.Clamp(_settings.ZapretPreset, 0, ZapretService.Presets.Count - 1);
-                return ZapretService.Presets[index].Name +
-                       (_settings.ZapretGameMode ? " · игровой режим" : string.Empty);
+                return ZapretService.Presets[index].Name;
             }
 
             if (_tunBypass.IsRunning)
@@ -307,31 +363,47 @@ public partial class MainWindow
         return name.Length <= 32 ? name : name[..29] + "…";
     }
 
-    internal void SetZapretGameMode(bool enabled)
-    {
-        if (ZapretGameModeCheck.IsChecked != enabled)
-        {
-            ZapretGameModeCheck.IsChecked = enabled;
-        }
-    }
-
     /// <summary>Показать/скрыть плавающий виджет обхода DPI.</summary>
     internal void ToggleZapretWidget()
     {
         if (_zapretWidget is { IsVisible: true })
         {
-            _zapretWidget.Activate();
+            _zapretWidget.Close();
+            UpdateWidgetToggleState();
             return;
         }
 
         if (_zapretWidget is null)
         {
             _zapretWidget = new ZapretWidget(this);
-            _zapretWidget.Closed += (_, _) => _zapretWidget = null;
+            _zapretWidget.Closed += (_, _) =>
+            {
+                _zapretWidget = null;
+                UpdateWidgetToggleState();
+            };
         }
 
         _zapretWidget.Show();
         _zapretWidget.Activate();
+        UpdateWidgetToggleState();
+    }
+
+    /// <summary>Вкладка-кнопка «Виджет» показывает, открыт ли виджет.</summary>
+    internal void UpdateWidgetToggleState()
+    {
+        if (WidgetTabChrome is null || WidgetToggleTrack is null || WidgetToggleKnob is null)
+        {
+            return;
+        }
+
+        var active = _zapretWidget is { IsVisible: true };
+        // «Виджет» — не вкладка, а действие: подсвечиваем его акцентом всегда,
+        // чтобы в общем ряду вкладок он читался как отдельная кнопка.
+        WidgetTabChrome.Background = (Brush)FindResource("AccentSurfaceBrush");
+        WidgetTabChrome.BorderBrush = (Brush)FindResource(active ? "AccentBrush" : "AccentBorderBrush");
+        WidgetToggleTrack.Background = (Brush)FindResource(active ? "AccentBrush" : "MutedBrush");
+        WidgetToggleKnob.HorizontalAlignment = active ? HorizontalAlignment.Right : HorizontalAlignment.Left;
+        WidgetToggleKnob.Margin = active ? new Thickness(0, 0, 2, 0) : new Thickness(2, 0, 0, 0);
     }
 
     private async void OnBypassButtonClick(object sender, RoutedEventArgs e)
@@ -345,11 +417,9 @@ public partial class MainWindow
         await StartZapretFlowAsync(false);
     }
 
-    private async void OnZapretInstallClick(object sender, RoutedEventArgs e) => await InstallZapretAsync();
-
     private async Task InstallZapretAsync()
     {
-        if (!BeginOperation())
+        if (!BeginOperation("загрузку zapret"))
         {
             return;
         }
@@ -381,8 +451,6 @@ public partial class MainWindow
         }
     }
 
-    private async void OnZapretTuneClick(object sender, RoutedEventArgs e) => await StartZapretFlowAsync(true);
-
     private async Task StartZapretFlowAsync(bool forceTune, bool fromWidget = false)
     {
         if (!ZapretService.IsInstalled)
@@ -411,7 +479,7 @@ public partial class MainWindow
 
     private async Task StartZapretAsync(bool forceTune)
     {
-        if (!BeginOperation())
+        if (!BeginOperation(forceTune ? "подбор стратегии zapret" : "включение обхода zapret"))
         {
             return;
         }
@@ -451,11 +519,19 @@ public partial class MainWindow
                 }
             });
 
+            if (!forceTune)
+            {
+                TryApplyBestZapretProfile();
+            }
+
             if (forceTune || _settings.ZapretPreset < 0)
             {
                 SetStatus("Подбираю стратегию обхода",
                     $"Перебираю {ZapretService.Presets.Count} стратегий zapret: YouTube, t.me, Discord…");
                 var results = await _zapret.AutoTuneAsync(progress, _operation!.Token);
+                BypassProfileStore.RecordMany(results
+                    .Where(result => result.Ok > 0)
+                    .Select(result => ZapretProfile(result, false, _settings.ZapretBlockQuic)));
                 var best = results
                     .Where(result => result.Ok > 0)
                     .OrderByDescending(result => result.YoutubeOk)
@@ -466,29 +542,25 @@ public partial class MainWindow
                 if (best is null)
                 {
                     // Ни одна проверка не прошла: всё равно включаем сохранённую/первую стратегию,
-                    // чтобы пользователь мог проверить и выбрать вручную.
+                    // чтобы обход работал и дальше проверялся в фоне.
                     var fallback = Math.Clamp(_settings.ZapretPreset, 0, ZapretService.Presets.Count - 1);
                     ZapretTuneText.Text =
-                        $"Автоподбор не нашёл рабочую стратегию — включена «{ZapretService.Presets[fallback].Name}». " +
-                        "Проверьте вручную или подключите прокси-узел.";
-                    SetStatus("Автоподбор не удался", "Включена сохранённая стратегия — проверьте «Проверить напрямую»");
-                    ShowZapretResults(results, null);
+                        $"Автоподбор не нашёл рабочую стратегию — включена «{ZapretService.Presets[fallback].Name}».";
+                    SetStatus("Автоподбор не удался", "Включена сохранённая стратегия. Если сайты не открываются — подключите прокси-узел.");
                     _settings.ZapretPreset = fallback;
-                    SelectZapretPresetRadio(fallback);
                     forceTune = false;
                 }
                 else
                 {
                     _settings.ZapretPreset = best.Index;
-                    SelectZapretPresetRadio(best.Index);
                     ZapretTuneText.Text =
                         $"Выбран: «{best.Name}» — YouTube {Mark(best.YoutubeOk)}, " +
                         $"Telegram {Mark(best.TelegramOk)}, Discord {Mark(best.DiscordOk)}";
-                    ShowZapretResults(results, best.Index);
                     AppendLog($"Автоподбор zapret: выбран «{best.Name}» ({best.Ok}/{best.Total})");
                 }
 
                 SaveSettings();
+                BuildZapretPresetList();
                 foreach (var result in results)
                 {
                     AppLog.Write("zapret",
@@ -500,7 +572,12 @@ public partial class MainWindow
 
             var preset = Math.Clamp(_settings.ZapretPreset, 0, ZapretService.Presets.Count - 1);
             SetStatus("Включаю обход DPI", $"Стратегия: {ZapretService.Presets[preset].Name}");
-            await _zapret.StartAsync(progress, _operation!.Token, preset, _settings.ZapretGameMode);
+            await _zapret.StartAsync(
+                progress, _operation!.Token, preset, gameMode: false, blockQuic: _settings.ZapretBlockQuic);
+            BypassProfileStore.Record(StartedProfile(
+                "zapret", preset, ZapretService.Presets[preset].Name,
+                false, _settings.ZapretBlockQuic));
+            UpdateZapretStrategyInfo(preset);
             SetStatus("Обход DPI включён", "zapret запущен. Проверьте YouTube и t.me напрямую.");
             FooterText.Text = "zapret: обход DPI включён (без прокси-узла)";
         }
@@ -521,32 +598,24 @@ public partial class MainWindow
 
     private void OnZapretWidgetClick(object sender, RoutedEventArgs e) => ToggleZapretWidget();
 
-    private async void OnZapretProbeClick(object sender, RoutedEventArgs e)
+    /// <summary>«Виджет» в общем ряду вкладок открывает плавающее окно, не переключая вкладку.</summary>
+    private void OnWidgetTabPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (!BeginOperation())
+        e.Handled = true;
+        ToggleZapretWidget();
+    }
+
+    private void OnMainTabsSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (WidgetTab?.IsSelected != true)
         {
             return;
         }
 
-        try
-        {
-            SetStatus("Проверяю напрямую", _zapret.IsRunning ? "С обходом DPI…" : "Без обхода DPI…");
-            var result = await ZapretService.ProbeDirectAsync(_operation!.Token);
-            ZapretTuneText.Text = result;
-            StatusDetail.Text = result;
-        }
-        catch (OperationCanceledException)
-        {
-            SetStatus("Проверка отменена", string.Empty);
-        }
-        catch (Exception exception)
-        {
-            ReportError("Не удалось проверить прямой доступ", exception);
-        }
-        finally
-        {
-            EndOperation();
-        }
+        // Клавиатурная навигация по вкладкам тоже не должна открывать пустую страницу.
+        ToggleZapretWidget();
+        MainTabs.SelectedItem = ToolsTab;
+        ToolsTabs.SelectedItem = GeneralTab;
     }
 
     private void OnZapretStopClick(object sender, RoutedEventArgs e)

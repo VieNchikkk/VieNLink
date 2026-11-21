@@ -17,6 +17,21 @@ internal enum StreamFragmentMode
     SplitSniMid,
     SplitRecord,
 
+    /// <summary>Переписать ClientHello в две TLS-записи: SNI не виден в первой.</summary>
+    RecordSplit,
+
+    /// <summary>Граница записей ровно перед доменом: SNI целиком во второй записи.</summary>
+    RecordSplitStart,
+
+    /// <summary>Граница записей после домена: первая запись с полным SNI, вторая — хвост.</summary>
+    RecordSplitEnd,
+
+    /// <summary>Граница записей в середине TLS-записи, без привязки к SNI.</summary>
+    RecordSplitHalf,
+
+    /// <summary>Байт внутри ClientHello отправить как срочные данные (MSG_OOB).</summary>
+    Oob,
+
     /// <summary>Без фрагментации — контрольный режим для тестов.</summary>
     None,
 }
@@ -46,6 +61,16 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
             "Разрез в середине домена — DPI видит только половину имени."),
         new("Разрез заголовка записи", StreamFragmentMode.SplitRecord,
             "Разрез после 5 байт TLS-заголовка: DPI не видит начало handshake в первом сегменте."),
+        new("Разрез TLS-записей", StreamFragmentMode.RecordSplit,
+            "ClientHello переписывается в две TLS-записи: DPI должен собирать рукопожатие из записей."),
+        new("Разрез записей перед SNI", StreamFragmentMode.RecordSplitStart,
+            "Первая TLS-запись заканчивается перед доменом; SNI целиком во второй."),
+        new("Разрез записей после SNI", StreamFragmentMode.RecordSplitEnd,
+            "Граница записей после домена: проверяем DPI, который смотрит только начало записи."),
+        new("Разрез записей пополам", StreamFragmentMode.RecordSplitHalf,
+            "Граница записей в середине TLS-записи — без привязки к SNI."),
+        new("OOB (срочный байт)", StreamFragmentMode.Oob,
+            "Байт из середины ClientHello уходит как срочные данные (MSG_OOB) — часть DPI ломается на этом."),
     };
 
     private static readonly byte[] SocksSuccess = { 5, 0, 0, 1, 0, 0, 0, 0, 0, 0 };
@@ -196,7 +221,7 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
                 }
 
                 total += read;
-                if (DesyncService.TryParseTlsClientHello(buffer.AsSpan(0, total), out _, out _))
+                if (TlsHello.TryParseTlsClientHello(buffer.AsSpan(0, total), out _, out _))
                 {
                     break;
                 }
@@ -228,15 +253,48 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
     {
         // Десинк нужен только для целевых доменов (YouTube/Telegram/Discord/…), как в WinDivert-движке.
         // Чужие сайты пропускаем как есть, чтобы не ломать лишние TLS-соединения.
-        if (DesyncService.TryParseTlsClientHello(data.Span, out var sniOffset, out var sniLength))
+        var hasHello = TlsHello.TryParseTlsClientHello(data.Span, out var sniOffset, out var sniLength);
+        if (hasHello)
         {
             var host = Encoding.ASCII.GetString(data.Span.Slice(sniOffset, sniLength));
-            if (!DesyncService.IsTargetHost(host))
+            if (!TlsHello.IsTargetHost(host))
             {
                 await target.WriteAsync(data, cancellationToken).ConfigureAwait(false);
                 await target.FlushAsync(cancellationToken).ConfigureAwait(false);
                 return;
             }
+        }
+
+        // OOB: байт из середины ClientHello уходит как срочные данные, а сам ClientHello
+        // продолжается обычным потоком. Часть DPI неверно собирает такие соединения.
+        if (_mode == StreamFragmentMode.Oob && hasHello && sniLength > 1)
+        {
+            var urgent = Math.Clamp(sniOffset + sniLength / 2, 1, data.Length - 1);
+            if (await SendOobAsync(target, data, urgent, cancellationToken).ConfigureAwait(false))
+            {
+                Interlocked.Increment(ref _fragmentedConnections);
+                Trace?.Invoke($"  первые {data.Length} байт → OOB на позиции {urgent}");
+                return;
+            }
+        }
+
+        // DPI, склеивающий TCP, всё равно увидит ClientHello. Разрез на уровне TLS-записей
+        // требует от него собирать рукопожатие из двух записей — это умеют не все.
+        if (IsRecordSplit(_mode) && TrySplitTlsRecords(data.Span, _mode, out var records))
+        {
+            Interlocked.Increment(ref _fragmentedConnections);
+            Trace?.Invoke($"  первые {data.Length} байт → {records.Count} TLS-записей");
+            for (var index = 0; index < records.Count; index++)
+            {
+                await target.WriteAsync(records[index], cancellationToken).ConfigureAwait(false);
+                await target.FlushAsync(cancellationToken).ConfigureAwait(false);
+                if (index != records.Count - 1)
+                {
+                    await Task.Delay(2, cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            return;
         }
 
         var pieces = BuildStreamPieces(data.Span, _mode);
@@ -283,7 +341,7 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
     internal static List<byte[]> BuildStreamPieces(ReadOnlySpan<byte> data, StreamFragmentMode mode)
     {
         if (data.Length < 11 ||
-            !DesyncService.TryParseTlsClientHello(data, out var sniOffset, out var sniLength))
+            !TlsHello.TryParseTlsClientHello(data, out var sniOffset, out var sniLength))
         {
             return new List<byte[]> { data.ToArray() };
         }
@@ -332,6 +390,123 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
         }
 
         return result;
+    }
+
+    private static bool IsRecordSplit(StreamFragmentMode mode) =>
+        mode is StreamFragmentMode.RecordSplit or StreamFragmentMode.RecordSplitStart
+            or StreamFragmentMode.RecordSplitEnd or StreamFragmentMode.RecordSplitHalf;
+
+    /// <summary>
+    /// Переписывает первый TLS-ClientHello в две записи. Где проходит граница —
+    /// зависит от стратегии: середина домена, перед доменом, после домена или середина записи.
+    /// Сервер собирает handshake из записей, а DPI видит только часть первой записи.
+    /// </summary>
+    internal static bool TrySplitTlsRecords(
+        ReadOnlySpan<byte> data,
+        StreamFragmentMode mode,
+        out List<byte[]> records)
+    {
+        records = new List<byte[]>();
+        if (data.Length < 10 || data[0] != 0x16)
+        {
+            return false;
+        }
+
+        var length = (data[3] << 8) | data[4];
+        if (length <= 5 || data.Length < 5 + length)
+        {
+            return false;
+        }
+
+        if (!TlsHello.TryParseTlsClientHello(data, out var sniOffset, out var sniLength) || sniLength < 2)
+        {
+            return false;
+        }
+
+        const int headerLength = 5;
+        var end = headerLength + length;
+        var split = mode switch
+        {
+            StreamFragmentMode.RecordSplit => sniOffset + sniLength / 2,
+            StreamFragmentMode.RecordSplitStart => sniOffset,
+            StreamFragmentMode.RecordSplitEnd => sniOffset + sniLength,
+            StreamFragmentMode.RecordSplitHalf => headerLength + length / 2,
+            _ => -1,
+        };
+
+        if (split <= headerLength + 1 || split >= end)
+        {
+            return false;
+        }
+
+        records.Add(BuildTlsRecord(data, headerLength, split));
+        records.Add(BuildTlsRecord(data, split, end));
+        if (data.Length > end)
+        {
+            records.Add(data[end..].ToArray());
+        }
+
+        return true;
+    }
+
+    private static byte[] BuildTlsRecord(ReadOnlySpan<byte> data, int from, int to)
+    {
+        var payload = to - from;
+        var record = new byte[5 + payload];
+        record[0] = 0x16;
+        record[1] = data[1];
+        record[2] = data[2];
+        record[3] = (byte)(payload >> 8);
+        record[4] = (byte)payload;
+        data.Slice(from, payload).CopyTo(record.AsSpan(5));
+        return record;
+    }
+
+    /// <summary>
+    /// Отправляет ClientHello обычным потоком, но байт на позиции
+    /// <paramref name="urgentIndex"/> — как срочные данные (MSG_OOB).
+    /// Сервер OOB-байт отбрасывает, поэтому вместо него уходит заглушка 'a',
+    /// а настоящий байт и остаток — следом обычным потоком.
+    /// </summary>
+    private static async Task<bool> SendOobAsync(
+        NetworkStream target,
+        ReadOnlyMemory<byte> data,
+        int urgentIndex,
+        CancellationToken cancellationToken)
+    {
+        if (urgentIndex <= 0 || urgentIndex >= data.Length)
+        {
+            return false;
+        }
+
+        var buffer = data.ToArray();
+        var original = buffer[urgentIndex];
+        buffer[urgentIndex] = (byte)'a';
+
+        int sent;
+        try
+        {
+            sent = target.Socket.Send(buffer, 0, urgentIndex + 1, SocketFlags.OutOfBand);
+        }
+        catch (Exception exception) when (exception is SocketException or NotSupportedException
+                                              or PlatformNotSupportedException or ObjectDisposedException)
+        {
+            // Платформа не поддержала OOB — отправляем как обычно, соединение не ломаем.
+            await target.WriteAsync(data, cancellationToken).ConfigureAwait(false);
+            await target.FlushAsync(cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        buffer[urgentIndex] = original;
+
+        var restart = Math.Min(sent, urgentIndex);
+        if (restart < buffer.Length)
+        {
+            await target.WriteAsync(buffer.AsMemory(restart), cancellationToken).ConfigureAwait(false);
+            await target.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        return true;
     }
 
     private static async Task RelayAsync(NetworkStream from, NetworkStream to, CancellationToken cancellationToken)

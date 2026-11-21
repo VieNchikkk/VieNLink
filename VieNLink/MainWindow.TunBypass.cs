@@ -108,6 +108,8 @@ public partial class MainWindow
             TunBypassToggleButton.Content = running || desyncActive ? "Остановить TUN-обход" : "Включить TUN-обход";
             TunBypassToggleButton.Style = (Style)FindResource(running || desyncActive ? "DangerButton" : "PrimaryButton");
         }
+
+        UpdateHeaderState();
     }
 
     private async void OnTunBypassToggleClick(object sender, RoutedEventArgs e)
@@ -147,7 +149,7 @@ public partial class MainWindow
 
     private async Task StartTunBypassAsync(bool forceTune = false)
     {
-        if (!BeginOperation())
+        if (!BeginOperation(forceTune ? "автоподбор TUN-обхода" : "включение TUN-обхода"))
         {
             return;
         }
@@ -187,11 +189,30 @@ public partial class MainWindow
                 }
             });
 
+            if (!forceTune && TryApplyBestTunProfile(out var savedDesyncEngine))
+            {
+                if (savedDesyncEngine)
+                {
+                    var savedStrategy = DesyncService.Strategies[Math.Clamp(
+                        _settings.DesyncStrategy, 0, DesyncService.Strategies.Count - 1)];
+                    _desync.Start(savedStrategy, progress, _settings.DesyncBlockQuic);
+                    _tunBypassStartedDesync = true;
+                    SetStatus("Обход включён (WinDivert)", $"Стратегия: {savedStrategy.Name}");
+                    FooterText.Text = "Обход включён (WinDivert, fake+multidisorder)";
+                    AppendLog($"TUN-обход: сохранённый WinDivert-конфиг «{savedStrategy.Name}»");
+                    UpdateTunBypassUi();
+                    return;
+                }
+            }
+
             if (forceTune)
             {
                 SetStatus("Подбираю стратегию TUN-обхода",
                     $"Перебираю {TlsFragmentForwarder.Strategies.Count} стратегий: YouTube и Telegram…");
                 var results = await _tunBypass.AutoTuneAsync(_settings, progress, _operation!.Token);
+                BypassProfileStore.RecordMany(results
+                    .Where(result => result.YoutubeOk || result.TelegramOk)
+                    .Select(result => TunProfile(result, _settings.TunBypassBlockQuic)));
                 // «Рабочая» — та, что реально открыла заблокированную цель (YouTube или Telegram).
                 var best = results
                     .Where(result => result.YoutubeOk || result.TelegramOk)
@@ -208,6 +229,9 @@ public partial class MainWindow
                 {
                     SetStatus("Форвардер не открыл цели", "Пробую WinDivert-движок (fake+multidisorder)…");
                     var desyncResults = await _desync.AutoTuneAsync(progress, _operation!.Token, _settings.DesyncBlockQuic);
+                    BypassProfileStore.RecordMany(desyncResults
+                        .Where(result => result.Ok > 0)
+                        .Select(result => DesyncProfile(result, _settings.DesyncBlockQuic, "tun-desync")));
                     var desyncBest = desyncResults
                         .Where(result => result.Ok > 0)
                         .OrderByDescending(result => result.VideoOk)
@@ -218,7 +242,7 @@ public partial class MainWindow
                     if (desyncBest is not null && (desyncBest.YoutubeOk || desyncBest.VideoOk || desyncBest.TelegramOk))
                     {
                         _settings.DesyncStrategy = desyncBest.Index;
-                        SelectDesyncStrategyRadio(desyncBest.Index);
+                        UpdateDesyncStrategyInfo(desyncBest.Index);
                         SaveSettings();
                         var desyncStrategy = DesyncService.Strategies[desyncBest.Index];
                         _desync.Start(desyncStrategy, progress, _settings.DesyncBlockQuic);
@@ -269,6 +293,9 @@ public partial class MainWindow
             _tunBypassStartedDesync = false;
             SetStatus("Включаю TUN-обход", $"Стратегия: {TlsFragmentForwarder.Strategies[index].Name}");
             await _tunBypass.StartAsync(mode, _settings, progress, _operation!.Token);
+            BypassProfileStore.Record(StartedProfile(
+                "tun", index, TlsFragmentForwarder.Strategies[index].Name,
+                gameMode: false, _settings.TunBypassBlockQuic));
             SetStatus("TUN-обход включён", "Проверьте YouTube и t.me — трафик идёт через форвардер VieNLink");
             FooterText.Text = "TUN-обход включён (без прокси-узла и WinDivert)";
         }
@@ -320,7 +347,7 @@ public partial class MainWindow
             return;
         }
 
-        if (!BeginOperation())
+        if (!BeginOperation("проверку TUN-обхода"))
         {
             return;
         }
@@ -333,6 +360,12 @@ public partial class MainWindow
                        $"({result.Ok}/{result.Total}, {result.AverageMs} мс)";
             TunBypassTuneText.Text = text;
             StatusDetail.Text = text;
+            if (result.Ok > 0)
+            {
+                BypassProfileStore.Record(_tunBypassStartedDesync
+                    ? DesyncProfile(result, _settings.DesyncBlockQuic, "tun-desync")
+                    : TunProfile(result, _settings.TunBypassBlockQuic));
+            }
         }
         catch (OperationCanceledException)
         {
@@ -437,8 +470,6 @@ public partial class MainWindow
         "youtubei.googleapis.com\njnn-pa.googleapis.com\nyoutubeembeddedplayer.googleapis.com\n" +
         "youtube-ui.l.google.com\nwide-youtube.l.google.com\nyt-video-upload.l.google.com\nytimg.l.google.com";
 
-    private async void OnVideoViaNodeClick(object sender, RoutedEventArgs e) => await VideoViaNodeAsync();
-
     /// <summary>
     /// Для видео важна не задержка, а пропускная способность: если скорость замерялась,
     /// берём самый быстрый узел, иначе обычный выбор по задержке и маскировке.
@@ -468,7 +499,7 @@ public partial class MainWindow
         {
             const string text = "Для видео нужен рабочий прокси-узел: видео-CDН YouTube у вашего провайдера " +
                                 "блокируется по IP, обход по SNI там не работает.\n\n" +
-                                "Обновите списки: «Инструменты → Источники», затем «Инструменты → Узлы → Проверить всё».";
+                                "Обновите списки: «Инструменты → Источники», затем «Инструменты → Узлы → Все узлы».";
             SetStatus("Нет рабочих узлов", "Для видео нужен хотя бы один проверенный узел");
             MessageBox.Show(this, text, "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
@@ -483,45 +514,6 @@ public partial class MainWindow
         await ConnectAsync(node, automatic: true, probeUrls: new[] { ProxyManager.YoutubeTestUrl });
         SetStatus("Видео через узел",
             "YouTube открывается через узел, остальные сайты идут напрямую. " +
-            "Вернуть всё как было: «Инструменты → Туннель → Всё через узел».");
-    }
-
-    /// <summary>Домены Telegram для режима «Telegram через узел»: мессенджер и веб-версия.</summary>
-    private const string TelegramProxyDomains =
-        "t.me\ntelegram.org\ntelegram.me\ntelegram.dog\nweb.telegram.org\n" +
-        "telegram-cdn.org\ncdn-telegram.org\ntdesktop.com\ntelesco.pe\ntg.dev";
-
-    private async void OnTelegramViaNodeClick(object sender, RoutedEventArgs e) => await TelegramViaNodeAsync();
-
-    /// <summary>
-    /// Telegram через узел, остальные сайты — напрямую. Нужен, когда t.me и веб-версия
-    /// блокируются, а обход по SNI не справляется.
-    /// </summary>
-    private async Task TelegramViaNodeAsync()
-    {
-        var node = PickBestNode();
-        if (node is null)
-        {
-            SetStatus("Нет рабочих узлов", "Для Telegram через узел нужен хотя бы один проверенный узел");
-            MessageBox.Show(
-                this,
-                "Для Telegram через узел нужен рабочий прокси-узел.\n\n" +
-                "Обновите списки: «Инструменты → Источники», затем «Инструменты → Узлы → Проверить всё».",
-                "VieNLink",
-                MessageBoxButton.OK,
-                MessageBoxImage.Information);
-            return;
-        }
-
-        // Сначала список, потом переключатель: обработчик читает значения из UI.
-        SiteListBox.Text = TelegramProxyDomains;
-        RouteOnlyRadio.IsChecked = true;
-        OnRoutingChanged(this, new RoutedEventArgs());
-        AppendLog("Telegram пойдёт через узел, остальные сайты — напрямую");
-
-        await ConnectAsync(node, automatic: true, probeUrls: ProxyManager.TelegramTestUrls);
-        SetStatus("Telegram через узел",
-            "Telegram открывается через узел, остальные сайты идут напрямую. " +
             "Вернуть всё как было: «Инструменты → Туннель → Всё через узел».");
     }
 
@@ -553,7 +545,7 @@ public partial class MainWindow
             return;
         }
 
-        if (!BeginOperation())
+        if (!BeginOperation("диагностику блокировки"))
         {
             return;
         }
@@ -612,7 +604,7 @@ public partial class MainWindow
             return;
         }
 
-        if (!BeginOperation())
+        if (!BeginOperation("проверку туннеля"))
         {
             return;
         }
