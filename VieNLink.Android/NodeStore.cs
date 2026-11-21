@@ -84,10 +84,17 @@ internal static class NodeStore
     /// каждые несколько секунд, и полный Snapshot из 12 000 узлов на каждый тик давал бы
     /// лишние аллокации и давление на сборщик мусора.
     /// </summary>
+    /// <remarks>
+    /// Считаются только свежие проверки: узел, проверенный много часов назад, мог уже
+    /// умереть. Иначе значок обещает узел, которого кнопка сервиса не найдёт.
+    /// </remarks>
     public static (int Total, int Working, int Universal, int Youtube, int Telegram, int Discord) Summary()
     {
         lock (Gate)
         {
+            var now = DateTime.UtcNow;
+            var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
+            var onlyMine = Settings.ConnectOnlyMine;
             var working = 0;
             var universal = 0;
             var youtube = 0;
@@ -95,28 +102,28 @@ internal static class NodeStore
             var discord = 0;
             foreach (var node in Nodes)
             {
-                if (node.Status != NodeStatus.Working)
+                if (!NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now))
                 {
                     continue;
                 }
 
                 working++;
-                if (node.UniversalOk == true || node.DelayMs is not null)
+                if (NodeAvailability.OpenedFor(node, "universal"))
                 {
                     universal++;
                 }
 
-                if (node.YoutubeOk == true)
+                if (NodeAvailability.OpenedFor(node, "youtube"))
                 {
                     youtube++;
                 }
 
-                if (node.TelegramOk == true)
+                if (NodeAvailability.OpenedFor(node, "telegram"))
                 {
                     telegram++;
                 }
 
-                if (node.DiscordOk == true)
+                if (NodeAvailability.OpenedFor(node, "discord"))
                 {
                     discord++;
                 }
@@ -225,7 +232,7 @@ internal static class NodeStore
             {
                 Name = sourceName,
                 Url = url,
-                Kind = uri.Host.Equals("t.me", StringComparison.OrdinalIgnoreCase) ? SourceKind.Telegram : SourceKind.Auto,
+                Kind = SourceKinds.Classify(url),
                 IsMine = mine,
             });
 
@@ -354,6 +361,8 @@ internal static class NodeStore
                         node.UniversalOk = existing.UniversalOk;
                         node.DiscordOk = existing.DiscordOk;
                         node.OpenDomains = existing.OpenDomains;
+                        node.FailCount = existing.FailCount;
+                        node.SpeedMbps = existing.SpeedMbps;
                         node.Status = existing.Status;
                     }
 
@@ -524,25 +533,28 @@ internal static class NodeStore
     private static List<ProxyNode> RankedVerified()
     {
         var settings = Settings;
-        var telegramNeeded = Sources.Any(source => source.Enabled && source.Kind == SourceKind.Telegram);
         return Nodes
             .Where(node => node.Status == NodeStatus.Working &&
-                           node.DelayMs is not null &&
+                           NodeAvailability.HasSuccess(node) &&
                            !string.IsNullOrWhiteSpace(node.OutboundJson) &&
                            (!settings.ConnectOnlyMine || node.IsMine))
-            .OrderByDescending(node => telegramNeeded && node.TelegramOk == true)
+            .OrderBy(node => node.DelayMs ?? int.MaxValue)
             .ThenByDescending(node => node.IsMine)
             .ThenByDescending(node => node.OpenDomains)
             .ThenByDescending(NodeRanking.Score)
-            .ThenBy(node => node.DelayMs)
             .ToList();
     }
 
     private static ProxyNode? BestVerified(ProxyNode? fallback = null)
     {
         var settings = Settings;
-        var ranked = RankedVerified();
-        var quick = ranked.FirstOrDefault(node => node.DelayMs <= settings.MaxDelayMs);
+        var now = DateTime.UtcNow;
+        var ranked = RankedVerified()
+            .Where(node => NodeAvailability.IsUsable(
+                node, NodeLimits.WorkingRecheckMinutes, settings.ConnectOnlyMine, now))
+            .ToList();
+        var quick = ranked.FirstOrDefault(
+            node => node.DelayMs is not null && node.DelayMs <= settings.MaxDelayMs);
         return quick ?? ranked.FirstOrDefault() ?? fallback;
     }
 
@@ -589,40 +601,44 @@ internal static class NodeStore
     }
 
     /// <summary>
-    /// Узел для быстрого подключения к сервису: только уже проверенные рабочие узлы,
-    /// отсортированные скрытно от пользователя — сначала с универсальным доступом,
-    /// затем по задержке. null — подходящих узлов нет.
+    /// Узел для быстрого подключения к сервису: только свежие проверенные узлы,
+    /// отсортированные скрытно от пользователя — сначала самые быстрые. Правило то же,
+    /// что у счётчиков: число на значке и результат кнопки не должны расходиться.
+    /// null — подходящих узлов нет.
     /// </summary>
     public static ProxyNode? PickForService(QuickService service)
     {
         lock (Gate)
         {
-            var mine = Settings.ConnectOnlyMine;
+            var now = DateTime.UtcNow;
+            var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
+            var onlyMine = Settings.ConnectOnlyMine;
             return Nodes
-                .Where(node => node.Status == NodeStatus.Working &&
-                               OpenedFor(node, service) &&
-                               (!mine || node.IsMine))
-                .OrderByDescending(node => node.OpenDomains)
-                .ThenBy(node => node.DelayMs ?? int.MaxValue)
+                .Where(node => NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now) &&
+                               OpenedFor(node, service))
+                .OrderBy(node => node.DelayMs ?? int.MaxValue)
+                .ThenByDescending(node => node.OpenDomains)
                 .ThenByDescending(node => node.IsMine)
                 .FirstOrDefault();
         }
     }
 
     /// <summary>Есть ли у узла подтверждённый доступ к сервису.</summary>
-    private static bool OpenedFor(ProxyNode node, QuickService service) => service switch
-    {
-        QuickService.YouTube => node.YoutubeOk == true,
-        QuickService.Telegram => node.TelegramOk == true,
-        QuickService.Discord => node.DiscordOk == true,
-        // Старый кэш не знает UniversalOk: тогда универсальным считаем узел с задержкой.
-        _ => node.UniversalOk == true || node.DelayMs is not null,
-    };
+    private static bool OpenedFor(ProxyNode node, QuickService service) =>
+        NodeAvailability.OpenedFor(node, service switch
+        {
+            QuickService.YouTube => "youtube",
+            QuickService.Telegram => "telegram",
+            QuickService.Discord => "discord",
+            _ => "universal",
+        });
 
     /// <summary>
     /// Узел, который прямо сейчас реально открывает сайт. Кэш мог устареть (узел умер,
-    /// пока телефон лежал), поэтому перед подключением проверяем 1–3 кандидата в :probe
-    /// и берём первый живой. Возвращает null, если живых нет.
+    /// пока телефон лежал), поэтому перед подключением проверяем всех кандидатов сервиса
+    /// одной партией в :probe и берём первый живой. Так значок сервиса и результат кнопки
+    /// сходятся за одно нажатие: не открывшиеся узлы сразу перестают считаться рабочими.
+    /// Возвращает null, если живых нет.
     /// </summary>
     public static async Task<ProxyNode?> PickVerifiedAsync(
         QuickService? service,
@@ -654,7 +670,7 @@ internal static class NodeStore
                 // иначе кнопка Telegram подключила бы узел, где Telegram не открывается.
                 candidates.AddRange(RankedVerified()
                     .Where(node => OpenedFor(node, wanted))
-                    .Take(4));
+                    .Take(8));
             }
             else
             {
@@ -664,7 +680,7 @@ internal static class NodeStore
             unique = candidates
                 .GroupBy(node => node.Id, StringComparer.OrdinalIgnoreCase)
                 .Select(group => group.First())
-                .Take(3)
+                .Take(8)
                 .ToList();
         }
 
@@ -673,26 +689,39 @@ internal static class NodeStore
             return null;
         }
 
+        if (TunnelService.IsBypassMode)
+        {
+            // В TUN-обходе проверка узлов недоступна: берём как есть.
+            Select(unique[0]);
+            return unique[0];
+        }
+
+        progress?.Report($"Проверяю узлы перед подключением: {unique.Count}…");
+        var summary = await ProbeClient.RunAsync(unique, cancellationToken).ConfigureAwait(false);
+        if (summary.Error is not null && summary.Tested == 0)
+        {
+            // Проверка не запустилась (занята или процесс не поднялся): статусы не менять.
+            return null;
+        }
+
+        var now = DateTime.UtcNow;
+        var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
+        var onlyMine = Settings.ConnectOnlyMine;
         foreach (var node in unique)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (TunnelService.IsBypassMode)
+            if (!NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now))
             {
-                // В TUN-обходе проверка узлов недоступна: берём как есть.
-                Select(node);
-                return node;
+                continue;
             }
 
-            progress?.Report("Проверяю узел перед подключением…");
-            var summary = await ProbeClient.RunAsync(new[] { node }, cancellationToken)
-                .ConfigureAwait(false);
-            if (summary.Working > 0)
+            if (service is { } wanted && !OpenedFor(node, wanted))
             {
-                Select(node);
-                return node;
+                continue;
             }
 
-            progress?.Report("Узел не открылся — пробую следующий…");
+            Select(node);
+            return node;
         }
 
         return null;
@@ -726,7 +755,7 @@ internal static class NodeStore
         var ordered = OrderForConfig(Nodes);
         if (Settings.ConnectOnlyVerified)
         {
-            ordered = ordered.Where(node => node.DelayMs is not null).ToList();
+            ordered = ordered.Where(NodeAvailability.HasSuccess).ToList();
         }
 
         if (Settings.ConnectOnlyMine)
@@ -753,7 +782,7 @@ internal static class NodeStore
 
         // Выбранный узел обязан попасть в конфиг, даже если рейтинг вытеснил его за лимит.
         if (selected is not null && candidates.All(node => node.Id != selected.Id) &&
-            (!Settings.ConnectOnlyVerified || selected.DelayMs is not null) &&
+            (!Settings.ConnectOnlyVerified || NodeAvailability.HasSuccess(selected)) &&
             (!Settings.ConnectOnlyMine || selected.IsMine))
         {
             candidates.Insert(0, selected);

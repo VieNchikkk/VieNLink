@@ -25,11 +25,37 @@ public sealed class VieNLinkApp : Application
 
         RedirectStandardError();
         RegisterSecretProtector();
+        WarmNetworkAssemblies();
         ProbeScheduler.Start(this);
         MtProtoScheduler.Start(this);
         if (!ProbeScheduler.IsProbeProcess())
         {
             Maintenance.EnsureScheduled(this);
+        }
+    }
+
+    /// <summary>
+    /// Прогрев сетевых сборок на главном потоке. Их ленивая загрузка из фоновых потоков
+    /// (health-check автопереключения, NetworkProbe, Maintenance, :probe) гоняется в
+    /// libmonodroid (EmbeddedAssemblies::open_from_bundles) и роняет процесс SIGSEGV на
+    /// .NET TP Worker — это и есть краши после автопереключения сервера. Один раз трогаем
+    /// типы здесь, на главном потоке: дальше сборки уже загружены, и гонки нет.
+    /// </summary>
+    private static void WarmNetworkAssemblies()
+    {
+        try
+        {
+            _ = typeof(System.Net.Dns);
+            _ = typeof(System.Net.IPAddress);
+            _ = typeof(System.Net.Sockets.TcpClient);
+            _ = typeof(System.Net.Sockets.UdpClient);
+            _ = typeof(System.Net.Http.HttpClient);
+            _ = typeof(System.Net.Http.SocketsHttpHandler);
+            _ = typeof(System.Net.Security.SslStream);
+        }
+        catch (Exception exception)
+        {
+            Android.Util.Log.Warn("VieNLink", "не удалось прогреть сетевые сборки: " + exception.Message);
         }
     }
 

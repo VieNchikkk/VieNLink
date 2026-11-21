@@ -158,7 +158,10 @@ internal static class NodeDedup
             var keep = ordered.Take(NodeLimits.MaxPerEndpoint).ToList();
             foreach (var extra in ordered.Skip(NodeLimits.MaxPerEndpoint))
             {
-                Absorb(keep[0], extra);
+                // Другой аккаунт на том же адресе — не дубль: его успехи нельзя
+                // приписывать оставшемуся узлу, иначе кнопка получит «рабочий»
+                // узел, который этот сервис не открывает.
+                Absorb(keep[0], extra, mergeChecks: false);
             }
 
             result.AddRange(keep);
@@ -219,10 +222,15 @@ internal static class NodeDedup
         return (candidate.LastSeenUtc ?? DateTime.MinValue) > (current.LastSeenUtc ?? DateTime.MinValue);
     }
 
-    /// <summary>Переносит на оставшийся узел всё полезное от дубля: проверки, метку «моя», источники.</summary>
-    private static void Absorb(ProxyNode target, ProxyNode source)
+    /// <summary>
+    /// Переносит на оставшийся узел всё полезное от дубля: проверки, метку «моя», источники.
+    /// <paramref name="mergeChecks"/> — только для настоящих дублей (тот же outbound).
+    /// У разных аккаунтов на общем CDN-адресе результаты проверок не переносятся:
+    /// они относятся к другому UUID/SNI и могут не открывать тот же сервис.
+    /// </summary>
+    private static void Absorb(ProxyNode target, ProxyNode source, bool mergeChecks = true)
     {
-        if (target.DelayMs is null && source.DelayMs is not null)
+        if (mergeChecks && target.DelayMs is null && source.DelayMs is not null)
         {
             target.DelayMs = source.DelayMs;
             target.CheckedAtUtc = source.CheckedAtUtc;
@@ -232,7 +240,7 @@ internal static class NodeDedup
             target.DiscordOk = source.DiscordOk;
             target.Status = source.Status;
         }
-        else
+        else if (mergeChecks)
         {
             // Доступ по сервисам объединяем: у дублей он мог проверяться в разное время.
             target.YoutubeOk = MergeAccess(target.YoutubeOk, source.YoutubeOk);
@@ -241,20 +249,23 @@ internal static class NodeDedup
             target.DiscordOk = MergeAccess(target.DiscordOk, source.DiscordOk);
         }
 
-        if (target.SpeedMbps is null && source.SpeedMbps is not null)
+        if (mergeChecks)
         {
-            target.SpeedMbps = source.SpeedMbps;
+            if (target.SpeedMbps is null && source.SpeedMbps is not null)
+            {
+                target.SpeedMbps = source.SpeedMbps;
+            }
+
+            target.FailCount = Math.Max(target.FailCount, source.FailCount);
+            target.OpenDomains = Math.Max(target.OpenDomains, source.OpenDomains);
+            if (source.TriedAtUtc is { } tried &&
+                (target.TriedAtUtc is null || tried > target.TriedAtUtc))
+            {
+                target.TriedAtUtc = tried;
+            }
         }
 
         target.IsMine |= source.IsMine;
-        target.FailCount = Math.Max(target.FailCount, source.FailCount);
-        target.OpenDomains = Math.Max(target.OpenDomains, source.OpenDomains);
-        if (source.TriedAtUtc is { } tried &&
-            (target.TriedAtUtc is null || tried > target.TriedAtUtc))
-        {
-            target.TriedAtUtc = tried;
-        }
-
         if (source.LastSeenUtc is { } seen &&
             (target.LastSeenUtc is null || seen > target.LastSeenUtc))
         {
@@ -361,6 +372,24 @@ internal static class NodeLimits
     public const int RemoveAfterFailures = 5;
 
     /// <summary>
+    /// Сколько рабочих узлов приложение старается держать наготове. Если их меньше,
+    /// фоновая проверка идёт без пауз, пока минимум не наберётся.
+    /// </summary>
+    public const int MinWorkingNodes = 10;
+
+    /// <summary>Сколько рабочих узлов нужно на каждый сервис: YouTube, Telegram, Discord
+    /// и универсальный доступ.</summary>
+    public const int MinWorkingPerService = 2;
+
+    /// <summary>
+    /// Как часто перепроверять узел, который уже считается рабочим. Бесплатные узлы живут
+    /// минуты: «рабочий» из кэша без свежей перепроверки — главная причина, почему значок
+    /// сервиса обещал узел, которого кнопка не находила. Этот же интервал — окно свежести
+    /// для значков и выбора узла: счётчик не должен обещать узел, проверенный дольше этого.
+    /// </summary>
+    public const int WorkingRecheckMinutes = 15;
+
+    /// <summary>
     /// Оставляет не больше <paramref name="max"/> узлов: сначала личные, затем проверенные
     /// (рабочие), затем самые свежие, затем лучшие по маскировке и задержке.
     /// Возвращает число отброшенных.
@@ -396,6 +425,42 @@ internal enum SourceKind
 
     /// <summary>Одна ссылка на узел (vless://, vmess://…), вставленная вручную.</summary>
     SingleLink,
+
+    /// <summary>Сайт или GitHub-список с MTProto-прокси для Telegram (не узлы).</summary>
+    MtProto,
+}
+
+/// <summary>
+/// Общее правило: источник относится к Telegram-прокси (канал или сайт с MTProto),
+/// а не к списку узлов. Им пользуются сбор MTProto и фильтры источников узлов.
+/// </summary>
+internal static class SourceKinds
+{
+    /// <summary>Источник нужен для MTProto: канал Telegram или сайт/список с mtproto-прокси.</summary>
+    public static bool IsProxy(SourceDefinition source) =>
+        source.Kind is SourceKind.Telegram or SourceKind.MtProto ||
+        LooksLikeTelegram(source.Url) ||
+        LooksLikeMtProtoUrl(source.Url);
+
+    /// <summary>Какой тип поставить источнику при добавлении по ссылке.</summary>
+    public static SourceKind Classify(string url) =>
+        LooksLikeTelegram(url) ? SourceKind.Telegram
+        : LooksLikeMtProtoUrl(url) ? SourceKind.MtProto
+        : SourceKind.Auto;
+
+    public static bool LooksLikeTelegram(string url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var uri) &&
+        (uri.Host.Equals("t.me", StringComparison.OrdinalIgnoreCase) ||
+         uri.Host.Equals("telegram.me", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Сайты и GitHub-репозитории со списками MTProto обычно содержат в адресе
+    /// «mtproto», «mtproxy» или «mtpro».
+    /// </summary>
+    public static bool LooksLikeMtProtoUrl(string url) =>
+        url.Contains("mtproto", StringComparison.OrdinalIgnoreCase) ||
+        url.Contains("mtproxy", StringComparison.OrdinalIgnoreCase) ||
+        url.Contains("mtpro", StringComparison.OrdinalIgnoreCase);
 }
 
 /// <summary>Источник узлов: raw-список на GitHub, подписка или публичный канал Telegram.</summary>
@@ -727,6 +792,11 @@ internal sealed class MtProtoProxy
     public int Port { get; set; }
     public string Secret { get; set; } = string.Empty;
     public string SourceName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Пинг подключения к прокси, как в Telegram. Полное рукопожатие с Telegram
+    /// нужно только для проверки «рабочий/нерабочий» и в списке не показывается.
+    /// </summary>
     public int? DelayMs { get; set; }
     public DateTime? CheckedAtUtc { get; set; }
 
@@ -735,6 +805,9 @@ internal sealed class MtProtoProxy
 
     /// <summary>Когда прокси перестал отвечать; через 24 часа такие удаляются.</summary>
     public DateTime? DeadAtUtc { get; set; }
+
+    /// <summary>Сколько настоящих проверок подряд прокси не ответил Telegram.</summary>
+    public int FailCount { get; set; }
 
     public string Link => $"tg://proxy?server={Server}&port={Port}&secret={Secret}";
 
@@ -792,17 +865,26 @@ internal static class MtProtoSchedule
     /// <summary>Как часто читаем каналы через RSS.</summary>
     public const int CollectMinutes = 10;
 
+    /// <summary>Если рабочих прокси меньше пяти, каналы читаем чаще.</summary>
+    public const int CollectMinutesWhenFew = 5;
+
     /// <summary>Рабочие прокси проверяем чаще, чтобы быстро замечать умершие.</summary>
     public const int WorkingRecheckMinutes = 10;
 
     /// <summary>Нерабочие проверяем изредка — вдруг ожил.</summary>
     public const int DeadRecheckHours = 6;
 
+    /// <summary>Только что упавший рабочий прокси перепроверяем быстро: возможно, была заминка.</summary>
+    public const int QuickRecheckMinutes = 20;
+
     /// <summary>Сколько рабочих прокси проверяем за один проход.</summary>
     public const int WorkingBatch = 20;
 
     /// <summary>Сколько нерабочих прокси проверяем за один проход.</summary>
     public const int DeadBatch = 20;
+
+    /// <summary>Сколько рабочих MTProto-прокси приложение старается держать наготове.</summary>
+    public const int MinWorking = 5;
 }
 
 internal sealed class MtProtoCache

@@ -63,6 +63,22 @@ internal static class Program
             case "mtproto":
                 await RunMtProtoFetchAsync(args.Length > 1 ? args[1] : "https://t.me/s/MTProtoProxies");
                 break;
+            case "mtprotocheck":
+                var mtLimit = args.Length > 1 && int.TryParse(args[1], out var mtParsed) ? mtParsed : 30;
+                await RunMtProtoCheckAsync(mtLimit, args.Length > 2 ? args[2] : null);
+                break;
+            case "mtprotohost":
+                if (args.Length < 4 || !int.TryParse(args[2], out var mtPort))
+                {
+                    Console.WriteLine("Использование: mtprotohost <сервер> <порт> <секрет>");
+                    return 2;
+                }
+
+                await RunMtProtoHostAsync(args[1], mtPort, args[3]);
+                break;
+            case "mtprotosites":
+                await RunMtProtoSitesAsync();
+                break;
             case "probe":
                 var probeLimit = args.Length > 1 && int.TryParse(args[1], out var probeParsed) ? probeParsed : 120;
                 await RunProbeAsync(probeLimit);
@@ -1790,6 +1806,24 @@ internal static class Program
               NodeDedup.Collapse(variants).Count == NodeLimits.MaxPerEndpoint,
             "на сервер:порт остаётся не больше " + NodeLimits.MaxPerEndpoint + " вариантов");
 
+        // Лимит не должен приписывать чужие проверки: успех лишнего аккаунта
+        // на том же CDN-адресе не переходит на оставшиеся варианты.
+        var limitVariants = Enumerable.Range(1, NodeLimits.MaxPerEndpoint + 1)
+            .Select(index => LinkParser.Parse(
+                $"vless://0000000{index}-2222-3333-4444-555555555555@limit.example:443?security=tls&type=ws&path=%2F{index}#L{index}",
+                "s"))
+            .OfType<ProxyNode>()
+            .ToList();
+        var extraWorking = limitVariants[^1];
+        extraWorking.Status = NodeStatus.Working;
+        extraWorking.DelayMs = 100;
+        extraWorking.CheckedAtUtc = DateTime.UtcNow;
+        extraWorking.YoutubeOk = true;
+        var limited = NodeDedup.Collapse(limitVariants);
+        Check(limited.Count == NodeLimits.MaxPerEndpoint &&
+              limited.All(node => node.Id == extraWorking.Id || node.YoutubeOk != true),
+            "проверка лишнего аккаунта не приписывается чужим узлам");
+
         // Узел без проверки сертификата помечается и оценивается ниже обычного TLS.
         var insecureNode = LinkParser.Parse(
             "vless://11111111-2222-3333-4444-555555555555@example.com:443?security=tls&allowInsecure=1#I",
@@ -1798,6 +1832,26 @@ internal static class Program
         Check(insecureNode is not null && tlsNode is not null &&
               NodeRanking.Score(insecureNode) < NodeRanking.Score(tlsNode),
             "insecure-узел оценивается ниже узла с проверкой сертификата");
+
+        // MTProto с сайтов: ссылки t.me/proxy, экранированный JSON и структурированный JSON.
+        var siteText = "1. https://t.me/proxy?server=example.org&port=443&secret=ee00112233445566778899aabbccddeeff676f6f676c652e636f6d\n";
+        var siteProxies = MtProtoService.ExtractAll(siteText, "site");
+        Check(siteProxies.Count == 1 && siteProxies[0].Server == "example.org" && siteProxies[0].Port == 443,
+            "MTProto: ссылка t.me/proxy с сайта разобрана");
+
+        const string escapedJson = "[{\"scheme\":\"https\",\"host\":\"t.me\",\"path\":\"\\/proxy\",\"query\":{\"server\":\"json.example\",\"port\":\"8443\",\"secret\":\"ee00112233445566778899aabbccddeeff676f6f676c652e636f6d\"},\"link\":\"https:\\/\\/t.me\\/proxy?server=json.example&port=8443&secret=ee00112233445566778899aabbccddeeff676f6f676c652e636f6d\"}]";
+        var jsonProxies = MtProtoService.ExtractAll(escapedJson, "json");
+        Check(jsonProxies.Count == 1 && jsonProxies[0].Server == "json.example",
+            "MTProto: экранированный JSON с сайта разобран");
+
+        const string structuredJson = "[{\"server\":\"structured.example\",\"port\":8443,\"secret\":\"ee00112233445566778899aabbccddeeff676f6f676c652e636f6d\"}]";
+        var structuredProxies = MtProtoService.ExtractAll(structuredJson, "json2");
+        Check(structuredProxies.Count == 1 && structuredProxies[0].Port == 8443,
+            "MTProto: структурированный JSON без ссылки разобран");
+
+        Check(SourceKinds.Classify("https://t.me/s/proxy_mtproto") == SourceKind.Telegram &&
+              SourceKinds.Classify("https://raw.githubusercontent.com/Airuop/MTProtoCollector/main/proxy/mtproto.json") == SourceKind.MtProto,
+            "типы источников: канал и сайт MTProto различаются");
 
         // Мусорные и пограничные ссылки не должны проходить разбор.
         Check(LinkParser.Parse("vless://11111111-2222-3333-4444-555555555555@example.com:70000?security=tls#P", "t") is null,
@@ -1897,25 +1951,37 @@ internal static class Program
 
         Console.WriteLine("MTProto:");
 
-        var mtprotoText = "Прокси для Telegram: tg://proxy?server=1.2.3.4&port=443&secret=abcdef0123456789\n" +
-                          "и https://t.me/proxy?server=5.6.7.8&port=80&secret=deadbeef&amp;test=1";
+        var mtprotoText = "Прокси для Telegram: tg://proxy?server=1.2.3.4&port=443&secret=aabbccddeeff00112233445566778899\n" +
+                          "и https://t.me/proxy?server=5.6.7.8&port=80&secret=deadbeefdeadbeefdeadbeefdeadbeef&amp;test=1";
         var mtproto = MtProtoService.Extract(mtprotoText, "тест");
         Check(mtproto.Count == 2, "MTProto: извлечение ссылок tg:// и t.me/proxy");
-        Check(mtproto.Count == 2 && mtproto[0].Link == "tg://proxy?server=1.2.3.4&port=443&secret=abcdef0123456789", "MTProto: нормализация ссылки");
+        Check(mtproto.Count == 2 && mtproto[0].Link == "tg://proxy?server=1.2.3.4&port=443&secret=aabbccddeeff00112233445566778899", "MTProto: нормализация ссылки");
         Check(MtProtoService.Extract("tg://proxy?server=1.2.3.4&port=0&secret=x", "тест").Count == 0, "MTProto: некорректный порт отбрасывается");
+
+        var validFakeTls = MtProtoSecret.TryParse("ee00112233445566778899aabbccddeeff676f6f676c652e636f6d");
+        Check(validFakeTls is { Kind: MtProtoSecretKind.FakeTls, Host: "google.com" },
+            "MTProto: секрет FakeTLS разбирается (hex)");
+        Check(MtProtoSecret.TryParse("7gARIjNEVWZ3iJmqu8zd7v9nb29nbGUuY29t") is not null,
+            "MTProto: секрет FakeTLS разбирается (base64url)");
+        Check(MtProtoSecret.TryParse("7pJZSUjIp-43RmluNUkNmWNkbnMuZ11vZ2xlLmNvbQ==") is null,
+            "MTProto: секрет с испорченным доменом отбрасывается");
+        Check(MtProtoService.Extract(
+                "tg://proxy?server=1.2.3.4&port=443&secret=7pJZSUjIp-43RmluNUkNmWNkbnMuZ11vZ2xlLmNvbQ==",
+                "тест").Count == 0,
+            "MTProto: прокси с испорченным доменом не попадает в список");
 
         var telegramHtml = """
         <div class="tgme_widget_message_text js-message_text">
-          <a href="tg://proxy?server=1.2.3.3&port=443&secret=aaaa">Прокси 1</a><br/>
-          <code>tg://proxy?server=5.6.7.8&amp;port=80&amp;secret=bbbb</code>
-          <a href="https://t.me/proxy?server=9.9.9.9&amp;port=8443&amp;secret=cccc">t.me/proxy</a>
+          <a href="tg://proxy?server=1.2.3.3&port=443&secret=aaaaaaaabbbbbbbbccccccccdddddddd">Прокси 1</a><br/>
+          <code>tg://proxy?server=5.6.7.8&amp;port=80&amp;secret=11111111222222223333333344444444</code>
+          <a href="https://t.me/proxy?server=9.9.9.9&amp;port=8443&amp;secret=55555555666666667777777788888888">t.me/proxy</a>
         </div>
         """;
         var fromHtml = MtProtoService.Extract(TelegramText.Extract(telegramHtml), "канал");
         Check(fromHtml.Count == 3, "MTProto: разбор HTML канала, найдено " + fromHtml.Count);
 
         var blockText = "IP: <code>95.217.135.241</code> Port: <code>443</code> " +
-                        "Secret: <code>7pJZSUjIp-43RmluNUkNmWNkbnMuZ11vZ2xlLmNvbQ==</code>";
+                        "Secret: <code>ee00112233445566778899aabbccddeeff676f6f676c652e636f6d</code>";
         var blockProxy = MtProtoService.Extract(blockText, "RSS");
         Check(blockProxy.Count == 1 && blockProxy[0].Server == "95.217.135.241" && blockProxy[0].Port == 443,
             "MTProto: формат IP/Port/Secret (RSS-зеркала)");
@@ -2264,46 +2330,107 @@ internal static class Program
 
         var now = DateTime.UtcNow;
 
-        // MTProto: TCP-проверка, уход в «Нерабочие» и возврат после оживания.
-        var alivePort = FindFreePort(23100);
-        var deadPort = FindFreePort(23200);
-        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, alivePort);
+        // 4. Значки сервисов показывают только свежие проверки: устаревший кэш
+        // не должен обещать узел, который кнопка уже не найдёт.
+        var freshNode = new ProxyNode
+        {
+            Status = NodeStatus.Working,
+            DelayMs = 120,
+            CheckedAtUtc = now,
+            YoutubeOk = true,
+        };
+        Check(NodeAvailability.IsUsable(freshNode, NodeLimits.WorkingRecheckMinutes, onlyMine: false, now),
+            "свежий рабочий узел считается доступным");
+        Check(NodeAvailability.OpenedFor(freshNode, "youtube"), "значок YouTube видит узел");
+        Check(!NodeAvailability.OpenedFor(freshNode, "universal"),
+            "универсальный доступ не выдумывается из доступа к YouTube");
+
+        var staleNode = new ProxyNode
+        {
+            Status = NodeStatus.Working,
+            DelayMs = 120,
+            CheckedAtUtc = now.AddHours(-8),
+            YoutubeOk = true,
+        };
+        Check(!NodeAvailability.IsUsable(staleNode, NodeLimits.WorkingRecheckMinutes, onlyMine: false, now),
+            "проверка старше окна свежести — узел не показывается");
+        Check(NodeAvailability.IsUsable(staleNode, NodeLimits.WorkingRecheckMinutes, onlyMine: false, staleNode.CheckedAtUtc.Value),
+            "на момент своей проверки узел ещё был доступен");
+
+        var unknownWithDelay = new ProxyNode
+        {
+            Status = NodeStatus.Unknown,
+            DelayMs = 120,
+            CheckedAtUtc = now,
+        };
+        Check(!NodeAvailability.IsUsable(unknownWithDelay, NodeLimits.WorkingRecheckMinutes, onlyMine: false, now),
+            "непроверенный узел с остатком задержки не считается рабочим");
+
+        // Android меряет задержку только по Cloudflare: узел, открывший лишь YouTube,
+        // обязан остаться доступным для кнопки YouTube.
+        var youtubeOnly = new ProxyNode
+        {
+            Status = NodeStatus.Working,
+            DelayMs = null,
+            CheckedAtUtc = now,
+            YoutubeOk = true,
+        };
+        Check(NodeAvailability.IsUsable(youtubeOnly, NodeLimits.WorkingRecheckMinutes, onlyMine: false, now) &&
+              NodeAvailability.OpenedFor(youtubeOnly, "youtube"),
+            "узел без задержки Cloudflare, но с YouTube — доступен для YouTube");
+        Check(!NodeAvailability.OpenedFor(youtubeOnly, "universal"),
+            "узел без Cloudflare не считается универсальным");
+
+        var mineNode = new ProxyNode
+        {
+            Status = NodeStatus.Working,
+            DelayMs = 120,
+            CheckedAtUtc = now,
+            IsMine = true,
+        };
+        Check(!NodeAvailability.OpenedFor(mineNode, "universal"),
+            "без успешной проверки Cloudflare узла нет в универсальных");
+        mineNode.UniversalOk = true;
+        Check(NodeAvailability.IsUsable(mineNode, NodeLimits.WorkingRecheckMinutes, onlyMine: true, now) &&
+              NodeAvailability.OpenedFor(mineNode, "universal"),
+            "свежий личный универсальный узел доступен при «Только мои»");
+
+        // MTProto: проверка — настоящий хендшейк с Telegram. Открытый TCP-порт без MTProto
+        // больше не считается «рабочим»: именно из-за этого Telegram отказывался добавлять прокси.
+        var silentPort = FindFreePort(23100);
+        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, silentPort);
         listener.Start();
         try
         {
-            var aliveProxy = new MtProtoProxy { Server = "127.0.0.1", Port = alivePort, Secret = "aabb" };
-            var deadProxy = new MtProtoProxy { Server = "127.0.0.1", Port = deadPort, Secret = "ccdd" };
+            const string validSecret = "ee00112233445566778899aabbccddeeff676f6f676c652e636f6d";
+            var silent = new MtProtoProxy { Server = "127.0.0.1", Port = silentPort, Secret = validSecret };
+            var unreachable = new MtProtoProxy
+            {
+                Server = "127.0.0.1",
+                Port = FindFreePort(23200),
+                Secret = validSecret,
+            };
+            var brokenSecret = new MtProtoProxy
+            {
+                Server = "127.0.0.1",
+                Port = silentPort,
+                Secret = "7pJZSUjIp-43RmluNUkNmWNkbnMuZ11vZ2xlLmNvbQ==",
+            };
+
             await MtProtoService.TestAsync(
-                new[] { aliveProxy, deadProxy },
+                new[] { silent, unreachable, brokenSecret },
                 null,
                 null,
                 CancellationToken.None,
-                concurrency: 2,
+                concurrency: 3,
                 timeoutMs: 1500);
-            Check(aliveProxy.Status == MtProtoStatus.Working && aliveProxy.DelayMs is not null,
-                "MTProto: отвечающий сервер → рабочий");
-            Check(deadProxy.Status == MtProtoStatus.Dead && deadProxy.DeadAtUtc is not null,
-                "MTProto: молчащий сервер → нерабочий с датой");
 
-            listener.Stop();
-            var revive = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, deadPort);
-            revive.Start();
-            try
-            {
-                await MtProtoService.TestAsync(
-                    new[] { deadProxy },
-                    null,
-                    null,
-                    CancellationToken.None,
-                    concurrency: 1,
-                    timeoutMs: 1500);
-                Check(deadProxy.Status == MtProtoStatus.Working && deadProxy.DeadAtUtc is null,
-                    "MTProto: повторная проверка возвращает прокси в список");
-            }
-            finally
-            {
-                revive.Stop();
-            }
+            Check(silent.Status == MtProtoStatus.Dead,
+                "MTProto: открытый порт без MTProto — нерабочий");
+            Check(unreachable.Status == MtProtoStatus.Dead && unreachable.DeadAtUtc is not null,
+                "MTProto: закрытый порт — нерабочий с датой");
+            Check(brokenSecret.Status == MtProtoStatus.Dead,
+                "MTProto: секрет с испорченным доменом — нерабочий");
         }
         finally
         {
@@ -3181,6 +3308,121 @@ internal static class Program
         }
 
         Check(proxies.Count > 0, "MTProto-прокси получены");
+    }
+
+    /// <summary>
+    /// Живая проверка MTProto: настоящий FakeTLS-хендшейк и запрос к Telegram, а не TCP-коннект.
+    /// Показывает, какие прокси из кэша действительно годятся для Telegram.
+    /// </summary>
+    private static async Task RunMtProtoCheckAsync(int limit, string? filter)
+    {
+        var all = MtProtoService.LoadCache();
+        var candidates = all
+            .Where(proxy => filter is null || proxy.Server.Contains(filter, StringComparison.OrdinalIgnoreCase))
+            .Where(proxy => MtProtoSecret.TryParse(proxy.Secret) is not null)
+            .OrderByDescending(proxy => proxy.Status == MtProtoStatus.Working)
+            .ThenBy(proxy => proxy.DelayMs ?? int.MaxValue)
+            .Take(Math.Max(1, limit))
+            .ToList();
+
+        Console.WriteLine($"Проверка MTProto настоящим хендшейком: {candidates.Count} из {all.Count} в кэше");
+        var working = 0;
+        var repaired = 0;
+        var lost = 0;
+        var consoleLock = new object();
+        using var limiter = new SemaphoreSlim(8);
+        var tasks = candidates.Select(async proxy =>
+        {
+            await limiter.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                var probe = await MtProtoProbe.CheckAsync(
+                        proxy.Server, proxy.Port, proxy.Secret, MtProtoProbe.DefaultTimeoutMs, CancellationToken.None)
+                    .ConfigureAwait(false);
+                var delay = probe.DelayMs;
+                var secret = MtProtoSecret.TryParse(proxy.Secret);
+                lock (consoleLock)
+                {
+                    if (probe.Alive)
+                    {
+                        working++;
+                    }
+
+                    if (probe.Alive && proxy.Status != MtProtoStatus.Working)
+                    {
+                        repaired++;
+                    }
+
+                    if (!probe.Alive && proxy.Status == MtProtoStatus.Working)
+                    {
+                        lost++;
+                    }
+
+                    var kind = secret?.Kind switch
+                    {
+                        MtProtoSecretKind.FakeTls => "FakeTLS/" + secret.Host,
+                        MtProtoSecretKind.PaddedIntermediate => "dd",
+                        _ => "plain",
+                    };
+                    Console.WriteLine($"  {(probe.Alive ? "ok  " : "НЕТ ")} {proxy.Server}:{proxy.Port} " +
+                                      $"{delay?.ToString() ?? "—"} мс (рукопожатие {probe.HandshakeMs} мс), {kind}, " +
+                                      $"было: {MtProtoStatusName(proxy.Status)}");
+                }
+            }
+            finally
+            {
+                limiter.Release();
+            }
+        });
+
+        await Task.WhenAll(tasks);
+        Console.WriteLine($"Итого: работают {working} из {candidates.Count}; " +
+                          $"ожили {repaired}, оказались мёртвыми {lost}");
+    }
+
+    /// <summary>Проверка одного прокси по адресу и секрету.</summary>
+    /// <summary>Живой сбор MTProto с сайтов: проверяет, что веб-списки больше не игнорируются.</summary>
+    private static async Task RunMtProtoSitesAsync()
+    {
+        var sources = NodeSourceService.DefaultSources()
+            .Where(source => source.Kind == SourceKind.MtProto)
+            .ToList();
+        Console.WriteLine($"Сайты MTProto: {sources.Count}");
+        var total = 0;
+        foreach (var source in sources)
+        {
+            try
+            {
+                var proxies = await MtProtoService.FetchAsync(source, CancellationToken.None);
+                total += proxies.Count;
+                Console.WriteLine("  " + source.Name + ": " + proxies.Count +
+                                  (proxies.Count > 0 ? " (" + proxies[0].Server + ")" : string.Empty));
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                Console.WriteLine("  " + source.Name + ": ошибка — " + exception.Message);
+            }
+        }
+
+        Console.WriteLine($"ИТОГО с сайтов: {total}");
+        Check(total > 0, "хотя бы один сайт MTProto дал прокси");
+    }
+
+    private static async Task RunMtProtoHostAsync(string server, int port, string secret)
+    {
+        var parsed = MtProtoSecret.TryParse(secret);
+        Console.WriteLine($"Прокси {server}:{port}");
+        Console.WriteLine(parsed is null
+            ? "  секрет: не разбирается (нет ключа или испорчен домен)"
+            : $"  секрет: {parsed.Kind}" + (parsed.Host.Length > 0 ? $", домен {parsed.Host}" : string.Empty));
+
+        var probe = await MtProtoProbe.CheckAsync(
+            server, port, secret, MtProtoProbe.DefaultTimeoutMs, CancellationToken.None,
+            message => Console.WriteLine("  · " + message));
+        Console.WriteLine(probe.Alive
+            ? $"  результат: работает, пинг {probe.DelayMs} мс (рукопожатие {probe.HandshakeMs} мс)"
+            : "  результат: Telegram через этот прокси не ответил" +
+              (probe.TcpConnected ? " (TCP есть, рукопожатие не прошло)" : string.Empty));
     }
 
     /// <summary>Проверка загрузки одной подписки: формат, узлы, остаток трафика.</summary>

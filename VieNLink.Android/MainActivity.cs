@@ -287,7 +287,11 @@ public sealed partial class MainActivity : BaseActivity
         nameRow.AddView(Ui.Text(this, "VieNLink", 21f, P.TextStrong, bold: true));
         nameRow.AddView(Ui.Badge(this, P, "БЕТА", P.Warning));
         titles.AddView(nameRow);
-        var subtitle = Ui.Text(this, "Прокси, обход блокировок и Telegram", 11.5f, P.Muted);
+        var subtitle = Ui.Text(this,
+            (StoreBuildInfo.IsStoreBuild
+                ? "Прокси и подключение · v"
+                : "Прокси, обход блокировок и Telegram · v") + UpdateCenter.CurrentVersion(this),
+            11.5f, P.Muted);
         subtitle.SetPadding(0, Ui.Dp(this, 2), 0, 0);
         titles.AddView(subtitle);
         top.AddView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
@@ -324,7 +328,8 @@ public sealed partial class MainActivity : BaseActivity
         // Мини-иконки сервисов с числом проверенных узлов, которые к ним подключаются.
         var counters = Ui.Row(this);
         counters.SetPadding(0, Ui.Dp(this, 10), 0, 0);
-        counters.AddView(ServiceCounter(Resource.Drawable.ic_service_youtube, P.YouTube, out _youtubeCount),
+        counters.AddView(ServiceCounter(Resource.Drawable.ic_service_youtube_brand, P.YouTube, out _youtubeCount,
+                tintIcon: false),
             new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         counters.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 6), 1));
         counters.AddView(ServiceCounter(Resource.Drawable.ic_service_discord, P.Discord, out _discordCount),
@@ -345,9 +350,14 @@ public sealed partial class MainActivity : BaseActivity
             () => _ = FindNodesAsync(), Resource.Drawable.ic_nodes);
         var measure = Ui.Pill(this, P, "Скорость", UiButtonKind.Ghost, () => _ = RunSpeedAsync(false),
             Resource.Drawable.ic_speed);
-        actions.AddView(_findButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.3f));
+        _nextNodeButton = Ui.Pill(this, P, "Дальше", UiButtonKind.Accent,
+            () => _ = SwitchToNextNodeAsync(), Resource.Drawable.ic_refresh);
+        _nextNodeButton.Visibility = ViewStates.Gone;
+        actions.AddView(_findButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1.2f));
         actions.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 8), 1));
-        actions.AddView(measure, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        actions.AddView(measure, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.9f));
+        actions.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 8), 1));
+        actions.AddView(_nextNodeButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 0.9f));
         card.AddView(actions);
 
         _connectionStatus = Ui.Hint(this, "Загружаю узлы…", P);
@@ -361,7 +371,7 @@ public sealed partial class MainActivity : BaseActivity
     /// Мини-иконка сервиса и число проверенных узлов с доступом к нему:
     /// пользователь сразу видит, сколько серверов готово для каждой кнопки.
     /// </summary>
-    private LinearLayout ServiceCounter(int icon, Color tone, out TextView? count)
+    private LinearLayout ServiceCounter(int icon, Color tone, out TextView? count, bool tintIcon = true)
     {
         var chip = Ui.Row(this);
         chip.SetPadding(Ui.Dp(this, 6), Ui.Dp(this, 4), Ui.Dp(this, 6), Ui.Dp(this, 4));
@@ -372,7 +382,11 @@ public sealed partial class MainActivity : BaseActivity
         var drawable = Ui.Icon(this, icon);
         if (drawable is not null)
         {
-            drawable.SetTint(tone);
+            if (tintIcon)
+            {
+                drawable.SetTint(tone);
+            }
+
             image.SetImageDrawable(drawable);
         }
 
@@ -441,6 +455,13 @@ public sealed partial class MainActivity : BaseActivity
             _disconnect.Visibility = running || serviceStarting || _connecting || CoreRuntime.IsRunning
                 ? ViewStates.Visible
                 : ViewStates.Gone;
+        }
+
+        if (_nextNodeButton is not null)
+        {
+            // «Дальше» — переключение на следующий проверенный узел без разрыва туннеля.
+            _nextNodeButton.Visibility = running ? ViewStates.Visible : ViewStates.Gone;
+            _nextNodeButton.Enabled = !_connecting;
         }
 
         var selected = NodeStore.Selected;
@@ -520,12 +541,20 @@ public sealed partial class MainActivity : BaseActivity
 
                 // «Рабочих» и «универсальных» отдельно не пишем: это уже видно по иконкам сервисов.
                 // Во время подключения показываем ход поиска узла, а не сводку.
+                // Фоновая проверка тоже видна: без этого казалось, что приложение молчит.
                 var countText = $"В списке {summary.Total} узлов";
+                var probeActivity = ProbeClient.ActivityText;
                 _connectionStatus.Text = _connecting && _connectText is not null
                     ? _connectText
                     : _headerDetail is not null && (_finding || DateTime.UtcNow < _headerDetailUntil)
                         ? _headerDetail
-                        : countText;
+                        : probeActivity ?? countText;
+                if (_findButton is not null && !_connecting)
+                {
+                    _findButton.Text = _finding || (ProbeClient.IsRunning && !ProbeClient.IsPaused)
+                        ? "Остановить поиск"
+                        : "Проверить узлы";
+                }
             }
             catch (Exception exception)
             {
@@ -706,25 +735,26 @@ public sealed partial class MainActivity : BaseActivity
 
     /// <summary>
     /// Кнопка шапки «Проверить узлы»: проверяет ещё не проверенные узлы в процессе :probe
-    /// и показывает ход прямо в шапке, не уводя на другие вкладки.
+    /// и показывает ход прямо в шапке, не уводя на другие вкладки. Повторное нажатие
+    /// во время поиска останавливает и текущую партию, и фоновый поиск.
     /// </summary>
     private async Task FindNodesAsync()
     {
-        if (_finding)
+        if (_finding || ProbeClient.IsRunning)
         {
-            Ui.Toast(this, "Поиск узлов уже идёт");
+            ProbeClient.Cancel();
+            _headerDetail = "Поиск узлов остановлен";
+            _headerDetailUntil = DateTime.UtcNow.AddSeconds(15);
+            UpdateFindButton("Проверить узлы");
+            RefreshHeader();
             return;
         }
 
-        if (ProbeClient.IsRunning)
-        {
-            Ui.Toast(this, "Проверка узлов уже идёт — дождитесь окончания");
-            return;
-        }
-
+        // Явное действие пользователя снимает прежнюю остановку.
+        ProbeClient.Resume();
         _finding = true;
         _headerDetail = "Проверяю узлы: готовлю проверку…";
-        UpdateFindButton("Проверяю узлы…");
+        UpdateFindButton("Остановить поиск");
         RefreshHeader();
 
         try
@@ -745,9 +775,7 @@ public sealed partial class MainActivity : BaseActivity
 
             _headerDetail = summary.Error is not null
                 ? summary.Error
-                : $"Проверено {summary.Tested}: рабочих {summary.Working} " +
-                  $"(универс. {summary.Universal}, YouTube {summary.Youtube}, " +
-                  $"Telegram {summary.Telegram}, Discord {summary.Discord})";
+                : $"Проверено {summary.Tested}: рабочих {summary.Working}";
         }
         catch (Exception exception)
         {
@@ -785,15 +813,100 @@ public sealed partial class MainActivity : BaseActivity
     private string? _connectText;
     private CancellationTokenSource? _connectCts;
     private bool _finding;
+    private bool _switchingNode;
     private string? _headerDetail;
     private DateTime _headerDetailUntil = DateTime.MinValue;
     private TextView? _findButton;
+    private TextView? _nextNodeButton;
 
     /// <summary>
     /// Сколько партий по 150 узлов проверять, пока не найдётся узел с доступом к сервису.
     /// Узлы проверяются без повторов, поэтому следующее нажатие продолжит с этого места.
     /// </summary>
     private const int FindForServiceBatches = 10;
+
+    /// <summary>
+    /// Кнопка «Дальше»: переключает на следующий проверенный узел, отсортированный по пингу.
+    /// Если узел уже в текущем конфиге — переключение через Clash selector, без перезапуска
+    /// TUN и без разрыва уже открытых приложений.
+    /// </summary>
+    private async Task SwitchToNextNodeAsync()
+    {
+        if (_switchingNode || _connecting)
+        {
+            return;
+        }
+
+        if (TunnelService.State != TunnelState.Running || !CoreRuntime.IsRunning)
+        {
+            Ui.Toast(this, "Сначала подключитесь к узлу");
+            return;
+        }
+
+        _switchingNode = true;
+        try
+        {
+            var now = DateTime.UtcNow;
+            var settings = NodeStore.Settings;
+            var ordered = NodeStore.Snapshot()
+                .Where(node => NodeAvailability.IsUsable(
+                    node, NodeLimits.WorkingRecheckMinutes, settings.ConnectOnlyMine, now))
+                .OrderBy(node => node.DelayMs ?? int.MaxValue)
+                .ThenByDescending(node => node.IsMine)
+                .ThenByDescending(node => node.OpenDomains)
+                .ToList();
+            if (ordered.Count == 0)
+            {
+                Ui.Toast(this, "Нет проверенных узлов: нажмите «Проверить узлы»");
+                return;
+            }
+
+            var currentId = NodeStore.Selected?.Id;
+            var index = ordered.FindIndex(node => node.Id == currentId);
+            var next = ordered[(index + 1) % ordered.Count];
+            if (currentId == next.Id)
+            {
+                Ui.Toast(this, "Других проверенных узлов нет");
+                return;
+            }
+
+            ShowHeaderDetail("Переключаю узел…", 6);
+            if (CoreRuntime.LoadedTags.Contains(next.Tag))
+            {
+                using var api = new ClashApiClient(CoreRuntime.ApiPort, CoreRuntime.ApiSecret);
+                await api.SelectAsync(SingBoxConfigBuilder.SelectorTag, next.Tag, CancellationToken.None);
+                NodeStore.Select(next);
+                TunnelService.UpdateNodeLabel(next.DisplayDelay);
+                _speedMeasured = false;
+                ShowHeaderDetail("Узел переключён · " + next.DisplayDelay, 10);
+                Ui.Toast(this, "Узел переключён · " + next.DisplayDelay);
+                ScheduleExitProbe();
+                return;
+            }
+
+            NodeStore.Select(next);
+            var config = NodeStore.BuildTunnelConfig(out var error);
+            if (config is null)
+            {
+                Ui.Toast(this, error ?? "Не удалось собрать конфиг");
+                return;
+            }
+
+            _speedMeasured = false;
+            ShowHeaderDetail("Переключаю узел…", 6);
+            StartWithConfig(config);
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("health", "Переключение на следующий узел не удалось", exception);
+            Ui.Toast(this, "Не удалось переключить узел");
+        }
+        finally
+        {
+            _switchingNode = false;
+            RefreshHeader();
+        }
+    }
 
     private async void StartForService(NodeStore.QuickService service)
     {
@@ -809,6 +922,8 @@ public sealed partial class MainActivity : BaseActivity
         RefreshHeader();
         try
         {
+            // Кнопка сервиса — явное действие: снимаем прежнюю остановку поиска.
+            ProbeClient.Resume();
             NodeStore.EnsureLoaded();
             var name = ServiceName(service);
             var progress = new Progress<string>(ReportConnect);
@@ -1001,6 +1116,13 @@ public sealed partial class MainActivity : BaseActivity
         catch (Exception)
         {
             // Источник отмены мог уже освободиться.
+        }
+
+        if (_connecting)
+        {
+            // Проверка перед подключением идёт в :probe — гасим и её,
+            // иначе она продолжила бы тратить трафик после отмены.
+            ProbeClient.Cancel();
         }
 
         StopTrafficMonitor();

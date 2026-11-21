@@ -127,16 +127,16 @@ public partial class MainWindow
         var node = PickNodeForService(service);
         if (node is null)
         {
-            var name = service switch
-            {
-                "youtube" => "YouTube",
-                "telegram" => "Telegram",
-                "discord" => "Discord",
-                _ => "универсальным доступом",
-            };
+            // Свежих узлов нет: проверяем тех, кто раньше открывал этот сервис.
+            node = await FindNodeForServiceAsync(service);
+        }
+
+        if (node is null)
+        {
             MessageBox.Show(this,
-                $"Нет проверенных узлов с доступом: {name}.\n\n" +
-                "Обновите списки и нажмите «Все узлы» на вкладке «Узлы».",
+                $"Сейчас нет узлов с подтверждённым доступом: {ServiceDisplayName(service)}.\n\n" +
+                "Проверенные ранее узлы не отвечают. Фоновая проверка продолжает искать замену — " +
+                "попробуйте через минуту или нажмите «Все узлы» на вкладке «Узлы».",
                 "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -166,28 +166,98 @@ public partial class MainWindow
         QuickConnectPage.Visibility = Visibility.Visible;
     }
 
-    /// <summary>Узел для сервиса: только проверенные, по числу открытых доменов и задержке.</summary>
+    /// <summary>
+    /// Узел для сервиса: только свежая проверка, сначала самый быстрый (по пингу).
+    /// Правило то же, что у счётчиков в шапке: число на значке и результат кнопки
+    /// не должны расходиться.
+    /// </summary>
     private ProxyNode? PickNodeForService(string service)
     {
-        var pool = _workingRows
+        var now = DateTime.UtcNow;
+        return _workingRows
             .Select(row => row.Node)
-            .Where(node => node.DelayMs is not null &&
-                           (!_settings.ConnectOnlyMine || node.IsMine));
-
-        Func<ProxyNode, bool> opened = service switch
-        {
-            "youtube" => node => node.YoutubeOk == true,
-            "telegram" => node => node.TelegramOk == true,
-            "discord" => node => node.DiscordOk == true,
-            _ => node => node.UniversalOk == true || node.DelayMs is not null,
-        };
-
-        return pool
-            .Where(opened)
-            .OrderByDescending(node => node.OpenDomains)
-            .ThenBy(node => node.DelayMs)
+            .Where(node => NodeAvailability.IsUsable(
+                node, NodeLimits.WorkingRecheckMinutes, _settings.ConnectOnlyMine, now) &&
+                           NodeAvailability.OpenedFor(node, service))
+            .OrderBy(node => node.DelayMs)
+            .ThenByDescending(node => node.OpenDomains)
             .ThenByDescending(node => node.IsMine)
             .FirstOrDefault();
+    }
+
+    /// <summary>Название сервиса для сообщений.</summary>
+    private static string ServiceDisplayName(string service) => service switch
+    {
+        "youtube" => "YouTube",
+        "telegram" => "Telegram",
+        "discord" => "Discord",
+        _ => "универсальным доступом",
+    };
+
+    /// <summary>
+    /// Свежих узлов для сервиса нет: проверяем скрытым ядром тех, кто раньше открывал
+    /// этот сервис (данные устарели), и снова выбираем. null — живых не нашлось
+    /// или пробное ядро занято фоновой проверкой.
+    /// </summary>
+    private async Task<ProxyNode?> FindNodeForServiceAsync(string service)
+    {
+        var now = DateTime.UtcNow;
+        var candidates = AllRows
+            .Select(row => row.Node)
+            .Where(node => node.Status != NodeStatus.Dead &&
+                           NodeAvailability.OpenedFor(node, service) &&
+                           (!_settings.ConnectOnlyMine || node.IsMine) &&
+                           !NodeAvailability.IsUsable(
+                               node, NodeLimits.WorkingRecheckMinutes, _settings.ConnectOnlyMine, now))
+            .OrderBy(node => node.DelayMs ?? int.MaxValue)
+            .Take(Math.Clamp(_settings.IdleTestBatch, 5, 40))
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            return null;
+        }
+
+        if (!BeginOperation("поиск узла"))
+        {
+            return null;
+        }
+
+        try
+        {
+            SetStatus("Ищу узел", $"Проверяю {candidates.Count} узлов: {ServiceDisplayName(service)}");
+            var progress = new Progress<string>(line => StatusDetail.Text = line);
+            var summary = await _probe.TestAsync(
+                candidates,
+                _settings,
+                progress,
+                node => Dispatcher.BeginInvoke(() => ApplyTestedNode(node)),
+                _operation!.Token,
+                concurrency: 4,
+                timeoutMs: 3000,
+                waitForGate: false);
+            await RepartitionAndSaveAsync();
+            if (summary.Total == 0)
+            {
+                return null;
+            }
+
+            AppendLog($"Поиск узла: проверено {summary.Total}, рабочих {summary.Working}");
+            return PickNodeForService(service);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("probe", "Поиск узла перед подключением не удался", exception);
+            return null;
+        }
+        finally
+        {
+            EndOperation();
+            UpdateConnectionUi();
+        }
     }
 
     private async Task ConnectAsync(ProxyNode node, bool automatic = false, IReadOnlyList<string>? probeUrls = null)
@@ -267,7 +337,7 @@ public partial class MainWindow
             var targetLabel = targetUrls.Count == 1
                 ? targetUrls[0]
                 : targetUrls[0] + $" и ещё {targetUrls.Count - 1}";
-            var telegramNeeded = _sources.Any(s => s.Enabled && s.Kind == SourceKind.Telegram);
+            var telegramNeeded = _sources.Any(s => s.Enabled && SourceKinds.IsProxy(s));
             var firstFamily = NodeRanking.Family(node);
             var candidates = new List<ProxyNode> { node };
             candidates.AddRange(_workingRows
@@ -310,7 +380,7 @@ public partial class MainWindow
                         _ = RefreshExitInfoAsync();
 
                         // t.me напрямую недоступен, но теперь канал можно прочитать через прокси.
-                        if (_sources.Any(s => s.Enabled && s.Kind == SourceKind.Telegram))
+                        if (_sources.Any(s => s.Enabled && SourceKinds.IsProxy(s)))
                         {
                             try
                             {
@@ -418,16 +488,17 @@ public partial class MainWindow
 
     private ProxyNode? PickBestNode()
     {
-        // Только проверенные узлы: никаких попыток подключения «наугад» к мёртвым серверам.
-        var telegramNeeded = _sources.Any(s => s.Enabled && s.Kind == SourceKind.Telegram);
+        // Только проверенные узлы со свежей проверкой: «рабочий» из старого кэша
+        // мог умереть, пока приложение было закрыто. Первым — самый быстрый.
+        var now = DateTime.UtcNow;
         var pool = _workingRows
             .Select(r => r.Node)
-            .Where(n => n.DelayMs is not null && (!_settings.ConnectOnlyMine || n.IsMine))
-            .OrderByDescending(n => telegramNeeded && n.TelegramOk == true)
+            .Where(n => NodeAvailability.IsUsable(
+                n, NodeLimits.WorkingRecheckMinutes, _settings.ConnectOnlyMine, now))
+            .OrderBy(n => n.DelayMs ?? int.MaxValue)
             .ThenByDescending(n => n.IsMine)
             .ThenByDescending(n => n.OpenDomains)
             .ThenByDescending(NodeRanking.Score)
-            .ThenBy(n => n.DelayMs)
             .ToList();
 
         if (pool.Count == 0 && !_settings.ConnectOnlyVerified)
@@ -576,18 +647,93 @@ public partial class MainWindow
             : $"Узел не отвечает ({node.FailCount} из {NodeLimits.RemoveAfterFailures}) — {reason}");
     }
 
+    /// <summary>Кнопка «Дальше»: следующий проверенный узел по возрастанию пинга.</summary>
+    private async void OnNextNodeClick(object sender, RoutedEventArgs e)
+    {
+        if (!_manager.IsConnected || _closing)
+        {
+            return;
+        }
+
+        var next = PickNextNode();
+        if (next is null)
+        {
+            SetStatus("Нет других узлов", "Проверенных узлов больше нет — нажмите «Все узлы» на вкладке «Узлы»");
+            return;
+        }
+
+        if (!BeginOperation("переключение узла"))
+        {
+            return;
+        }
+
+        try
+        {
+            var progress = new Progress<string>(line => StatusDetail.Text = line);
+            SetStatus("Переключаюсь", $"{next.Name} · {next.DisplayDelay}");
+            if (_manager.IsNodeLoaded(next) &&
+                await _manager.SwitchToAsync(next, progress, _operation!.Token))
+            {
+                StatusDetail.Text = "Проверяю новый узел…";
+                if (await _manager.VerifyThroughProxyAsync(_operation.Token))
+                {
+                    _warmSwitchCount++;
+                    _lastFailoverUtc = DateTime.UtcNow;
+                    FooterText.Text = $"Прокси 127.0.0.1:{_manager.ActiveMixedPort} — узел {next.Name}";
+                    _tray?.ShowBalloon("Узел переключён", next.Name + Environment.NewLine +
+                                                          "127.0.0.1:" + _manager.ActiveMixedPort);
+                    _ = RefreshExitInfoAsync();
+                    return;
+                }
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            AppLog.Write("proxy", "Переключение на следующий узел не удалось", exception);
+        }
+        finally
+        {
+            EndOperation();
+            UpdateConnectionUi();
+        }
+
+        await ConnectAsync(next, automatic: true);
+    }
+
+    /// <summary>Следующий после текущего в списке свежих проверенных узлов по пингу.</summary>
+    private ProxyNode? PickNextNode()
+    {
+        var now = DateTime.UtcNow;
+        var ordered = _workingRows
+            .Select(row => row.Node)
+            .Where(node => NodeAvailability.IsUsable(
+                node, NodeLimits.WorkingRecheckMinutes, _settings.ConnectOnlyMine, now))
+            .OrderBy(node => node.DelayMs ?? int.MaxValue)
+            .ThenByDescending(node => node.IsMine)
+            .ThenByDescending(node => node.OpenDomains)
+            .ToList();
+        if (ordered.Count < 2)
+        {
+            return null;
+        }
+
+        var currentId = _manager.CurrentNode?.Id;
+        var index = ordered.FindIndex(node => node.Id == currentId);
+        return ordered[(index + 1) % ordered.Count];
+    }
+
     /// <summary>Следующий рабочий узел, по возможности из другого семейства камуфляжа.</summary>
     private ProxyNode? PickFailoverNode(string? avoidFamily)    {
-        var telegramNeeded = _sources.Any(s => s.Enabled && s.Kind == SourceKind.Telegram);
+        var telegramNeeded = _sources.Any(s => s.Enabled && SourceKinds.IsProxy(s));
         return _workingRows
             .Select(r => r.Node)
             .Where(n => n.DelayMs is not null && !_failedForSession.Contains(n.Id))
-            .OrderBy(n => avoidFamily is not null && NodeRanking.Family(n) == avoidFamily ? 1 : 0)
+            .OrderBy(n => n.DelayMs ?? int.MaxValue)
+            .ThenBy(n => avoidFamily is not null && NodeRanking.Family(n) == avoidFamily ? 1 : 0)
             .ThenByDescending(n => telegramNeeded && n.TelegramOk == true)
             .ThenByDescending(n => n.OpenDomains)
             .ThenByDescending(n => n.IsMine)
             .ThenByDescending(NodeRanking.Score)
-            .ThenBy(n => n.DelayMs)
             .FirstOrDefault();
     }
 
@@ -628,8 +774,8 @@ public partial class MainWindow
         StatusDot.Fill = (Brush)FindResource(connected ? "AccentBrush" : held ? "DangerBrush" : "MutedBrush");
         _tray?.UpdateStatus(connected, null, held);
         Title = connected
-            ? AppInfo.DisplayName + " — подключено"
-            : AppInfo.DisplayName + " — свободные узлы";
+            ? $"{AppInfo.Name} {AppInfo.Version} — подключено"
+            : $"{AppInfo.Name} {AppInfo.Version} — свободные узлы";
         if (!connected)
         {
             _lastTrafficSample = null;

@@ -24,6 +24,9 @@ public sealed class NodesActivity : BaseActivity
 
     private CancellationTokenSource? _work;
     private bool _busy;
+    private bool _testing;
+    private Handler? _handler;
+    private Action? _tick;
 
     private bool _autoRefresh;
     private bool _autoTest;
@@ -45,6 +48,36 @@ public sealed class NodesActivity : BaseActivity
     {
         base.OnResume();
         UpdateSummary();
+
+        // Фоновая проверка идёт в отдельном процессе: без этого такта экран
+        // показывал бы старые числа до следующего действия пользователя.
+        _handler = new Handler(Looper.MainLooper!);
+        _tick = () =>
+        {
+            if (!_busy)
+            {
+                UpdateSummary();
+                if (ProbeClient.ActivityText is { } activity)
+                {
+                    SetProgress(activity);
+                }
+            }
+
+            _handler?.PostDelayed(_tick, 2000);
+        };
+        _handler.PostDelayed(_tick, 2000);
+    }
+
+    protected override void OnPause()
+    {
+        if (_handler is not null && _tick is not null)
+        {
+            _handler.RemoveCallbacks(_tick);
+        }
+
+        _handler = null;
+        _tick = null;
+        base.OnPause();
     }
 
     protected override void OnDestroy()
@@ -180,15 +213,22 @@ public sealed class NodesActivity : BaseActivity
     private void UpdateSummary()
     {
         var nodes = NodeStore.Snapshot();
+        var now = DateTime.UtcNow;
+        var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
+        var onlyMine = NodeStore.Settings.ConnectOnlyMine;
+
+        // Считаем только свежие проверки: «рабочий» узел из кэша мог умереть, пока
+        // телефон лежал. Значки сервисов и кнопки пользуются тем же правилом.
+        bool Usable(ProxyNode node) => NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now);
+
         var working = nodes.Count(node => node.Status == NodeStatus.Working);
+        var fresh = nodes.Count(Usable);
         var mine = nodes.Count(node => node.IsMine);
-        var universal = nodes.Count(node => node.UniversalOk == true || node.DelayMs is not null);
-        var youtube = nodes.Count(node => node.YoutubeOk == true);
-        var telegram = nodes.Count(node => node.TelegramOk == true);
-        var discord = nodes.Count(node => node.DiscordOk == true);
-        var bestDomains = working == 0
-            ? 0
-            : nodes.Where(node => node.Status == NodeStatus.Working).Max(node => node.OpenDomains);
+        var universal = nodes.Count(node => Usable(node) && NodeAvailability.OpenedFor(node, "universal"));
+        var youtube = nodes.Count(node => Usable(node) && NodeAvailability.OpenedFor(node, "youtube"));
+        var telegram = nodes.Count(node => Usable(node) && NodeAvailability.OpenedFor(node, "telegram"));
+        var discord = nodes.Count(node => Usable(node) && NodeAvailability.OpenedFor(node, "discord"));
+        var bestDomains = nodes.Where(Usable).Select(node => node.OpenDomains).DefaultIfEmpty(0).Max();
 
         var lastChecked = nodes
             .Where(node => node.CheckedAtUtc is not null)
@@ -198,7 +238,7 @@ public sealed class NodesActivity : BaseActivity
 
         if (_summary is not null)
         {
-            _summary.Text = $"{nodes.Count} узлов · рабочих {working}";
+            _summary.Text = $"{nodes.Count} узлов · рабочих {fresh}";
         }
 
         if (_detail is not null)
@@ -207,7 +247,8 @@ public sealed class NodesActivity : BaseActivity
                 ? "проверок ещё не было"
                 : "проверено " + lastChecked.ToLocalTime().ToString("dd.MM HH:mm");
             _detail.Text = $"Доступ: универсальный {universal}, YouTube {youtube}, Telegram {telegram}, Discord {discord}\n" +
-                           $"Мои подписки: {mine} · лимит {NodeStore.Settings.MaxTotalNodes} · " +
+                           $"Всего рабочих в списке: {working} · мои подписки: {mine} · " +
+                           $"лимит {NodeStore.Settings.MaxTotalNodes} · " +
                            $"макс. доменов {bestDomains} · {checkedText}";
         }
     }
@@ -258,18 +299,33 @@ public sealed class NodesActivity : BaseActivity
 
     private async Task RunTestAsync()
     {
+        if (_testing)
+        {
+            // Повторное нажатие останавливает проверку — и ручную, и фоновую.
+            _work?.Cancel();
+            ProbeClient.Cancel();
+            SetProgress("Поиск узлов остановлен");
+            HideTestProgress();
+            return;
+        }
+
         if (_busy)
         {
-            Ui.Toast(this, "Дождитесь окончания операции");
+            Ui.Toast(this, "Дождитесь окончания обновления");
             return;
         }
 
         if (ProbeClient.IsRunning)
         {
-            Ui.Toast(this, "Проверка узлов уже идёт — дождитесь окончания");
+            // Идёт фоновая партия: останавливаем её, не запуская вторую.
+            ProbeClient.Cancel();
+            SetProgress("Поиск узлов остановлен");
             return;
         }
 
+        // Явное действие пользователя снимает прежнюю остановку поиска.
+        ProbeClient.Resume();
+        _testing = true;
         _busy = true;
         _work = new CancellationTokenSource();
         ShowTestProgress(new ProbeProgress("Запускаю проверку узлов…", 0, 0, 0));
@@ -289,6 +345,7 @@ public sealed class NodesActivity : BaseActivity
         }
         finally
         {
+            _testing = false;
             _busy = false;
             HideTestProgress();
             UpdateSummary();

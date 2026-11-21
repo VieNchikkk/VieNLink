@@ -1,4 +1,4 @@
-﻿# Версии и совместимость
+# Версии и совместимость
 
 ## Схема версий
 
@@ -9,11 +9,25 @@ VieNLink использует Semantic Versioning: `MAJOR.MINOR.PATCH[-beta.N]`.
 - **PATCH** — исправления и небольшие улучшения.
 - **`-beta.N`** — предрелизная сборка. На GitHub такие релизы помечаются как **Pre-release**.
 
-Текущие версии: Windows — **1.0.10-beta**, Android — **1.1.1**.
+Текущие версии: Windows и Android — **1.3.1** (единая линейка).
+
+## Единая версия Windows и Android
+
+С версии **1.3.0** номер общий. Он задаётся один раз в `build/Version.props`
+(`VieNLinkVersion`), оба проекта импортируют файл:
+
+- Windows: `Version`, `FileVersion`, `InformationalVersion` (`1.3.0-beta`);
+- Android: `ApplicationDisplayVersion` (`1.3.0`), `ApplicationVersion`
+  (`VieNLinkVersionCode`).
+
+`versionCode` Android вычисляется по номеру: `major*10000 + minor*100 + patch`
+(1.3.0 → 10300, 1.3.1 → 10301, 1.4.0 → 10400) и обязан только расти.
+Тег Windows — `v1.3.0-beta`, Android — `v1.3.0-android`: числовая часть одинаковая,
+суффикс платформы остаётся только в теге.
 
 Платформы версионируются отдельно: у Windows- и Android-клиента свои номера, потому что
 объём изменений разный. Тег релиза содержит платформу, если она не Windows:
-`v1.0.10-beta` (Windows) и `v1.1.1-android` (Android). Оба обновлятора различают релизы
+`v1.0.14-beta` (Windows) и `v1.1.5-android` (Android). Оба обновлятора различают релизы
 по вложенным файлам: Windows ищет `setup.exe`/ZIP, Android — APK.
 
 ## Где хранится версия
@@ -32,10 +46,10 @@ VieNLink использует Semantic Versioning: `MAJOR.MINOR.PATCH[-beta.N]`.
 
 | Версия | Поддержка |
 |---|---|
-| Windows 1.0.10-beta (текущая) | Да |
-| Android 1.1.1 (текущая) | Да |
-| Windows 1.0.7-beta и старше | Нет — обновитесь до текущей беты |
-| Android 1.0.x | Нет |
+| Windows 1.3.1-beta (текущая) | Да |
+| Android 1.3.1 (текущая) | Да |
+| Windows 1.3.0 и старше | Нет — обновитесь до текущей беты |
+| Android 1.3.0 и старше | Нет |
 | < 1.0 | Нет |
 
 Пока приложение в бете, поддерживается только последняя сборка. После стабилизации

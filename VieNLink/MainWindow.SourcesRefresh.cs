@@ -72,26 +72,39 @@ public partial class MainWindow
         MergeMtProto(collected.MtProto);
 
         // Переносим результаты проверок: свежий разбор источников их не знает.
-        // Ключ — сервер:порт, поэтому проверенный дубль передаёт результат оставшемуся узлу.
-        var known = new Dictionary<string, ProxyNode>(StringComparer.OrdinalIgnoreCase);
+        // Ключ — стабильный Id (тот же outbound). Один сервер:порт может держать
+        // разные аккаунты: успех одного не доказывает доступ другого.
+        var oldById = new Dictionary<string, ProxyNode>(StringComparer.OrdinalIgnoreCase);
+        var oldByEndpoint = new Dictionary<string, ProxyNode>(StringComparer.OrdinalIgnoreCase);
         foreach (var old in NodeDedup.Collapse(AllRows.Select(r => r.Node)))
         {
-            known[old.EndpointKey] = old;
+            oldById[old.Id] = old;
+            oldByEndpoint[old.EndpointKey] = old;
         }
 
         foreach (var node in nodes)
         {
-            if (!known.TryGetValue(node.EndpointKey, out var old))
+            if (oldById.TryGetValue(node.Id, out var old))
             {
-                continue;
+                node.DelayMs = old.DelayMs;
+                node.CheckedAtUtc = old.CheckedAtUtc;
+                node.TriedAtUtc = old.TriedAtUtc;
+                node.YoutubeOk = old.YoutubeOk;
+                node.TelegramOk = old.TelegramOk;
+                node.UniversalOk = old.UniversalOk;
+                node.DiscordOk = old.DiscordOk;
+                node.OpenDomains = old.OpenDomains;
+                node.FailCount = old.FailCount;
+                node.SpeedMbps = old.SpeedMbps;
+                node.Status = old.Status;
+                node.IsMine |= old.IsMine;
             }
-
-            node.DelayMs = old.DelayMs;
-            node.CheckedAtUtc = old.CheckedAtUtc;
-            node.YoutubeOk = old.YoutubeOk;
-            node.TelegramOk = old.TelegramOk;
-            node.Status = old.Status;
-            node.IsMine |= old.IsMine;
+            else if (oldByEndpoint.TryGetValue(node.EndpointKey, out old))
+            {
+                // Тот же адрес, другой аккаунт: только метка «моя»,
+                // проверки остаются за этим узлом.
+                node.IsMine |= old.IsMine;
+            }
         }
 
         _sources = _sources.OrderBy(s => s.Name).ToList();
@@ -109,7 +122,8 @@ public partial class MainWindow
         });
 
         var trimmedNote = nodes.Count > kept.Count ? $" (лимит {_settings.MaxTotalNodes}, отброшено {nodes.Count - kept.Count})" : string.Empty;
-        var summary = $"Загружено {kept.Count} узлов и {_mtprotoRows.Count} MTProto из {_sources.Count(s => s.Enabled)} источников{trimmedNote}";
+        var nodeSourceCount = _sources.Count(s => s.Enabled && !SourceKinds.IsProxy(s));
+        var summary = $"Загружено {kept.Count} узлов и {_mtprotoRows.Count} MTProto из {nodeSourceCount} источников узлов{trimmedNote}";
         StatusDetail.Text = summary;
         AppendLog(summary);
 
@@ -190,7 +204,8 @@ public partial class MainWindow
                 var batch = all.Skip(index).Take(batchSize).ToList();
                 await RunTestAsync(batch, $"Проверка всех узлов ({tested + batch.Count} из {all.Count})");
                 tested += batch.Count;
-                var working = all.Count(n => n.DelayMs is not null);
+                var working = AllRows.Count(row => NodeAvailability.IsUsable(
+                    row.Node, NodeLimits.WorkingRecheckMinutes, _settings.ConnectOnlyMine, DateTime.UtcNow));
                 SetStatus("Проверка узлов", $"Готово {tested} из {all.Count}, рабочих {working}");
             }
         }
@@ -321,9 +336,10 @@ public partial class MainWindow
         }
 
         var working = summary.Working;
-        StatusDetail.Text = $"Проверено {summary.Total}: YouTube {summary.YoutubeOk}, " +
-                            $"Telegram {summary.TelegramOk}, лучший открывает доменов {summary.BestDomains}, " +
-                            $"рабочих {working}";
+        // Только итоги последней партии: общие счётчики сервисов уже показаны
+        // иконками в шапке, и дублировать их нулями из одной партии нельзя.
+        StatusDetail.Text = $"Последняя партия: проверено {summary.Total} · рабочих {working} · " +
+                            $"лучший открывает доменов {summary.BestDomains}";
         FooterText.Text = working > 0
             ? $"Рабочих узлов: {working}. Подключение — 127.0.0.1:{_manager.ActiveMixedPort}"
             : "Рабочих узлов не найдено: нерабочие узлы удалены из списка";

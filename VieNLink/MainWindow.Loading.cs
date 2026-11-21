@@ -436,22 +436,29 @@ public partial class MainWindow
         }
 
         var nodes = AllRows.Select(row => row.Node).ToList();
+        var now = DateTime.UtcNow;
+        var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
+
+        // Значки сервисов показывают только то, что реально возьмёт кнопка: рабочий узел
+        // со свежей проверкой и тем же фильтром «только мои». Устаревшая запись из кэша
+        // иначе обещает узел, который уже не отвечает.
+        bool Usable(ProxyNode node) => NodeAvailability.IsUsable(
+            node, recheckMinutes, _settings.ConnectOnlyMine, now);
+        var universal = nodes.Count(node => Usable(node) && NodeAvailability.OpenedFor(node, "universal"));
+        var youtube = nodes.Count(node => Usable(node) && NodeAvailability.OpenedFor(node, "youtube"));
+        var telegram = nodes.Count(node => Usable(node) && NodeAvailability.OpenedFor(node, "telegram"));
+        var discord = nodes.Count(node => Usable(node) && NodeAvailability.OpenedFor(node, "discord"));
+        var fresh = nodes.Count(Usable);
         var working = nodes.Count(node => node.Status == NodeStatus.Working);
-        var universal = nodes.Count(node => node.UniversalOk == true || node.DelayMs is not null);
-        var youtube = nodes.Count(node => node.YoutubeOk == true);
-        var telegram = nodes.Count(node => node.TelegramOk == true);
-        var discord = nodes.Count(node => node.DiscordOk == true);
 
-        UniversalNodeCount = nodes.Count(node => node.DelayMs is not null);
-        YoutubeNodeCount = nodes.Count(node => node.DelayMs is not null && node.YoutubeOk == true);
-        TelegramNodeCount = nodes.Count(node => node.DelayMs is not null && node.TelegramOk == true);
-        DiscordNodeCount = nodes.Count(node => node.DelayMs is not null && node.DiscordOk == true);
-        var bestDomains = working == 0
-            ? 0
-            : nodes.Where(node => node.Status == NodeStatus.Working)
-                   .Max(node => node.OpenDomains);
+        UniversalNodeCount = universal;
+        YoutubeNodeCount = youtube;
+        TelegramNodeCount = telegram;
+        DiscordNodeCount = discord;
+        var bestDomains = nodes.Where(Usable).Select(node => node.OpenDomains).DefaultIfEmpty(0).Max();
 
-        NodesSummaryText.Text = $"В списке: {nodes.Count} узлов · рабочих: {working}";
+        NodesSummaryText.Text = $"В списке: {nodes.Count} узлов · рабочих: {working} · " +
+                                $"свежих: {fresh} (проверены за {recheckMinutes} мин)";
         if (NodesAccessText is not null)
         {
             NodesAccessText.Text = $"Доступ: универс. {universal}, YouTube {youtube}, " +
@@ -460,11 +467,30 @@ public partial class MainWindow
         }
 
         // Постоянная строка в шапке: её не перетирают ход проверки и сообщения операций.
+        // Числа под иконками сервисов — проверенные рабочие узлы с доступом к каждому.
         if (HeaderNodesText is not null)
         {
-            HeaderNodesText.Text = $"Загруженные узлы: {nodes.Count} · " +
-                                   $"YouTube {youtube} · Discord {discord} · Telegram {telegram} · " +
-                                   $"Универсальных {universal}";
+            HeaderNodesText.Text = $"Узлы: {nodes.Count}";
+        }
+
+        if (HeaderYoutubeText is not null)
+        {
+            HeaderYoutubeText.Text = YoutubeNodeCount.ToString();
+        }
+
+        if (HeaderDiscordText is not null)
+        {
+            HeaderDiscordText.Text = DiscordNodeCount.ToString();
+        }
+
+        if (HeaderTelegramText is not null)
+        {
+            HeaderTelegramText.Text = TelegramNodeCount.ToString();
+        }
+
+        if (HeaderUniversalText is not null)
+        {
+            HeaderUniversalText.Text = UniversalNodeCount.ToString();
         }
     }
 
