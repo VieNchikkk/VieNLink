@@ -1,9 +1,9 @@
-# AGENTS.md — VieNLink
+﻿# AGENTS.md — VieNLink
 
 ## Статус
 Бета-версия: основные режимы проверены, но возможны сбои. Статус виден в интерфейсе
 (значок «БЕТА» в шапке, «Общие», заголовок окна) и в установщике; снимается
-константой `AppInfo.IsBeta` в `VieNLink/AppInfo.cs`.
+константой `AppInfo.IsBeta` в `VieNLink.Core/AppInfo.cs`.
 
 Проект **личный** по происхождению, но **распространяется публично**. Лицензия —
 **GPL-3.0** на весь репозиторий: Android-клиент линкует `libbox` (sing-box, GPL-3.0),
@@ -37,22 +37,22 @@
 - `VieNLink/AutostartService.cs` — автозапуск при входе в Windows через ключ `HKCU\...\Run` (аргумент `--minimized`).
 - `VieNLink/SecretStore.cs` — шифрование DPAPI (P/Invoke `CryptProtectData`) для `sources.dat`.
 - `VieNLink/WindowsIntegration.cs` — выходной IP/страна через узел и снятие loopback-изоляции приложений Магазина (`CheckNetIsolation`).
-- `VieNLink/Models.cs` — `ProxyNode`, `SourceDefinition`, `AppSettings`, `NodeCache`, `SystemProxyBackup`.
-- `VieNLink/ViewModels.cs` — строки таблиц `NodeRow` и `SourceRow`.
-- `VieNLink/NodeRanking.cs` — оценка маскировки узлов (REALITY, uTLS, Vision, WS/gRPC, Hysteria2), семейства камуфляжа и пометки для таблиц.
+- `VieNLink.Core/Models.cs` — `ProxyNode`, `SourceDefinition`, `AppSettings`, `NodeCache`, `SystemProxyBackup`.
+- `VieNLink.Core/ViewModels.cs` — строки таблиц `NodeRow` и `SourceRow`.
+- `VieNLink.Core/NodeRanking.cs` — оценка маскировки узлов (REALITY, uTLS, Vision, WS/gRPC, Hysteria2), семейства камуфляжа и пометки для таблиц.
 - `VieNLink/ZapretService.cs` — обход DPI через zapret: скачивание winws/WinDivert в папку `zapret` рядом с exe (при запрете записи — в `%LOCALAPPDATA%`), запуск и остановка, профиль fake/multidisorder.
 - `VieNLink/DesyncService.cs` — собственный обход DPI на WinDivert (без winws): split/disorder/fake для TLS ClientHello, QUIC-фейк, автоподбор; подвкладка «Обход DPI» в «Обходе блокировок».
-- `VieNLink/TlsFragmentForwarder.cs` — локальный SOCKS5-форвардер для TUN-обхода: прямой TCP-канал и фрагментация TLS ClientHello в пользовательском потоке.
+- `VieNLink.Core/TlsFragmentForwarder.cs` — локальный SOCKS5-форвардер для TUN-обхода: прямой TCP-канал и фрагментация TLS ClientHello в пользовательском потоке.
 - `VieNLink/TunBypassService.cs` — TUN-обход без узла и WinDivert: sing-box TUN → SOCKS5-форвардер, конфиг, запуск/остановка.
-- `VieNLink/LinkParser.cs` — разбор ссылок в outbound-объекты sing-box (vless/vmess/trojan/ss/hysteria2).
-- `VieNLink/NodeSources.cs` — загрузка источников, извлечение ссылок, base64-подписки, текст Telegram, кэш.
-- `VieNLink/SubscriptionParser.cs` — форматы подписок: base64, Xray/sing-box JSON, Clash YAML, `subscription-userinfo`.
+- `VieNLink.Core/LinkParser.cs` — разбор ссылок в outbound-объекты sing-box (vless/vmess/trojan/ss/hysteria2).
+- `VieNLink.Core/NodeSources.cs` — загрузка источников, извлечение ссылок, base64-подписки, текст Telegram, кэш.
+- `VieNLink.Core/SubscriptionParser.cs` — форматы подписок: base64, Xray/sing-box JSON, Clash YAML, `subscription-userinfo`.
 - `VieNLink.Core/MtProtoService.cs` — MTProto-прокси Telegram: `tg://proxy` из HTML каналов и RSS-зеркал, TCP-проверка, статусы «рабочий/нерабочий», кэш; нерабочие хранятся 24 часа. Сбор и проверки идут автономно (`MainWindow.Telegram.cs`, `MtProtoSchedule`), кнопок сбора в UI нет.
-- `VieNLink/SourceDiscoveryService.cs` — автопоиск источников: GitHub search + дерево файлов, обход публичных сайтов с ежедневными подписками и проверка кандидатов.
+- `VieNLink.Core/SourceDiscoveryService.cs` — автопоиск источников: GitHub search + дерево файлов, обход публичных сайтов с ежедневными подписками и проверка кандидатов.
 - `VieNLink/SingBoxCore.cs` — поиск/скачивание ядра и проверка `sing-box version`.
-- `VieNLink/SingBoxConfigBuilder.cs` — сборка конфига: mixed inbound, TUN, правила по процессам и доменам, Clash API.
+- `VieNLink.Core/SingBoxConfigBuilder.cs` — сборка конфига: mixed inbound, TUN, правила по процессам и доменам, Clash API.
 - `VieNLink/SingBoxRunner.cs` — запуск/остановка ядра, `sing-box check`, чтение stderr.
-- `VieNLink/ClashApiClient.cs` — `/proxies/{tag}/delay` и переключение selector.
+- `VieNLink.Core/ClashApiClient.cs` — `/proxies/{tag}/delay` и переключение selector.
 - `VieNLink/HiddenProbeService.cs` — скрытый пробный туннель: отдельный sing-box на своих портах
   (22000+), без TUN и системного прокси; используется фоновой проверкой, чтобы не мешать
   текущему подключению.
@@ -469,3 +469,4 @@ $dotnet = "$env:LOCALAPPDATA\dotnet\dotnet.exe"   # SDK 11 + workload android
 - Тексты UI, логи и комментарии — на русском; 4 пробела, `namespace VieNLink`.
 - После изменений обязательно `dotnet build` и сообщать результат.
 - Не добавлять NuGet-пакеты.
+
