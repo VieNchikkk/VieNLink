@@ -98,7 +98,13 @@ VieNLink использует Semantic Versioning: `MAJOR.MINOR.PATCH[-beta.N]`.
    если его ещё нет, и пишет `release\VieNLink-X.Y.Z-android.apk` и `.apk.sha256`.
 4. Создайте тег `vX.Y.Z-android` и GitHub Release (для беты — **Pre-release**).
    Приложите APK и `.apk.sha256`.
-5. **Ключ подписи нельзя терять:** обновление устанавливается только поверх APK,
+5. **Сразу соберите магазинную сборку** (не откладывать на потом):
+   `powershell -File build\publish-store.ps1` → `release\VieNLink-X.Y.Z-store.apk`
+   (RuStore) и `release\VieNLink-X.Y.Z-store.aab` (Google Play), плюс `.sha256`.
+   **В RuStore/Play пока не публикуем** (решение владельца, 22.11.2026) — артефакты
+   держим готовыми в `release\` и загружаем позже. versionCode магазинной сборки
+   тот же, что у GitHub-APK, и обязан только расти.
+6. **Ключ подписи нельзя терять:** обновление устанавливается только поверх APK,
    подписанного тем же ключом. Сделайте резервную копию `%LOCALAPPDATA%\VieNLink\signing`.
 
 Старые теги и релизы не удаляйте и не перемещайте — это история версий.

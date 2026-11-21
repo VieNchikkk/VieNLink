@@ -47,7 +47,8 @@
 - `VieNLink.Core/LinkParser.cs` — разбор ссылок в outbound-объекты sing-box (vless/vmess/trojan/ss/hysteria2).
 - `VieNLink.Core/NodeSources.cs` — загрузка источников, извлечение ссылок, base64-подписки, текст Telegram, кэш.
 - `VieNLink.Core/SubscriptionParser.cs` — форматы подписок: base64, Xray/sing-box JSON, Clash YAML, `subscription-userinfo`.
-- `VieNLink.Core/MtProtoService.cs` — MTProto-прокси Telegram: `tg://proxy` из HTML каналов и RSS-зеркал, TCP-проверка, статусы «рабочий/нерабочий», кэш; нерабочие хранятся 24 часа. Сбор и проверки идут автономно (`MainWindow.Telegram.cs`, `MtProtoSchedule`), кнопок сбора в UI нет.
+- `VieNLink.Core/MtProtoService.cs` — MTProto-прокси Telegram: `tg://proxy` из HTML каналов и RSS-зеркал, статусы «рабочий/нерабочий», кэш; нерабочие хранятся 24 часа. Проверка — настоящая (`MtProtoProbe`): FakeTLS-рукопожатие, obfuscated2 и `req_pq_multi` к Telegram, рабочий только при ответе `resPQ`. Сбор и проверки идут автономно (`MainWindow.Telegram.cs`, `MtProtoSchedule`), кнопок сбора в UI нет.
+- `VieNLink.Core/MtProtoProbe.cs` — проверка MTProto-прокси «как Telegram»: разбор секрета (hex/base64url, `ee` FakeTLS / `dd` / plain), SNI из секрета и HMAC ответа сервера, obfuscated2, транспорт padded intermediate/abridged, `req_pq_multi` → `resPQ`. Секреты с испорченным доменом отбрасываются.
 - `VieNLink.Core/SourceDiscoveryService.cs` — автопоиск источников: GitHub search + дерево файлов, обход публичных сайтов с ежедневными подписками и проверка кандидатов.
 - `VieNLink/SingBoxCore.cs` — поиск/скачивание ядра и проверка `sing-box version`.
 - `VieNLink.Core/SingBoxConfigBuilder.cs` — сборка конфига: mixed inbound, TUN, правила по процессам и доменам, Clash API.
@@ -61,15 +62,30 @@
 - `VieNLink/TrayIconService.cs` — значок в трее; в меню только «Подключить лучший» без списка адресов.
 - `VieNLink/ZapretWidget.xaml(.cs)` — плавающий виджет с тремя способами: «Zapret», «Свой обход DPI» (WinDivert) и «Видео YouTube» (через узел). Работающий режим подсвечен, ниже мелко подписаны режим и стратегия; в свёрнутом виде — точка состояния (зелёная/красная) и название включённого режима. Место и свёрнутое состояние запоминаются в `settings.json`. Виджет по умолчанию **поверх всех окон**; закреп «📌» в шапке и галочка «Виджет поверх всех окон» в «Общих» переключают `AppSettings.WidgetTopmost` (по умолчанию `true`).
 - `VieNLink/WindowChromeTheme.cs` — цвет системного заголовка окна под текущую тему через `DwmSetWindowAttribute` (Windows 10/11).
+- `VieNLink/TaskbarIdentity.cs` — единый `AppUserModelID` (`VieN.VieNLink`) для панели задач: закреплённый ярлык и ярлык с рабочего стола открывают одну кнопку; тот же ID прописан в ярлыках `build/installer.iss`.
 - `VieNLink/ProcessPickerWindow.xaml(.cs)` — выбор приложений из запущенных процессов для правила «только для приложений из списка».
 - `VieNLink/Themes/*.xaml` — палитры тёмной/светлой темы и стили контролов.
-- `VieNLink.SelfTest/Program.cs` — self-test: `parsers`, `liveness`, `seed`, `desync`, `forwarder`.
+- `VieNLink.SelfTest/Program.cs` — self-test: `parsers`, `liveness`, `seed`, `desync`, `forwarder`, `mtprotocheck`.
 - Автообновление Android: `AndroidUpdate.FindLatestAsync` читает `releases?per_page=30`
   (не `releases/latest`: тот игнорирует Pre-release), выбирает релиз с максимальной версией
   **среди содержащих APK**, скачивает файл, сверяет SHA-256 из `*.apk.sha256` и отдаёт
   `ApkInstaller` (`PackageInstaller`, `REQUEST_INSTALL_PACKAGES`). `UpdateCenter` проверяет
   при запуске (не чаще 6 ч) и в фоне, `UpdateNotifier` показывает ход/готовность. Совсем
   без подтверждения Android APK не ставит — системное окно установки обязательно.
+- Магазины: Play и RuStore запрещают приложению ставить обновления самому. Поэтому версии
+  две: GitHub-APK (`publish-android.ps1`) с автообновлением и `REQUEST_INSTALL_PACKAGES`,
+  и магазинная (`publish-store.ps1`, `StoreBuild=true`) без этого разрешения и без
+  самообновления. Разрешение добавляет `Store/SideloadManifest.xml` только в GitHub-сборке;
+  `StoreBuildInfo.IsStoreBuild` отключает проверку обновлений и меняет подпись шапки.
+  Для Play собирается AAB, для RuStore — APK. Ключ подписи один и тот же.
+- **Правило релиза:** при каждом выпуске новой версии сразу собирать и магазинную сборку
+  (`publish-store.ps1` → `release\VieNLink-<версия>-store.apk` и `-store.aab`), чтобы она
+  не отставала от GitHub и `versionCode` рос последовательно. **В RuStore/Play пока не
+  публикуем** (решение владельца, 22.11.2026): артефакты просто лежат в `release\`
+  с `.sha256` и готовы к загрузке позже. Ключ RuStore в репозиторий/поставку не кладётся.
+- Предупреждение Play Protect о «вредоносном» APK — ожидаемое для сайдлоада с собственным
+  ключом (VPN + установка пакетов + foreground). Инструкция для пользователя — в README,
+  риск и план (RuStore/Play) — в `docs/android-design.md` §13.
 - Windows-обновлятор (`AppUpdateService`) пропускает релизы без `setup.exe` и ZIP:
   Android-релиз с одним APK не должен предлагаться Windows-версии.
 - Скачанный Android-APK переиспользуется: рядом лежит маркер «тег|размер», который
@@ -80,15 +96,32 @@
   Аргументы повышения прав (`--tunnel`, `--tun-bypass`, `--tun-bypass-tune`,
   `--store-loopback`, `--desync`, `--zapret`) исключены: там старый экземпляр
   завершается, а работу продолжает новый.
+- `build/Version.props` — **единственная версия Windows и Android** (`VieNLinkVersion`,
+  `VieNLinkVersionCode`, `VieNLinkIsBeta`); оба csproj импортируют файл.
+  `versionCode` Android = major*10000 + minor*100 + patch (1.3.0 → 10300), только растёт.
+- `build/version.ps1` — чтение общей версии для `publish-release/installer/android/store`.
 - `build/publish-release.ps1` — релиз: self-contained один exe, опционально ядро в `core\`, zapret в `zapret\`, ZIP.
 - `build/publish-installer.ps1` — оба варианта поставки: портативный ZIP + `setup.exe` (Inno Setup).
-- `build/publish-android.ps1` — подписанный Release APK и `.apk.sha256`; долговременный ключ
-  в `%LOCALAPPDATA%\VieNLink\signing` (в репозиторий не попадает).
+- `build/publish-android.ps1` — подписанный Release APK для GitHub (с автообновлением) и `.apk.sha256`; долговременный ключ
+  в `%LOCALAPPDATA%\VieNLink\signing` (в репозиторий не попадает). Перед сборкой чистит
+  `obj/bin Release`: `StoreBuild` меняет манифест, инкрементальная сборка иначе может
+  унаследовать магазинный вариант без `REQUEST_INSTALL_PACKAGES`.
+- `build/publish-store.ps1` — магазинная сборка (`StoreBuild=true`): APK для RuStore и
+  AAB для Google Play без `REQUEST_INSTALL_PACKAGES`/самообновления; кладёт файлы и
+  `.sha256` в `release\`. Чистит `obj/bin Release` и проверяет через `aapt`, что в APK
+  не осталось `REQUEST_INSTALL_PACKAGES`.
+- `VieNLink.Android/Store/SideloadManifest.xml` — overlay с `REQUEST_INSTALL_PACKAGES`
+  только для GitHub-сборки; магазинная сборка его не подключает (`StoreBuildInfo`).
 - `build/installer.iss` — сценарий Inno Setup: установка в профиль пользователя, ярлыки, деинсталлятор.
 - `docs/plan-2026.md` — план работ 2026–2027 и журнал прогресса: фазы, чек-боксы, решения, грабли.
 - `docs/handoff.md` — передача контекста новому агенту: состояние, следующий шаг, грабли.
 - `docs/android-design.md` — проектирование Android-версии: матрица возможностей, развилка ядра (GPL/MPL), библиотеки, аналоги Windows-компонентов.
 - `docs/VERSIONING.md` — схема версий, совместимость данных, порядок выпуска релиза.
+- `docs/privacy.md` — политика конфиденциальности для магазинов (RU/EN).
+- `docs/store-listing.md` — тексты карточки, Data safety, VPN-декларация, RuStore.
+- `docs/store-publication.md` — требования и шаги публикации в RuStore/Google Play.
+- `docs/rustore-moderation.md` — поля карточки RuStore, комментарий для модерации и юридическая записка (152-ФЗ, 408-ФЗ, GPL).
+- `store/` — иконка 512×512, feature graphic и скриншоты для карточки магазина.
 
 ## План работ (обязательно к прочтению)
 
@@ -164,6 +197,12 @@ YouTube открывается без узла, видео требует узе
   `ProbeScheduler` раз в 2 минуты запускает партию 10 узлов; ручная проверка — до 150.
   Результаты пишутся в `probe-results.json`, основной процесс применяет их к `NodeStore`.
   При TUN-обходе проверка недоступна (он перехватывает весь трафик).
+- Android: поиск можно остановить — кнопка шапки во время проверки называется
+  «Остановить поиск» (`ProbeClient.Cancel`): она отменяет ожидание, посылает `:probe`
+  команду `STOP_PROBE` (процесс сразу завершается и не тратит трафик) и приостанавливает
+  фоновый поиск до явного действия. `ProbeClient.Resume` вызывают «Проверить узлы»,
+  «Проверить» на экране «Узлы» и кнопки сервисов. «Отключить» во время поиска узла
+  тоже гасит `:probe`.
 - Windows проверяет узлы так же: базовые YouTube/Telegram, затем полный список
   `TlsHello.TargetDomains` (18 заблокированных доменов) плюс универсальный Cloudflare.
   `ProxyNode.OpenDomains` — сколько доменов открылось; узел считается лучше по числу
@@ -182,8 +221,22 @@ YouTube открывается без узла, видео требует узе
   YouTube. Отметка «Telegram» у узла ставится по `TelegramTestUrls` (`t.me`, `web.telegram.org`,
   `telegram.org` — достаточно одного).
 - MTProto Telegram обслуживается автономно: `AutoCollectMtProtoAsync` каждые 10 минут
-  читает включённые каналы **только через RSS-зеркала** (t.me не нужен), `AutoCheckMtProtoAsync`
-  проверяет рабочие прокси каждые 10 минут партией 20, нерабочие — раз в 6 часов партией 20.
+  читает включённые источники **только через RSS-зеркала** (t.me не нужен) для каналов
+  и напрямую — для сайтов/JSON (`SourceKind.MtProto`, `SourceKinds.IsProxy`). Сайты
+  (`tgmtproxy`, `SoliSpirit/mtproto`, `suryadev-sm`, JSON `Airuop`) добавляются
+  включёнными и читаются первыми: RSS-зеркала могут тормозить. `AutoCheckMtProtoAsync`
+  проверяет рабочие прокси каждые 10 минут партией 20, нерабочие — раз в 6 часов партией 20;
+  если рабочих меньше `NodeLimits.MinWorkingNodes` (10), партия увеличивается втрое.
+  Проверка настоящая: FakeTLS + obfuscated2 + `req_pq_multi`, «рабочий» = Telegram ответил
+  `resPQ`; простой TCP-коннект не считается. **Пинг в списке — время TCP-подключения к прокси,
+  как в Telegram** (без DNS; меряется отдельным проходом с малой параллельностью, минимум
+  из трёх подключений, чтобы одиночная медленная попытка не показывала 1000+ мс); полное
+  рукопожатие хранится только для диагностики (`HandshakeMs`). Если TCP подключился,
+  а рукопожатие не прошло, или прокси недавно работал — один повтор, чтобы заминка
+  не выбросила рабочий прокси. После двух провалов он уходит в «Нерабочие», но
+  перепроверяется уже через 20 минут (`MtProtoSchedule.QuickRecheckMinutes`).
+  Секреты с испорченным доменом фронтинга (`cdns.g]oogle.com` и подобные) отбрасываются
+  при разборе: Telegram их не принимает.
   `PruneExpiredMtProto` удаляет нерабочие через 24 часа (`MtProtoRetention.DeadHours`).
   Страница называется «Telegram MTProtoProxies»; кнопка Telegram в ряду сервисов использует
   оригинальную иконку и стиль `TelegramSmallButton`, а рядом стоит вкладка `TelegramTabRadio`
@@ -253,18 +306,34 @@ YouTube открывается без узла, видео требует узе
   (одинаковый outbound), затем оставляет не больше `NodeLimits.MaxPerEndpoint` (4) вариантов
   на один `ProxyNode.EndpointKey` (хост:порт). Жёсткое «одна строка на адрес» выбрасывало
   рабочие узлы с общих CDN: у Cloudflare под одним IP живут десятки аккаунтов с разными
-  UUID/SNI. Проверки, скорость, метка «моя подписка» и названия источников переносятся на
-  оставшиеся узлы. Склейка идёт при сборе источников, чтении кэша, слиянии и перестройке таблицы.
+  UUID/SNI. Проверки, скорость и `OpenDomains` переносятся только между точными дублями
+  (тот же outbound/тег); при выбросе лишних вариантов по лимиту `MaxPerEndpoint` у них
+  остаются их собственные результаты — успех одного аккаунта не доказывает доступ другого.
+  Метка «моя подписка» и названия источников объединяются у всех. Склейка идёт при сборе
+  источников, чтении кэша, слиянии и перестройке таблицы. Те же правила действуют при
+  переносе статусов после обновления источников: по `ProxyNode.Id`, а не по хост:порту.
 - Свежесть данных: `ProxyNode.LastSeenUtc` отмечает, когда узел последний раз приходил из
   источника. При чтении кэша узлы без встречи дольше `AppSettings.KeepUnseenNodeDays` (по
   умолчанию 7 суток) удаляются. Лимит списка — `NodeLimits.DefaultMaxTotal` (12 000); при
   переполнении сначала отбрасываются старые, затем менее маскированные. Из Telegram-каналов
   берутся только посты за `TelegramText.FreshHours` (48 ч), иначе в список попадает мёртвая
   история канала.
+- Счётчики сервисов и выбор узла — одно правило (`VieNLink.Core/NodeAvailability.cs`):
+  узел показывается и предлагается кнопке, только если он `Working`, с задержкой, со свежей
+  проверкой (`CheckedAtUtc` не старше `IdleRecheckHours`) и проходит фильтр «Только мои».
+  «Универсальный» — только подтверждённый `UniversalOk` (Cloudflare), а не любая задержка.
+  Фоновая проверка сначала перепроверяет именно рабочие узлы с устаревшей проверкой —
+  иначе они висят в значках часами, а кнопка не находит ни одного живого. Ход фоновой
+  проверки пишется в строку состояния (Windows `StatusDetail`, Android
+  `ProbeClient.ActivityText`), без разбивки по сервисам: «проверено N из M, рабочих K».
 - Фоновая проверка: работает и в простое, и при активной работе. Узлы проверяются через
   скрытое ядро `HiddenProbeService` на отдельных портах (от 22000, без TUN и системного
   прокси), поэтому не мешают текущему подключению. В простое — партии по `IdleTestBatch`
   не реже раза в 5 минут, при работе — маленькие партии (до 10–30) каждые 1–2 минуты.
+  Пока не набрана квота (10 рабочих и по 2 на каждый сервис), такт сокращается до
+  1 минуты в простое и 2 минут при работе. Рабочие узлы перепроверяются каждые
+  `NodeLimits.WorkingRecheckMinutes` (30 минут), а не раз в `IdleRecheckHours`: иначе
+  «рабочий» из кэша висел в значках часами.
   При активном TUN скрытое ядро не используется (его трафик ушёл бы в туннель) — проверяются
   только уже загруженные узлы. При zapret/своём обходе DPI проверка идёт: оба ограничены
   целевыми доменами и не трогают соединения к серверам узлов, а партия уменьшается до 5 узлов
@@ -291,7 +360,17 @@ YouTube открывается без узла, видео требует узе
   выхода или падения приложения.
 - Список исключений `ProxyBypass` обязателен на практике: иначе служебные сервисы (в т.ч. API
   ассистента) уходят через случайный бесплатный узел и связь рвётся.
-- Шапка окна: карточка `HeaderConnectionPanel` рядом с кнопками показывает, к чему
+- Шапка окна: логотип и текущая версия (`HeaderVersionText`, `AppInfo.Version` без «+хэша»)
+  стоят внутри левой карточки статуса, рядом с «Отключено/Подключено» — один блок с фоном.
+  Под ними — компактные счётчики сервисов как на Android: тонированные плашки
+  «иконка + число» для YouTube, Discord, Telegram и универсального доступа
+  (`HeaderYoutubeText` и т.п.); число — рабочие узлы с доступом к сервису и **свежей**
+  проверкой (не старше `IdleRecheckHours`), посчитанные тем же правилом
+  (`NodeAvailability.IsUsable`), что и кнопки быстрого подключения. Устаревшая запись
+  из кэша в значке не показывается, иначе число обещает узел, которого кнопка не найдёт.
+  Для единой кнопки на панели задач `TaskbarIdentity.Apply()` задаёт процессу
+  `AppUserModelID` до создания окон, установщик пишет тот же ID в ярлыки.
+  Карточка `HeaderConnectionPanel` рядом с кнопками показывает, к чему
   подключаемся или уже подключены — сервер (host:port), домен (SNI из `NodeRanking.CamouflageHost`),
   пинг, скорость и оценку качества звёздами (`RateConnection`). Флаг страны берётся из названия
   узла (`ExtractCountryFlag`, включая экранированные `\U0001F1XX`), а подпись страны на русском
@@ -308,7 +387,9 @@ YouTube открывается без узла, видео требует узе
   контекстные кнопки: `CancelButton` («Отменить», предупреждающий стиль) видна только
   во время `BeginOperation` и прерывает текущее действие, `HeaderDisconnectButton`
   («Отключить», красная) видна, когда что-то активно, и снимает узел, kill switch, zapret,
-  свой обход DPI и TUN-обход (`DisconnectEverythingAsync`). Обе скрыты по умолчанию,
+  свой обход DPI и TUN-обход (`DisconnectEverythingAsync`). Рядом — `HeaderNextNodeButton`
+  («Дальше»): следующий свежий проверенный узел по пингу, тёплое переключение через
+  Clash selector без перезапуска ядра. Обе скрыты по умолчанию,
   подсказки обновляет `UpdateHeaderState`. Постоянная строка `HeaderNodesText` показывает
   загруженные узлы и счётчики проверенных по сервисам (YouTube, Discord, Telegram,
   Универсальные); её обновляет `UpdateNodesSummary`, ход операций выводится отдельной строкой
@@ -324,6 +405,30 @@ YouTube открывается без узла, видео требует узе
   `HeaderStatusBackgroundBrush`, чтобы фон не «прыгал» при смене ширины.
 - Проверка живости узла: базовый интервал 90 с, после сбоя 25–120 с (`_nextHealthCheckUtc`).
   Каждый запрос идёт через узел и тратит его трафик, поэтому «раз в 45 секунд» было слишком часто.
+- Приложение держит минимум `NodeLimits.MinWorkingNodes` (10) рабочих узлов: пока их меньше,
+  фоновая проверка (`RunIdleTestAsync` в Windows, `ProbeClient.EnsureWorkingQuotaAsync`
+  в Android) идёт несколькими партиями подряд, не дожидаясь следующего такта; при пустом
+  или бедном списке источники обновляются чаще (15–30 минут). Дополнительно требуется по
+  `NodeLimits.MinWorkingPerService` (2) проверенных узла для каждого сервиса — YouTube,
+  Telegram, Discord и универсального доступа (`MissingServiceQuota` в Windows,
+  `ProbeScheduler` в Android): список дефицитов пишется в журнал, поиск продолжается
+  в фоне теми же партиями, а фокус сервиса меняется по кругу — иначе первый недостающий
+  сервис забирал бы все раунды. На Android за такт ищется один сервис из дефицитных
+  (партия 150 узлов), поэтому все четыре получают внимание без конкуренции за канал.
+  Выбор узла для сервиса и «Лучший» сортируются по пингу, таблица «Рабочие» и список
+  MTProto — по задержке.
+- Источники разделены: каналы Telegram (`SourceKind.Telegram`) — только источники MTProto,
+  их читает `MtProtoService`, а `NodeSourceService.CollectAsync` пропускает; в UI — два блока
+  («Источники узлов» и «Telegram-прокси (каналы)»), «Обновить» у канала собирает прокси
+  (`LoadMtProtoSourceAsync` в Windows, ветка в `SourcesActivity` на Android).
+- MTProto держит минимум `MtProtoSchedule.MinWorking` (5) рабочих прокси: пока их меньше,
+  каналы читаются чаще (раз в 5 минут), а проверка идёт до трёх партий подряд.
+- Поиск узлов под сервис: при нехватке YouTube, Telegram или Discord первыми проверяются
+  узлы из источников, которые уже давали доступ именно к этому сервису
+  (`BuildServiceSourceScores` в Windows, `ProbeClient.EnsureServiceNodeAsync` в Android).
+- Первый запуск и пустой список не ждут таймеров: Windows `AutoRefreshIfStaleAsync` /
+  `AutoTickAsync`, Android `Maintenance` сразу обновляют источники, собирают MTProto
+  и проверяют партии (`StartupProbeBatch`), чтобы у пользователя изначально были узлы и прокси.
 - Параллельность проверки адаптивная: старт 8 узлов, после 40 живых — 24, после 120 — до 32
   (`TestWithApiAsync`). Фиксированные 64 душили слабые каналы и давали ложные провалы.
 - Замер скорости — отдельный шаг (`ProxyManager.MeasureSpeedAsync`, ~1 МБ через локальный порт):
@@ -409,6 +514,8 @@ dotnet run --project VieNLink.SelfTest -- checkconfigs
 dotnet run --project VieNLink.SelfTest -- procmatch
 dotnet run --project VieNLink.SelfTest -- tun
 dotnet run --project VieNLink.SelfTest -- proxytest
+dotnet run --project VieNLink.SelfTest -- mtprotocheck 40
+dotnet run --project VieNLink.SelfTest -- mtprotohost 95.217.135.241 443 <секрет>
 dotnet run --project VieNLink.SelfTest -- liveness 60 https://www.youtube.com/
 dotnet run --project VieNLink.SelfTest -- desync
 dotnet run --project VieNLink.SelfTest -- desyncinstall
@@ -430,6 +537,7 @@ dotnet run --project VieNLink.SelfTest -- blocktype
 dotnet run --project VieNLink/VieNLink.csproj
 powershell -File build\publish-release.ps1
 powershell -File build\publish-installer.ps1
+powershell -File build\publish-store.ps1
 ```
 ### Android (отдельный toolchain, без прав администратора)
 
@@ -447,6 +555,11 @@ $dotnet = "$env:LOCALAPPDATA\dotnet\dotnet.exe"   # SDK 11 + workload android
 - `fetch <url>` — загрузка подписки: формат, узлы, `subscription-userinfo`.
 - `sources` — список источников из зашифрованного `sources.dat` (проверка DPAPI и миграции).
 - `cache` — размеры кэшей узлов, MTProto и источников.
+- `mtprotocheck [N] [фильтр]` — живая проверка N прокси из кэша настоящим хендшейком
+  (FakeTLS + `req_pq_multi` → `resPQ`); показывает, какие из «рабочих» действительно годятся
+  для Telegram (нужна сеть).
+- `mtprotohost <сервер> <порт> <секрет>` — проверка одного MTProto-прокси: разбор секрета,
+  FakeTLS, obfuscated2, ответ Telegram или причина отказа (нужна сеть).
 - `hiddenprobe [N]` — скрытая проверка N уже рабочих узлов отдельным ядром на своих портах:
   проверяет, что фоновый туннель не зависит от основного подключения и видит домены.
 - `proxytest` — системный прокси без внешнего узла: ядро с `direct`, включение, запрос, восстановление реестра.

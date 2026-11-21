@@ -58,10 +58,11 @@ https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.1-android.
 https://vienchikkk.github.io/VieNLink/privacy.html. API-ключи, использованные для
 загрузки, удалены; приватные ключи в `%TEMP%` удалены.
 
-**Отложено:** автоматизация «GitHub → RuStore» через GitHub Actions (сборка store-APK/AAB,
-GitHub Release и загрузка через RuStore Public API; ключ в GitHub Secrets) — записано
-в `docs/plan-2026.md` §0 «Отложено на потом». Пока обновления в RuStore загружаются
-вручную: поднять versionCode → `publish-store.ps1` → кабинет RuStore.
+**RuStore (решение 22.11.2026):** при каждом релизе магазинная сборка собирается сразу
+(`publish-store.ps1` → `release\VieNLink-<версия>-store.apk` + `.aab` с `.sha256`),
+но **в RuStore пока не публикуется** — артефакты лежат готовыми. Автоматизация
+«GitHub → RuStore» (GitHub Actions + Public API, ключ в Secrets) — в
+`docs/plan-2026.md` §0 «Отложено на потом».
 
 Windows (системный `dotnet`):
 
