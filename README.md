@@ -126,7 +126,7 @@ Shadowsocks / Hysteria2 из открытых списков и подписок
 Такие прокси работают только внутри Telegram: sing-box не умеет MTProto, поэтому браузер
 через них не пойдёт.
 
-## Android
+## Android (бета)
 
 Android-клиент (`VieNLink.Android`, `com.vienlink.app`) повторяет основные возможности
 Windows-версии без MAUI: VPN-туннель через `VpnService` и `libbox` (sing-box), проверка узлов
