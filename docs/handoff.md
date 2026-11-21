@@ -47,7 +47,7 @@ https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.1-android.
   с 30 до 15 минут.
 - Сборка: Windows 0 ошибок / 0 предупреждений; Android 0 ошибок (57 прежних предупреждений);
   `SelfTest -- parsers/checkconfigs/statuslogic` — «всё в порядке». Исходники 1.3.1
-  закоммичены в `main` (`4e5044cb`), теги `v1.3.1-beta`/`v1.3.1-android` указывают на него.
+  в `main`; теги `v1.3.1-beta`/`v1.3.1-android` указывают на последний коммит с этими правками.
 
 **Android 1.2.0 (21.11.2026).** Версия в `VieNLink.Android.csproj` — 1.2.0
 (versionCode 8). Собраны `release\VieNLink-1.2.0-store.apk` и `.aab` (магазинная сборка
