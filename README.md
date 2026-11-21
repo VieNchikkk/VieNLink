@@ -5,6 +5,8 @@
 ![status: beta](https://img.shields.io/badge/status-beta-F2C14E)
 ![platform: Windows](https://img.shields.io/badge/platform-Windows-0078D4)
 ![.NET 10](https://img.shields.io/badge/.NET-10-512BD4)
+[![release](https://img.shields.io/github/v/release/VieNchikkk/VieNLink?include_prereleases&label=release)](https://github.com/VieNchikkk/VieNLink/releases)
+[![license: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-2E7D52)](LICENSE)
 
 > **Статус: бета-версия.** Основные режимы проверены, но возможны сбои и изменения
 > интерфейса. Для постоянной работы надёжнее своя подписка или свой сервер.
