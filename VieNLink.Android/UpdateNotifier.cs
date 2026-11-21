@@ -31,13 +31,28 @@ internal static class UpdateNotifier
         }
     }
 
-    public static void Done(Context context, AndroidUpdate.Release release)
+    public static void Done(Context context, AndroidUpdate.Release release, string apkPath)
     {
         try
         {
             var builder = Builder(context, release, "Обновление скачано")
-                .SetContentText($"Версия {release.Tag} готова к установке — нажмите, чтобы продолжить.")
+                .SetContentText($"Версия {release.Tag} готова к установке — нажмите, чтобы установить.")
                 .SetAutoCancel(true);
+
+            // Нажатие на уведомление сразу открывает системную установку,
+            // не требуя искать кнопку в приложении.
+            var installIntent = new Intent(context, typeof(UpdateInstallReceiver))
+                .SetAction(ApkInstaller.ActionInstallNow)
+                .PutExtra(ApkInstaller.ExtraApkPath, apkPath);
+            var installPending = PendingIntent.GetBroadcast(
+                context, NotificationId + 2, installIntent,
+                PendingIntentFlags.Immutable | PendingIntentFlags.UpdateCurrent);
+            if (installPending is not null)
+            {
+                builder.SetContentIntent(installPending);
+                builder.AddAction(Resource.Drawable.ic_download, "Установить", installPending);
+            }
+
             Notify(context, builder);
         }
         catch (Exception exception)

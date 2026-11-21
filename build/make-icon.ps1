@@ -127,6 +127,53 @@ function Get-PngBytes([System.Drawing.Bitmap]$bmp) {
     return $bytes
 }
 
+# Маленькие размеры пишем как 32-битный DIB (BMP), а не PNG: PNG-записи
+# внутри ICO понимает не каждая оболочка Windows, из-за чего на панели задач
+# вместо значка появлялся пустой/шумный квадрат. 256 остаётся PNG.
+function Get-DibBytes([System.Drawing.Bitmap]$bmp) {
+    $size = $bmp.Width
+    $rect = New-Object System.Drawing.Rectangle(0, 0, $size, $size)
+    $data = $bmp.LockBits($rect,
+        [System.Drawing.Imaging.ImageLockMode]::ReadOnly,
+        [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $stride = $data.Stride
+    $rowBytes = $size * 4
+    $row = New-Object byte[] $rowBytes
+    $maskRow = [int]([math]::Floor(($size + 31) / 32) * 4)
+    $mask = New-Object byte[] ($maskRow * $size)
+    $ms = New-Object System.IO.MemoryStream
+    $bw = New-Object System.IO.BinaryWriter($ms)
+    try {
+        # BITMAPINFOHEADER: высота = две копии (XOR + AND).
+        $bw.Write([uint32]40)
+        $bw.Write([int32]$size)
+        $bw.Write([int32]($size * 2))
+        $bw.Write([uint16]1)
+        $bw.Write([uint16]32)
+        $bw.Write([uint32]0)
+        $bw.Write([uint32]($rowBytes * $size + $mask.Length))
+        $bw.Write([int32]0)
+        $bw.Write([int32]0)
+        $bw.Write([uint32]0)
+        $bw.Write([uint32]0)
+        # Пиксели снизу вверх: BGRA, как в памяти Format32bppArgb.
+        for ($y = $size - 1; $y -ge 0; $y--) {
+            [System.Runtime.InteropServices.Marshal]::Copy(
+                [IntPtr]::Add($data.Scan0, $y * $stride), $row, 0, $rowBytes)
+            $bw.Write($row)
+        }
+        # AND-маска не нужна: прозрачность задаёт альфа-канал.
+        $bw.Write($mask)
+        $bw.Flush()
+        return $ms.ToArray()
+    }
+    finally {
+        $bmp.UnlockBits($data)
+        $bw.Dispose()
+        $ms.Dispose()
+    }
+}
+
 # --- Исходник 1024 ---
 $src = New-IconBitmap 1024
 $src.Save((Join-Path $RepoRoot 'branding\vienlink-icon-src.png'), [System.Drawing.Imaging.ImageFormat]::Png)
@@ -137,12 +184,12 @@ $png512 = New-IconBitmap 512
 $png512.Save((Join-Path $RepoRoot 'VieNLink\Assets\VieNLink.png'), [System.Drawing.Imaging.ImageFormat]::Png)
 $png512.Dispose()
 
-# --- Многоразмерный ICO (PNG-записи, работает на Windows Vista+) ---
+# --- Многоразмерный ICO: маленькие кадры DIB, 256 — PNG ---
 $sizes = @(16, 24, 32, 48, 64, 128, 256)
-$pngs = New-Object 'System.Collections.Generic.List[byte[]]'
+$frames = New-Object 'System.Collections.Generic.List[byte[]]'
 foreach ($sz in $sizes) {
     $b = New-IconBitmap $sz
-    $pngs.Add((Get-PngBytes $b))
+    $frames.Add($(if ($sz -ge 256) { Get-PngBytes $b } else { Get-DibBytes $b }))
     $b.Dispose()
 }
 
@@ -162,11 +209,11 @@ try {
         $bw.Write([byte]0)          # reserved
         $bw.Write([uint16]1)        # planes
         $bw.Write([uint16]32)       # bpp
-        $bw.Write([uint32]$pngs[$i].Length)
+        $bw.Write([uint32]$frames[$i].Length)
         $bw.Write([uint32]$offset)
-        $offset += $pngs[$i].Length
+        $offset += $frames[$i].Length
     }
-    foreach ($p in $pngs) { $bw.Write($p) }
+    foreach ($p in $frames) { $bw.Write($p) }
 }
 finally {
     $bw.Dispose()

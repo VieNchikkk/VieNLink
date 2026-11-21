@@ -15,6 +15,8 @@ namespace VieNLink.Mobile;
 internal static class ApkInstaller
 {
     public const string ActionInstallResult = "com.vienlink.app.INSTALL_RESULT";
+    public const string ActionInstallNow = "com.vienlink.app.INSTALL_NOW";
+    public const string ExtraApkPath = "apk-path";
 
     public static bool Install(Context context, string path)
     {
@@ -32,6 +34,37 @@ internal static class ApkInstaller
             {
                 OpenUnknownSourcesSettings(context);
                 return false;
+            }
+
+            // Системный установщик по content://: PackageInstaller на части
+            // прошивок (ColorOS) не показывает окно подтверждения для сессии,
+            // созданной приложением, а ACTION_VIEW работает предсказуемо.
+            var name = Android.Net.Uri.Encode(Path.GetFileName(path));
+            var uri = Android.Net.Uri.Parse($"content://{UpdateFileProvider.Authority}/{name}");
+            if (uri is not null)
+            {
+                try
+                {
+                    var view = new Intent(Intent.ActionView)
+                        .SetDataAndType(uri, "application/vnd.android.package-archive")
+                        .AddFlags(ActivityFlags.NewTask | ActivityFlags.GrantReadUriPermission);
+
+                    // На телефонах с двумя установщиками (Google и магазин OEM)
+                    // без явного пакета открывается выбор «Открыть с помощью».
+                    var installerPackage = FindSystemInstaller(packageManager, view);
+                    if (!string.IsNullOrWhiteSpace(installerPackage))
+                    {
+                        view.SetPackage(installerPackage);
+                    }
+
+                    context.StartActivity(view);
+                    AppLog.Write("update", "Открыт системный установщик APK: " + Path.GetFileName(path));
+                    return true;
+                }
+                catch (ActivityNotFoundException exception)
+                {
+                    AppLog.Write("update", "Системный установщик не найден, пробую PackageInstaller", exception);
+                }
             }
 
             var installer = packageManager?.PackageInstaller;
@@ -85,6 +118,33 @@ internal static class ApkInstaller
         }
     }
 
+    private static string? FindSystemInstaller(PackageManager? packageManager, Intent intent)
+    {
+        if (packageManager is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var activities = packageManager.QueryIntentActivities(intent, 0);
+            foreach (var activity in activities)
+            {
+                var package = activity.ActivityInfo?.PackageName;
+                if (package is "com.google.android.packageinstaller" or "com.android.packageinstaller")
+                {
+                    return package;
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("update", "Не удалось выбрать системный установщик", exception);
+        }
+
+        return null;
+    }
+
     private static void OpenUnknownSourcesSettings(Context context)
     {
         try
@@ -115,13 +175,26 @@ internal static class ApkInstaller
 
 /// <summary>Результат установки APK от PackageInstaller.</summary>
 [BroadcastReceiver(Enabled = true, Exported = false)]
-[IntentFilter(new[] { ApkInstaller.ActionInstallResult })]
+[IntentFilter(new[] { ApkInstaller.ActionInstallResult, ApkInstaller.ActionInstallNow })]
 public sealed class UpdateInstallReceiver : BroadcastReceiver
 {
     public override void OnReceive(Context? context, Intent? intent)
     {
         if (context is null || intent is null)
         {
+            return;
+        }
+
+        // Нажатие на уведомление «Обновление скачано».
+        if (intent.Action == ApkInstaller.ActionInstallNow)
+        {
+            var apkPath = intent.GetStringExtra(ApkInstaller.ExtraApkPath);
+            UpdateNotifier.Cancel(context);
+            if (!string.IsNullOrWhiteSpace(apkPath) && ApkInstaller.Install(context, apkPath))
+            {
+                Ui.Toast(context, "Подтвердите установку в системном окне.");
+            }
+
             return;
         }
 

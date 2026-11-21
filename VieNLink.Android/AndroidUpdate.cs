@@ -170,6 +170,12 @@ internal static class AndroidUpdate
         Directory.CreateDirectory(directory);
         var tempPath = fullPath + ".part";
 
+        // Общий предел на скачивание: без него поток может «повиснуть» после
+        // последнего байта, и уведомление навсегда останется на 100%.
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromMinutes(20));
+        var token = timeout.Token;
+
         try
         {
             using var handler = CreateHandler();
@@ -177,20 +183,20 @@ internal static class AndroidUpdate
             Prepare(client);
 
             using var response = await client.GetAsync(
-                release.ApkUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+                release.ApkUrl, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
 
             var total = response.Content.Headers.ContentLength ?? release.ApkSize;
-            await using (var input = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false))
+            await using (var input = await response.Content.ReadAsStreamAsync(token).ConfigureAwait(false))
             await using (var output = new FileStream(
                              tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
             {
                 var buffer = new byte[81920];
                 long copied = 0;
                 int read;
-                while ((read = await input.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) > 0)
+                while ((read = await input.ReadAsync(buffer, token).ConfigureAwait(false)) > 0)
                 {
-                    await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+                    await output.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
                     copied += read;
                     if (total > 0)
                     {
@@ -198,10 +204,15 @@ internal static class AndroidUpdate
                     }
                 }
 
-                await output.FlushAsync(cancellationToken).ConfigureAwait(false);
+                await output.FlushAsync(token).ConfigureAwait(false);
             }
 
-            var expected = await ReadExpectedSha256Async(client, release.Sha256Url, cancellationToken)
+            if (total > 0 && new FileInfo(tempPath).Length != total)
+            {
+                throw new InvalidDataException("Загрузка APK оборвалась: размер файла не совпал.");
+            }
+
+            var expected = await ReadExpectedSha256Async(client, release.Sha256Url, token)
                 .ConfigureAwait(false);
             if (expected is not null)
             {
@@ -278,9 +289,13 @@ internal static class AndroidUpdate
             return null;
         }
 
+        // Файл контрольной суммы маленький; если GitHub не ответил за 15 секунд,
+        // не держим установку — продолжаем без проверки (APK всё равно пришёл по HTTPS).
+        using var shaTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        shaTimeout.CancelAfter(TimeSpan.FromSeconds(15));
         try
         {
-            var text = await client.GetStringAsync(shaUrl, cancellationToken).ConfigureAwait(false);
+            var text = await client.GetStringAsync(shaUrl, shaTimeout.Token).ConfigureAwait(false);
             var match = Regex.Match(text, "[0-9a-fA-F]{64}");
             return match.Success ? match.Value : null;
         }

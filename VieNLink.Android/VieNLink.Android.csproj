@@ -10,10 +10,10 @@
     <AssemblyName>VieNLink.Android</AssemblyName>
     <ApplicationId>com.vienlink.app</ApplicationId>
     <ApplicationTitle>VieNLink</ApplicationTitle>
-    <ApplicationVersion>2</ApplicationVersion>
-    <ApplicationDisplayVersion>1.1.0</ApplicationDisplayVersion>
+    <ApplicationVersion>3</ApplicationVersion>
+    <ApplicationDisplayVersion>1.1.1</ApplicationDisplayVersion>
     <AndroidPackageFormat>apk</AndroidPackageFormat>
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
 
     <!-- Ядро (libbox.aar) кладётся в Libs: см. docs/android-design.md §4 и доку Android. -->
     <AndroidAarLibrariesDirectory>Libs</AndroidAarLibrariesDirectory>

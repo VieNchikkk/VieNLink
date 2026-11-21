@@ -21,7 +21,6 @@ internal static class UpdateCenter
 
     private static readonly SemaphoreSlim Gate = new(1, 1);
     private static int _launchCheckStarted;
-    private static int _promptShowing;
 
     /// <summary>Проверка при открытии главного экрана. force — из уведомления или adb.</summary>
     public static void StartLaunchCheck(Activity activity, bool force = false)
@@ -165,10 +164,14 @@ internal static class UpdateCenter
         Action<string>? status)
     {
         var path = CachedPath(activity, release);
-        if (File.Exists(path) &&
-            (release.ApkSize <= 0 || new FileInfo(path).Length == release.ApkSize))
+
+        // Уже скачанный APK переиспользуется: повторной загрузки 46 МБ нет.
+        // Рядом лежит маркер «тег|размер», он создаётся только после проверки
+        // SHA-256, поэтому повреждённый или чужой файл не будет установлен.
+        if (IsCachedApk(release, path))
         {
             Report(activity, status, $"Версия {release.Tag} уже скачана.");
+            UpdateNotifier.Done(activity, release, path);
             return path;
         }
 
@@ -184,7 +187,8 @@ internal static class UpdateCenter
             UpdateNotifier.Progress(activity, release, 0);
             var downloaded = await AndroidUpdate.DownloadAsync(
                 release, path, progress, CancellationToken.None).ConfigureAwait(false);
-            UpdateNotifier.Done(activity, release);
+            WriteCacheMarker(release, downloaded);
+            UpdateNotifier.Done(activity, release, downloaded);
             Report(activity, status, $"Версия {release.Tag} скачана.");
             return downloaded;
         }
@@ -204,35 +208,16 @@ internal static class UpdateCenter
             return;
         }
 
-        if (Interlocked.CompareExchange(ref _promptShowing, 1, 0) != 0)
-        {
-            return;
-        }
-
         var sizeMb = new FileInfo(path).Length / (1024d * 1024d);
-        var dialog = new AlertDialog.Builder(activity, Resource.Style.VieNLinkDialog)
+        var dialog = new AlertDialog.Builder(activity)
             .SetTitle("Обновление VieNLink")
             .SetMessage(
                 $"Скачана версия {release.Tag} ({sizeMb:0.0} МБ).\n\n" +
                 "Установить поверх текущей? Настройки, источники и кэш узлов сохранятся.")
-            .SetPositiveButton("Установить", (_, _) =>
-            {
-                Interlocked.Exchange(ref _promptShowing, 0);
-                TryInstall(activity, path);
-            })
-            .SetNeutralButton("Открыть релиз", (_, _) =>
-            {
-                Interlocked.Exchange(ref _promptShowing, 0);
-                OpenUrl(activity, release.PageUrl);
-            })
-            .SetNegativeButton("Позже", (_, _) =>
-            {
-                MarkSkipped(activity, release.Tag);
-                Interlocked.Exchange(ref _promptShowing, 0);
-            })
+            .SetPositiveButton("Установить", (_, _) => TryInstall(activity, path))
+            .SetNeutralButton("Открыть релиз", (_, _) => OpenUrl(activity, release.PageUrl))
+            .SetNegativeButton("Позже", (_, _) => MarkSkipped(activity, release.Tag))
             .Create();
-
-        dialog.DismissEvent += (_, _) => Interlocked.Exchange(ref _promptShowing, 0);
         dialog.Show();
     }
 
@@ -253,6 +238,51 @@ internal static class UpdateCenter
         var directory = new Java.IO.File(context.CacheDir, "updates");
         directory.Mkdirs();
         return Path.Combine(directory.AbsolutePath, release.ApkName);
+    }
+
+    private static string MarkerPath(string apkPath) => apkPath + ".ok";
+
+    private static bool IsCachedApk(AndroidUpdate.Release release, string path)
+    {
+        try
+        {
+            if (!File.Exists(path))
+            {
+                return false;
+            }
+
+            var length = new FileInfo(path).Length;
+            if (release.ApkSize > 0 && length != release.ApkSize)
+            {
+                return false;
+            }
+
+            var markerPath = MarkerPath(path);
+            if (!File.Exists(markerPath))
+            {
+                return false;
+            }
+
+            // Маркер пишется после успешной SHA-256-проверки загрузки.
+            return File.ReadAllText(markerPath).Trim() == $"{release.Tag}|{length}";
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
+    private static void WriteCacheMarker(AndroidUpdate.Release release, string path)
+    {
+        try
+        {
+            var length = new FileInfo(path).Length;
+            File.WriteAllText(MarkerPath(path), $"{release.Tag}|{length}");
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            AppLog.Write("update", "Не удалось сохранить отметку скачанного APK", exception);
+        }
     }
 
     public static string CurrentVersion(Context context)
