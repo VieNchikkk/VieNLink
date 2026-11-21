@@ -23,8 +23,8 @@
 ## Скачать
 
 Готовые сборки — в [Releases](https://github.com/VieNchikkk/VieNLink/releases):
-`VieNLink-1.0.6-setup.exe` (установщик в профиль пользователя) или портативный
-`VieNLink-1.0.6-win-x64.zip`. .NET устанавливать не нужно. Для проверки скачанного
+`VieNLink-1.0.7-setup.exe` (установщик в профиль пользователя) или портативный
+`VieNLink-1.0.7-win-x64.zip`. .NET устанавливать не нужно. Для проверки скачанного
 файла рядом лежит `SHA256SUMS.txt`.
 
 ## Возможности
@@ -261,7 +261,7 @@ powershell -File build\publish-release.ps1
 
 ## Версии и обновления
 
-- Текущая версия: **1.0.6-beta**, сборки — в [Releases](https://github.com/VieNchikkk/VieNLink/releases).
+- Текущая версия: **1.0.7-beta**, сборки — в [Releases](https://github.com/VieNchikkk/VieNLink/releases).
 - В релизе лежат `setup.exe`, портативный ZIP и `SHA256SUMS.txt`.
 - Что изменилось: [CHANGELOG.md](CHANGELOG.md).
 - Правила версий, схема данных и порядок выпуска: [docs/VERSIONING.md](docs/VERSIONING.md).

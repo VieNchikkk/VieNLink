@@ -6,7 +6,7 @@
         Height="820" Width="1240"
         MinHeight="620" MinWidth="820"
         WindowStartupLocation="CenterScreen"
-        ResizeMode="NoResize"
+        ResizeMode="CanResize"
         Background="{DynamicResource AppBackgroundBrush}"
         Foreground="{DynamicResource TextBrush}"
         FontFamily="Segoe UI"
@@ -215,8 +215,8 @@
                                     <StackPanel>
                                         <TextBlock Text="КРАТКО" Style="{StaticResource InstructionLabel}" Margin="0,0,0,4" />
                                         <TextBlock Style="{StaticResource InstructionSummary}">
-                                            <Run Text="Размер главного окна " />
-                                            <Run Text="закреплён" Foreground="{DynamicResource AccentBrush}" FontWeight="Bold" />
+                                            <Run Text="Окно можно " />
+                                            <Run Text="свернуть, развернуть и изменить в размере" Foreground="{DynamicResource AccentBrush}" FontWeight="Bold" />
                                             <Run Text=", а окно и виджет " />
                                             <Run Text="запоминают своё место" Foreground="{DynamicResource AccentBrush}" FontWeight="Bold" />
                                             <Run Text=". Кнопка «Виджет» в ряду вкладок выделена цветом." />

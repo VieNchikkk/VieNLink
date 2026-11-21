@@ -9,7 +9,7 @@ VieNLink использует Semantic Versioning: `MAJOR.MINOR.PATCH[-beta.N]`.
 - **PATCH** — исправления и небольшие улучшения.
 - **`-beta.N`** — предрелизная сборка. На GitHub такие релизы помечаются как **Pre-release**.
 
-Текущая версия: **1.0.6-beta**.
+Текущая версия: **1.0.7-beta**.
 
 ## Где хранится версия
 
@@ -26,8 +26,8 @@ VieNLink использует Semantic Versioning: `MAJOR.MINOR.PATCH[-beta.N]`.
 
 | Версия | Поддержка |
 |---|---|
-| 1.0.6-beta (текущая) | Да |
-| 1.0.5-beta и старше | Нет — обновитесь до текущей беты |
+| 1.0.7-beta (текущая) | Да |
+| 1.0.6-beta и старше | Нет — обновитесь до текущей беты |
 | < 1.0 | Нет |
 
 Пока приложение в бете, поддерживается только последняя сборка. После стабилизации
@@ -55,7 +55,7 @@ VieNLink использует Semantic Versioning: `MAJOR.MINOR.PATCH[-beta.N]`.
 ## Как выпустить новую версию
 
 1. Обновите `Version`, `AssemblyVersion`, `FileVersion` и `InformationalVersion`
-   в `VieNLink/VieNLink.csproj` (`1.0.6`, `1.0.6-beta` и т.п.).
+   в `VieNLink/VieNLink.csproj` (`1.0.7`, `1.0.7-beta` и т.п.).
 2. Добавьте раздел в `CHANGELOG.md`.
 3. Прогоните `dotnet build VieNLink.slnx`, `SelfTest -- parsers` и `SelfTest -- checkconfigs`.
 4. Соберите поставку: `powershell -File build\publish-installer.ps1`

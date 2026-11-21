@@ -4,8 +4,9 @@ using System.Windows.Threading;
 namespace VieNLink;
 
 /// <summary>
-/// Геометрия окон: главное окно открывается в оптимальном размере и не растягивается,
-/// а его положение и положение плавающего виджета запоминаются между запусками.
+/// Геометрия окон: главное окно открывается в оптимальном размере, его можно
+/// свернуть, развернуть и растянуть, а положение и положение плавающего виджета
+/// запоминаются между запусками.
 /// </summary>
 public partial class MainWindow
 {
@@ -30,11 +31,13 @@ public partial class MainWindow
         // Размер в DIPs одинаков на любом масштабе экрана, поэтому окно не «прыгает» при смене DPI.
         Width = width;
         Height = height;
-        MinWidth = width;
-        MinHeight = height;
-        MaxWidth = width;
-        MaxHeight = height;
-        ResizeMode = ResizeMode.NoResize;
+        // Стартовый размер — рекомендуемый, но пользователь может свернуть,
+        // развернуть на весь экран и изменить размер окна.
+        MinWidth = MinimumWindowWidth;
+        MinHeight = MinimumWindowHeight;
+        MaxWidth = double.PositiveInfinity;
+        MaxHeight = double.PositiveInfinity;
+        ResizeMode = ResizeMode.CanResize;
 
         RestoreWindowPosition();
 

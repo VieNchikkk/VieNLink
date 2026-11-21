@@ -9,7 +9,7 @@
 ## Где проект и устройство
 
 - Репозиторий: `C:\MyProg\MyrrProxy` (рабочая папка сессии).
-- GitHub: https://github.com/VieNchikkk/VieNLink — **публичный**, релиз `v1.0.6-beta`.
+- GitHub: https://github.com/VieNchikkk/VieNLink — **публичный**, релиз `v1.0.7-beta`.
 - Windows-клиент: WPF, `net10.0-windows10.0.26100.0`.
 - Android-клиент: `net10.0-android` без MAUI, `com.vienlink.app`, ядро `Libs\libbox.aar`
   (sing-box 1.14.4, arm64).
@@ -18,10 +18,10 @@
 
 ## Сборка и проверки
 
-Готовый Windows-релиз 1.0.6: `release\VieNLink-1.0.6-win-x64` (+ ZIP 100,8 МБ) и
-`release\VieNLink-1.0.6-setup.exe` (92,9 МБ), exe и установщик подписаны (`CN=VieN`), внутри
+Готовый Windows-релиз 1.0.7: `release\VieNLink-1.0.7-win-x64` (+ ZIP 100,8 МБ) и
+`release\VieNLink-1.0.7-setup.exe` (92,9 МБ), exe и установщик подписаны (`CN=VieN`), внутри
 `core\`, `zapret\`, `LICENSE` и `THIRD-PARTY-NOTICES.md`. Опубликован на GitHub:
-https://github.com/VieNchikkk/VieNLink/releases/tag/v1.0.6-beta (ZIP, установщик,
+https://github.com/VieNchikkk/VieNLink/releases/tag/v1.0.7-beta (ZIP, установщик,
 `SHA256SUMS.txt`, статус Pre-release).
 
 Windows (системный `dotnet`):
@@ -195,7 +195,7 @@ MTProto, экспорт профиля.
 5. **Остальные техники фазы 4.1:** `wssize`, `hopbyhop`/`destopt`, `synack`,
    `rst`/`rstack`, дублирование SYN с MD5.
 6. **TUN-обход Android** — по решению владельца отложен; вернуться при необходимости.
-7. **Публикация:** репозиторий открыт (public), релиз `v1.0.6-beta` создан.
+7. **Публикация:** репозиторий открыт (public), релиз `v1.0.7-beta` создан.
    При следующем релизе — поднять версию, обновить `CHANGELOG.md` и `docs/VERSIONING.md`
    и приложить ZIP, `setup.exe`, `SHA256SUMS.txt`.
 
