@@ -819,6 +819,15 @@
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
+                                <GridViewColumn Header="✓" Width="32">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding TrustedIcon}" VerticalAlignment="Center"
+                                                       Foreground="{DynamicResource AccentBrush}"
+                                                       ToolTip="Доверенный источник: обновляется не реже раза в 24 часа" />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
                                 <GridViewColumn Header="Название" Width="220">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
@@ -1123,7 +1132,7 @@
                                    Text="Каждую работу можно выключить отдельно. «Остановить все процессы» выше выключает их все сразу; туннель и ручные кнопки работают всегда." />
                         <CheckBox x:Name="AutoDiscoverCheck" Content="Автопоиск новых источников (GitHub и публичные сайты)"
                                   Style="{StaticResource AppCheckBox}" Margin="0,4"
-                                  ToolTip="Искать новые публичные списки и подписки. У репозиториев GitHub берём только обновлённые за последние 24 часа; если даты публикации нет — источник не отсеиваем" />
+                                  ToolTip="Искать новые публичные списки. Берём только GitHub-репозитории, обновлённые за выбранное окно свежести; источники без даты публикации не добавляем" />
                         <Grid Margin="0,2,0,4">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="260" />
@@ -1134,7 +1143,7 @@
                         </Grid>
                         <CheckBox x:Name="AutoCollectServersCheck" Content="Авто-сбор серверов из источников"
                                   Style="{StaticResource AppCheckBox}" Margin="0,4"
-                                  ToolTip="Периодически заново собирать серверы из включённых источников и подписок. GitHub-репозитории берутся только обновлённые за последние 24 часа; если даты публикации нет — источник собирается как раньше" />
+                                  ToolTip="Периодически заново собирать серверы из включённых источников. GitHub-источники берутся только за выбранное окно свежести; без даты публикации источник удаляется" />
                         <Grid Margin="0,2,0,4">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="260" />
@@ -1142,6 +1151,15 @@
                             </Grid.ColumnDefinitions>
                             <TextBlock Text="Собирать каждые, мин (0 — выкл.)" VerticalAlignment="Center" Foreground="{DynamicResource TextSoftBrush}" />
                             <TextBox Grid.Column="1" x:Name="AutoRefreshBox" Style="{StaticResource AppTextBox}" />
+                        </Grid>
+                        <Grid Margin="0,2,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="260" />
+                                <ColumnDefinition Width="120" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Считать источник свежим, ч" VerticalAlignment="Center" Foreground="{DynamicResource TextSoftBrush}"
+                                       ToolTip="Собирать серверы только из GitHub-источников, опубликованных не позже этого времени. По умолчанию 24 часа" />
+                            <TextBox Grid.Column="1" x:Name="SourceFreshnessHoursBox" Style="{StaticResource AppTextBox}" />
                         </Grid>
                         <CheckBox x:Name="AutoUpdateCheck" Content="Обновлять подписки при запуске, если данные устарели"
                                   Style="{StaticResource AppCheckBox}" Margin="0,4"
@@ -1289,6 +1307,79 @@
             </TabItem>
 
 
+
+            <TabItem x:Name="RejectedTab" Style="{StaticResource AppTabItem}">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <Path Style="{StaticResource TabIcon}"
+                              Data="M19,4H15.5L14.5,3H9.5L8.5,4H5V6H19M6,19A2,2 0 0,0 8,21H16A2,2 0 0,0 18,19V7H6V19Z" />
+                        <TextBlock Text="Отсев — Перепроверка" VerticalAlignment="Center" />
+                    </StackPanel>
+                </TabItem.Header>
+                <DockPanel Margin="16,12,16,16">
+                    <StackPanel DockPanel.Dock="Top">
+                        <TextBlock x:Name="RejectedSummaryText" Style="{StaticResource HintText}"
+                                   TextWrapping="Wrap" Margin="0,0,0,6" />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <RadioButton x:Name="RejectedAllRadio" Content="Все" Tag="all"
+                                         Style="{StaticResource AppRadioButton}" GroupName="RejectedService"
+                                         IsChecked="True" Checked="OnRejectedServiceChecked" Margin="0,0,8,0" />
+                            <RadioButton Content="YouTube" Tag="youtube"
+                                         Style="{StaticResource AppRadioButton}" GroupName="RejectedService"
+                                         Checked="OnRejectedServiceChecked" Margin="0,0,8,0" />
+                            <RadioButton Content="Telegram" Tag="telegram"
+                                         Style="{StaticResource AppRadioButton}" GroupName="RejectedService"
+                                         Checked="OnRejectedServiceChecked" Margin="0,0,8,0" />
+                            <RadioButton Content="Discord" Tag="discord"
+                                         Style="{StaticResource AppRadioButton}" GroupName="RejectedService"
+                                         Checked="OnRejectedServiceChecked" Margin="0,0,8,0" />
+                            <RadioButton Content="Универсальный" Tag="universal"
+                                         Style="{StaticResource AppRadioButton}" GroupName="RejectedService"
+                                         Checked="OnRejectedServiceChecked" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <Button Content="Подключение" Style="{StaticResource PrimaryButton}"
+                                    Margin="0,0,8,0" Click="OnRejectConnectClick"
+                                    ToolTip="Попробовать подключиться к выбранному серверу и вернуть его в рабочие" />
+                            <Button Content="Отмена" Style="{StaticResource WarningButton}"
+                                    Margin="0,0,8,0" Click="OnRejectCancelClick"
+                                    ToolTip="Остановить текущую перепроверку или подключение" />
+                            <Button Content="Следующий" Style="{StaticResource AccentSmallButton}"
+                                    Margin="0,0,8,0" Click="OnRejectNextClick"
+                                    ToolTip="Выбрать следующий сервер в отсеве" />
+                            <Button Content="Вернуть (В рабочие)" Style="{StaticResource AccentSmallButton}"
+                                    Click="OnRejectReturnClick"
+                                    ToolTip="Вернуть выбранные серверы в рабочие без проверки" />
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <Button Content="Перепроверить выбранный" Style="{StaticResource AccentSmallButton}"
+                                    Margin="0,0,8,0" Click="OnRecheckRejectedClick"
+                                    ToolTip="Проверить выбранные серверы через скрытое ядро и вернуть рабочие в список" />
+                            <Button Content="Перепроверить всё" Style="{StaticResource AccentSmallButton}"
+                                    Margin="0,0,8,0" Click="OnRecheckAllRejectedClick"
+                                    ToolTip="Проверить до 200 серверов из отсева; рабочие вернутся в список" />
+                            <Button Content="Убрать из отсева" Style="{StaticResource SmallButton}"
+                                    Click="OnRemoveRejectedClick"
+                                    ToolTip="Удалить выбранные серверы из файла отсева без проверки" />
+                        </StackPanel>
+                    </StackPanel>
+                    <DataGrid x:Name="RejectedGrid" Style="{StaticResource AppDataGrid}"
+                              SelectionMode="Extended" SelectionUnit="FullRow">
+                        <DataGrid.Columns>
+                            <DataGridTextColumn Header="Сервер" Binding="{Binding Name}" Width="*" MinWidth="160" />
+                            <DataGridTextColumn Header="Адрес" Binding="{Binding ServerPort}" Width="170" />
+                            <DataGridTextColumn Header="Протокол" Binding="{Binding Protocol}" Width="90" />
+                            <DataGridTextColumn Header="Источник" Binding="{Binding SourceName}" Width="190" />
+                            <DataGridTextColumn Header="YouTube" Binding="{Binding YoutubeLabel}" Width="70" />
+                            <DataGridTextColumn Header="Telegram" Binding="{Binding TelegramLabel}" Width="75" />
+                            <DataGridTextColumn Header="Discord" Binding="{Binding DiscordLabel}" Width="65" />
+                            <DataGridTextColumn Header="Универс." Binding="{Binding UniversalLabel}" Width="70" />
+                            <DataGridTextColumn Header="Отсеян" Binding="{Binding RejectedLabel}" Width="105" />
+                            <DataGridTextColumn Header="Провалы" Binding="{Binding FailLabel}" Width="75" />
+                        </DataGrid.Columns>
+                    </DataGrid>
+                </DockPanel>
+            </TabItem>
 
             <TabItem Style="{StaticResource AppTabItem}">
                 <TabItem.Header>

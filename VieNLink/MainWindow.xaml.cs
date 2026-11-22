@@ -157,6 +157,7 @@ public partial class MainWindow : Window
             SourcesList.ItemsSource = sourcesView;
         }
 
+        InitializeRejectedRows();
         BuildZapretPresetList();
         BuildDesyncStrategyList();
         BuildTunBypassStrategyList();
@@ -432,7 +433,8 @@ public partial class MainWindow : Window
             AppendLog(line);
         });
 
-        var result = await SourceDiscoveryService.DiscoverAsync(_sources, progress, _operation!.Token);
+        var result = await SourceDiscoveryService.DiscoverAsync(
+            _sources, progress, _operation!.Token, _settings.SourceFreshnessHours);
         foreach (var source in result.Sources)
         {
             _sources.Add(source);

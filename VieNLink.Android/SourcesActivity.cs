@@ -184,6 +184,11 @@ public sealed class SourcesActivity : BaseActivity
             row.AddView(Ui.Badge(this, P, "★ МОЯ", P.Accent));
         }
 
+        if (source.IsTrustedNow)
+        {
+            row.AddView(Ui.Badge(this, P, "✓ ДОВЕРЕННЫЙ", P.Positive));
+        }
+
         row.AddView(Ui.Badge(this, P, source.Enabled ? "ВКЛ" : "ВЫКЛ",
             source.Enabled ? P.Positive : P.Muted));
         card.AddView(row);
@@ -472,7 +477,8 @@ public sealed class SourcesActivity : BaseActivity
         {
             var progress = new Progress<string>(SetProgress);
             var result = await SourceDiscoveryService.DiscoverAsync(
-                NodeStore.SnapshotSources(), progress, CancellationToken.None);
+                NodeStore.SnapshotSources(), progress, CancellationToken.None,
+                NodeStore.Settings.SourceFreshnessHours);
             var added = await Task.Run(() => NodeStore.AddDiscovered(result));
             var mtproto = MtProtoStore.AddDiscovered(result.MtProto);
             SetProgress($"Новых источников {added}, серверов {result.Nodes.Count}, MTProto {mtproto}." +

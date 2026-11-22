@@ -62,6 +62,12 @@ internal static class SettingsUpgrade
                 "Читаю известные поля; незнакомые исчезнут только при следующем сохранении.");
         }
 
+        if (settings.SourceFreshnessHours < 1)
+        {
+            settings.SourceFreshnessHours = 24;
+            changed = true;
+        }
+
         return changed;
     }
 }

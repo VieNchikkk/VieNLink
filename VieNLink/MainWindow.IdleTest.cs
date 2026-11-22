@@ -367,6 +367,7 @@ public partial class MainWindow
 
         if (node.Status == NodeStatus.Dead)
         {
+            ArchiveRejectedNode(node);
             DropNode(row);
             return;
         }

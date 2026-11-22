@@ -29,6 +29,9 @@ internal static class AppPaths
     public static string WorkingNodesPath { get; } = Path.Combine(DataDirectory, "nodes-working.json");
 
     public static string SettingsPath { get; } = Path.Combine(DataDirectory, "settings.json");
+
+    /// <summary>Рабочие серверы, переставшие работать: храним отдельно для ручной перепроверки.</summary>
+    public static string RejectedNodesPath { get; } = Path.Combine(DataDirectory, "nodes-rejected.json");
     public static string LogsDirectory { get; } = Path.Combine(DataDirectory, "logs");
     public static string CoreDirectory { get; } = Path.Combine(DataDirectory, "core");
     public static string RuntimeDirectory { get; } = Path.Combine(DataDirectory, "runtime");

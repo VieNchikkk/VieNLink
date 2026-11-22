@@ -7,14 +7,14 @@ using System.Text.RegularExpressions;
 namespace VieNLink;
 
 /// <summary>
-/// Свежесть публичного списка на GitHub. При сборе серверов пропускаем не только старые
-/// репозитории, но и отдельные файлы: смотрим дату последнего коммита файла, а если
-/// её получить не удалось — дату последнего push репозитория. Если даты нет вовсе,
-/// источник не отсеиваем: важно не потерять сеть целиком.
+/// Свежесть публичного списка на GitHub. Для серверов берём только источники,
+/// опубликованные не позже заданного окна (по умолчанию 24 часа). Смотрим дату
+/// последнего коммита файла, затем push репозитория. Если дату определить нельзя,
+/// источник не собираем; временный сбой GitHub API не должен удалять все источники.
 /// </summary>
 internal static class GitHubSourceFreshness
 {
-    private static readonly TimeSpan MaximumAge = TimeSpan.FromHours(24);
+    public static readonly TimeSpan DefaultMaximumAge = TimeSpan.FromHours(24);
     private static readonly TimeSpan KnownCacheTime = TimeSpan.FromHours(1);
     // Недоступный API не должен опрашиваться для каждого источника на каждом сборе.
     private static readonly TimeSpan UnknownCacheTime = TimeSpan.FromMinutes(15);
@@ -32,6 +32,16 @@ internal static class GitHubSourceFreshness
 
     private static readonly HttpClient Client = CreateClient();
 
+    /// <summary>
+    /// Fresh — можно собирать; DateKnown — дата публикации известна (для иконки);
+    /// ApiReached=false — GitHub API недоступен, источник нельзя удалять из-за этого.
+    /// </summary>
+    internal sealed record SourceFreshness(
+        bool Fresh,
+        bool DateKnown,
+        bool ApiReached,
+        DateTimeOffset? UpdatedAt);
+
     internal sealed record SourceLocation(
         string Repository,
         string? Reference,
@@ -42,40 +52,45 @@ internal static class GitHubSourceFreshness
             : Repository + "|" + (Reference ?? string.Empty) + "|" + Path;
     }
 
-    public static async Task<bool> IsFreshAsync(
+    public static async Task<SourceFreshness> CheckAsync(
         SourceDefinition source,
+        TimeSpan maximumAge,
         CancellationToken cancellationToken)
     {
         // Личные подписки и одиночные ссылки не фильтруем: это выбор пользователя.
         if (source.IsMine || source.Kind == SourceKind.SingleLink)
         {
-            return true;
+            return new SourceFreshness(true, false, true, null);
         }
 
         var location = TryGetLocation(source.Url);
         if (location is null)
         {
-            return true;
+            // Не GitHub — дату публикации определить нельзя, такой источник не собираем.
+            return new SourceFreshness(false, false, true, null);
         }
 
         if (Cache.TryGetValue(location.CacheKey, out var cached))
         {
-            var lifetime = cached.Known ? KnownCacheTime : UnknownCacheTime;
+            var lifetime = cached.DateKnown ? KnownCacheTime : UnknownCacheTime;
             if (DateTime.UtcNow - cached.CheckedUtc < lifetime)
             {
-                return cached.Fresh;
+                return new SourceFreshness(
+                    cached.Fresh, cached.DateKnown, cached.ApiReached, cached.UpdatedAt);
             }
         }
 
-        var updatedAt = await FetchUpdatedAtAsync(location, cancellationToken).ConfigureAwait(false);
-        var fresh = IsPushedAtFresh(updatedAt, DateTime.UtcNow);
-        Cache[location.CacheKey] = new CacheEntry(DateTime.UtcNow, fresh, updatedAt is not null);
-        return fresh;
+        var (updatedAt, reached) = await FetchUpdatedAtAsync(location, cancellationToken)
+            .ConfigureAwait(false);
+        var known = updatedAt is not null;
+        var fresh = known && DateTime.UtcNow - updatedAt!.Value.UtcDateTime <= maximumAge;
+        Cache[location.CacheKey] = new CacheEntry(DateTime.UtcNow, fresh, known, reached, updatedAt);
+        return new SourceFreshness(fresh, known, reached, updatedAt);
     }
 
-    /// <summary>Свежая ли дата публикации; null/нераспознанная дата не отсеивает источник.</summary>
+    /// <summary>Свежая ли дата публикации; null не считается свежим.</summary>
     internal static bool IsPushedAtFresh(DateTimeOffset? pushedAt, DateTime nowUtc) =>
-        pushedAt is null || nowUtc - pushedAt.Value.UtcDateTime <= MaximumAge;
+        pushedAt is not null && nowUtc - pushedAt.Value.UtcDateTime <= DefaultMaximumAge;
 
     /// <summary>owner/repo из ссылки GitHub; null — источник не на GitHub.</summary>
     internal static string? TryGetRepository(string? url) => TryGetLocation(url)?.Repository;
@@ -132,13 +147,14 @@ internal static class GitHubSourceFreshness
         return new SourceLocation(repository, reference, path);
     }
 
-    private static async Task<DateTimeOffset?> FetchUpdatedAtAsync(
+    private static async Task<(DateTimeOffset? Date, bool Reached)> FetchUpdatedAtAsync(
         SourceLocation location,
         CancellationToken cancellationToken)
     {
         if (location.Path is null)
         {
-            return await FetchRepositoryPushedAtAsync(location.Repository, cancellationToken).ConfigureAwait(false);
+            return await FetchRepositoryPushedAtAsync(location.Repository, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         var path = Uri.EscapeDataString(location.Path);
@@ -148,18 +164,23 @@ internal static class GitHubSourceFreshness
             apiUrl += "&sha=" + Uri.EscapeDataString(location.Reference);
         }
 
-        var updatedAt = await ReadDateAsync(apiUrl, "commit", cancellationToken).ConfigureAwait(false);
-        // Если коммиты файла получить не удалось, пробуем хотя бы push репозитория.
-        return updatedAt ?? await FetchRepositoryPushedAtAsync(location.Repository, cancellationToken)
+        var file = await ReadDateAsync(apiUrl, "commit", cancellationToken).ConfigureAwait(false);
+        if (file.Date is not null)
+        {
+            return file;
+        }
+
+        var repository = await FetchRepositoryPushedAtAsync(location.Repository, cancellationToken)
             .ConfigureAwait(false);
+        return (repository.Date, file.Reached || repository.Reached);
     }
 
-    private static Task<DateTimeOffset?> FetchRepositoryPushedAtAsync(
+    private static Task<(DateTimeOffset? Date, bool Reached)> FetchRepositoryPushedAtAsync(
         string repository,
         CancellationToken cancellationToken) =>
         ReadDateAsync("https://api.github.com/repos/" + repository, "pushed_at", cancellationToken);
 
-    private static async Task<DateTimeOffset?> ReadDateAsync(
+    private static async Task<(DateTimeOffset? Date, bool Reached)> ReadDateAsync(
         string apiUrl,
         string property,
         CancellationToken cancellationToken)
@@ -167,7 +188,6 @@ internal static class GitHubSourceFreshness
         var token = Environment.GetEnvironmentVariable("VIENLINK_GITHUB_TOKEN")
                     ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN");
 
-        // Прямой GitHub, затем зеркала: API в РФ часто недоступен.
         var urls = new[]
         {
             apiUrl,
@@ -202,7 +222,7 @@ internal static class GitHubSourceFreshness
                 {
                     if (root.GetArrayLength() == 0)
                     {
-                        return null;
+                        return (null, true);
                     }
 
                     root = root[0];
@@ -210,7 +230,7 @@ internal static class GitHubSourceFreshness
 
                 if (root.ValueKind != JsonValueKind.Object)
                 {
-                    return null;
+                    return (null, true);
                 }
 
                 if (property == "commit")
@@ -218,27 +238,27 @@ internal static class GitHubSourceFreshness
                     if (!root.TryGetProperty("commit", out var commit) ||
                         commit.ValueKind != JsonValueKind.Object)
                     {
-                        return null;
+                        return (null, true);
                     }
 
                     if (commit.TryGetProperty("committer", out var committer) &&
                         committer.ValueKind == JsonValueKind.Object &&
                         committer.TryGetProperty("date", out var committerDate))
                     {
-                        return ParseDate(committerDate);
+                        return (ParseDate(committerDate), true);
                     }
 
                     if (commit.TryGetProperty("author", out var author) &&
                         author.ValueKind == JsonValueKind.Object &&
                         author.TryGetProperty("date", out var authorDate))
                     {
-                        return ParseDate(authorDate);
+                        return (ParseDate(authorDate), true);
                     }
 
-                    return null;
+                    return (null, true);
                 }
 
-                return root.TryGetProperty(property, out var value) ? ParseDate(value) : null;
+                return (root.TryGetProperty(property, out var value) ? ParseDate(value) : null, true);
             }
             catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException
                                                  or JsonException)
@@ -250,7 +270,7 @@ internal static class GitHubSourceFreshness
             }
         }
 
-        return null;
+        return (null, false);
     }
 
     private static DateTimeOffset? ParseDate(JsonElement element)
@@ -282,5 +302,10 @@ internal static class GitHubSourceFreshness
         return client;
     }
 
-    private readonly record struct CacheEntry(DateTime CheckedUtc, bool Fresh, bool Known);
+    private readonly record struct CacheEntry(
+        DateTime CheckedUtc,
+        bool Fresh,
+        bool DateKnown,
+        bool ApiReached,
+        DateTimeOffset? UpdatedAt);
 }

@@ -2363,8 +2363,13 @@ internal static class Program
         Check(seeded.TotalWorkingNodeCount == 1,
             "источники: рабочий сервер из кэша попадает в «рабочих всего»");
 
-        // Автопоиск источников: GitHub-репозитории старше 24 ч отсеиваются,
-        // без даты публикации — не отсеиваются.
+        // Доверенный источник: обновлялся не реже раза в 24 часа.
+        Check(new SourceDefinition { LastPublishedUtc = DateTime.UtcNow.AddHours(-1) }.IsTrustedNow &&
+              !new SourceDefinition { LastPublishedUtc = DateTime.UtcNow.AddHours(-25) }.IsTrustedNow &&
+              !new SourceDefinition().IsTrustedNow,
+            "источники: доверенный только при публикации за последние 24 ч");
+
+        // Автопоиск источников: GitHub-репозитории старше 24 ч и без даты отсеиваются.
         var freshnessNow = DateTime.UtcNow;
         Check(SourceDiscoveryService.IsRepositoryFresh(
                 freshnessNow.AddHours(-23).ToString("O"), freshnessNow),
@@ -2372,9 +2377,9 @@ internal static class Program
         Check(!SourceDiscoveryService.IsRepositoryFresh(
                 freshnessNow.AddHours(-25).ToString("O"), freshnessNow),
             "автопоиск: репозиторий возрастом 25 ч отсеивается");
-        Check(SourceDiscoveryService.IsRepositoryFresh(null, freshnessNow) &&
-              SourceDiscoveryService.IsRepositoryFresh("не дата", freshnessNow),
-            "автопоиск: без даты публикации источник не отсеивается");
+        Check(!SourceDiscoveryService.IsRepositoryFresh(null, freshnessNow) &&
+              !SourceDiscoveryService.IsRepositoryFresh("не дата", freshnessNow),
+            "автопоиск: без даты публикации источник отсеивается");
 
         // Сбор серверов: GitHub-репозиторий старше 24 ч пропускается.
         Check(GitHubSourceFreshness.TryGetRepository(
@@ -2387,12 +2392,12 @@ internal static class Program
               fileLocation.Path == "sub/file.txt",
             "сбор: путь к файлу в источнике разобран");
         Check(GitHubSourceFreshness.TryGetRepository("https://example.com/sub") is null,
-            "сбор: не-GitHub источник не фильтруется");
+            "сбор: не-GitHub ссылка не даёт репозиторий");
         var pushedNow = DateTimeOffset.UtcNow;
         Check(GitHubSourceFreshness.IsPushedAtFresh(pushedNow.AddHours(-23), pushedNow.UtcDateTime) &&
               !GitHubSourceFreshness.IsPushedAtFresh(pushedNow.AddHours(-25), pushedNow.UtcDateTime) &&
-              GitHubSourceFreshness.IsPushedAtFresh(null, pushedNow.UtcDateTime),
-            "сбор: свежесть репозитория 24 ч и отсутствие даты");
+              !GitHubSourceFreshness.IsPushedAtFresh(null, pushedNow.UtcDateTime),
+            "сбор: свежесть репозитория 24 ч и отсутствие даты отсекается");
 
         // 1. Оба проверочных адреса доступны → узел рабочий, отметки стоят.
         var working = DirectNode("direct-a");

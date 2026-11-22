@@ -512,6 +512,20 @@ internal sealed class SourceDefinition
     public int LastNodeCount { get; set; }
 
     /// <summary>
+    /// Источник обновляется не реже раза в 24 часа (по дате публикации файла/репозитория).
+    /// В интерфейсе помечается иконкой «доверенный».
+    /// </summary>
+    public bool IsTrusted { get; set; }
+
+    /// <summary>Дата последней публикации файла/репозитория на GitHub, если известна.</summary>
+    public DateTime? LastPublishedUtc { get; set; }
+
+    /// <summary>Обновлялся не реже раза в 24 часа — источник считается доверенным.</summary>
+    [JsonIgnore]
+    public bool IsTrustedNow =>
+        LastPublishedUtc is { } published && DateTime.UtcNow - published <= TimeSpan.FromHours(24);
+
+    /// <summary>
     /// Сколько уникальных серверов когда-либо пришло из источника. Считается по
     /// <see cref="RegisteredNodeIds"/>, поэтому повторные сборы не раздувают число.
     /// </summary>
@@ -808,6 +822,9 @@ internal sealed class AppSettings
 
     /// <summary>Периодическое обновление списков во время работы, в минутах (0 — выключено).</summary>
     public int AutoRefreshMinutes { get; set; } = 120;
+
+    /// <summary>Считать источник актуальным, если он обновлялся не позже этого числа часов.</summary>
+    public int SourceFreshnessHours { get; set; } = 24;
 
     /// <summary>Искать новые источники серверов автоматически.</summary>
     public bool AutoDiscoverSources { get; set; } = true;

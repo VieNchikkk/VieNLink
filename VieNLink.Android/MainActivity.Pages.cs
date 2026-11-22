@@ -244,7 +244,8 @@ public sealed partial class MainActivity
         try
         {
             var result = await SourceDiscoveryService.DiscoverAsync(
-                NodeStore.SnapshotSources(), null, CancellationToken.None);
+                NodeStore.SnapshotSources(), null, CancellationToken.None,
+                NodeStore.Settings.SourceFreshnessHours);
             var added = await Task.Run(() => NodeStore.AddDiscovered(result));
             var mtproto = MtProtoStore.AddDiscovered(result.MtProto);
             var message = $"Новых источников {added}, серверов {result.Nodes.Count}, MTProto {mtproto}" +

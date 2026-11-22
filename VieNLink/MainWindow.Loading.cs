@@ -33,6 +33,7 @@ public partial class MainWindow
             AutoUpdateHoursBox.Text = _settings.AutoUpdateHours.ToString();
             KeepUnseenDaysBox.Text = _settings.KeepUnseenNodeDays.ToString();
             AutoRefreshBox.Text = _settings.AutoRefreshMinutes.ToString();
+            SourceFreshnessHoursBox.Text = _settings.SourceFreshnessHours.ToString();
             AutoCollectServersCheck.IsChecked = _settings.AutoCollectServers && _settings.AutoRefreshMinutes > 0;
             AutoDiscoverCheck.IsChecked = _settings.AutoDiscoverSources;
             AutoDiscoverHoursBox.Text = _settings.AutoDiscoverHours.ToString();

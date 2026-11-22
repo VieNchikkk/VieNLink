@@ -84,8 +84,10 @@ internal static class SourceDiscoveryService
     public static async Task<DiscoveryResult> DiscoverAsync(
         IReadOnlyList<SourceDefinition> existing,
         IProgress<string>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int freshnessHours = 24)
     {
+        var maximumAge = TimeSpan.FromHours(Math.Clamp(freshnessHours, 1, 168 * 24));
         var result = new DiscoveryResult();
         var knownUrls = new HashSet<string>(existing.Select(s => s.Url), StringComparer.OrdinalIgnoreCase);
         var knownRepositories = new HashSet<string>(
@@ -138,7 +140,8 @@ internal static class SourceDiscoveryService
                     continue;
                 }
 
-                if (!IsRepositoryFresh(pushedAt, DateTime.UtcNow))
+                if (!TryParsePushedAt(pushedAt, out var pushed) ||
+                    DateTime.UtcNow - pushed > maximumAge)
                 {
                     continue;
                 }
@@ -148,7 +151,7 @@ internal static class SourceDiscoveryService
                     continue;
                 }
 
-                candidates.Add(new RepositoryCandidate(fullName, branch));
+                candidates.Add(new RepositoryCandidate(fullName, branch, pushed));
             }
         }
 
@@ -202,6 +205,8 @@ internal static class SourceDiscoveryService
                     AddedAtUtc = DateTime.UtcNow,
                     LastCheckedUtc = DateTime.UtcNow,
                     LastNodeCount = nodes.Count,
+                    LastPublishedUtc = candidate.PublishedAt,
+                    IsTrusted = true,
                 };
                 source.RegisterNodes(nodes);
 
@@ -212,8 +217,7 @@ internal static class SourceDiscoveryService
             }
         }
 
-        await DiscoverWebAsync(knownUrls, result, progress, cancellationToken);
-
+        // Публичные сайты не дают дату публикации — такие источники больше не ищем.
         return result;
     }
 
@@ -492,26 +496,26 @@ internal static class SourceDiscoveryService
 
     /// <summary>
     /// Свежий ли репозиторий: время последнего push не старше 24 часов.
-    /// Если даты публикации нет или её не удалось разобрать — не отсеиваем.
+    /// Без даты публикации источник не берём.
     /// </summary>
-    internal static bool IsRepositoryFresh(string? pushedAt, DateTime nowUtc)
+    internal static bool IsRepositoryFresh(string? pushedAt, DateTime nowUtc) =>
+        TryParsePushedAt(pushedAt, out var pushed) &&
+        nowUtc - pushed <= MaximumRepositoryAge;
+
+    private static bool TryParsePushedAt(string? pushedAt, out DateTime pushed)
     {
         if (string.IsNullOrWhiteSpace(pushedAt))
         {
-            return true;
+            pushed = default;
+            return false;
         }
 
-        if (!DateTime.TryParse(
-                pushedAt,
-                null,
-                System.Globalization.DateTimeStyles.AdjustToUniversal |
-                System.Globalization.DateTimeStyles.AssumeUniversal,
-                out var pushed))
-        {
-            return true;
-        }
-
-        return nowUtc - pushed <= MaximumRepositoryAge;
+        return DateTime.TryParse(
+            pushedAt,
+            null,
+            System.Globalization.DateTimeStyles.AdjustToUniversal |
+            System.Globalization.DateTimeStyles.AssumeUniversal,
+            out pushed);
     }
 
     private static async Task<List<ProxyNode>?> TryLoadAsync(string url, string sourceName, CancellationToken cancellationToken)
@@ -647,5 +651,5 @@ internal static class SourceDiscoveryService
         return new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
     }
 
-    private readonly record struct RepositoryCandidate(string FullName, string Branch);
+    private readonly record struct RepositoryCandidate(string FullName, string Branch, DateTime PublishedAt);
 }

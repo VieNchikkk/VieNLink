@@ -66,7 +66,19 @@ public partial class MainWindow
             _sources,
             progress,
             _operation!.Token,
-            outcome => _sourceRows.FirstOrDefault(r => ReferenceEquals(r.Source, outcome.Source))?.Refresh());
+            outcome => _sourceRows.FirstOrDefault(r => ReferenceEquals(r.Source, outcome.Source))?.Refresh(),
+            _settings.SourceFreshnessHours);
+
+        // Источники без даты публикации больше не нужны — убираем из списка.
+        foreach (var source in collected.SourcesToRemove)
+        {
+            _sources.Remove(source);
+            var row = _sourceRows.FirstOrDefault(r => ReferenceEquals(r.Source, source));
+            if (row is not null)
+            {
+                _sourceRows.Remove(row);
+            }
+        }
 
         var nodes = collected.Nodes;
         MergeMtProto(collected.MtProto);

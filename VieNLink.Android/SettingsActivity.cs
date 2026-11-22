@@ -116,21 +116,41 @@ public sealed class SettingsActivity : BaseActivity
         var settings = SettingsStore.Current;
         var android = AndroidSettingsStore.Current;
         AddAutomationToggle(page, "Автопоиск новых источников",
-            "Искать новые списки и подписки в GitHub и на публичных сайтах. " +
-            "GitHub-репозитории берём только обновлённые за последние 24 часа; " +
-            "если даты публикации нет — источник не отсеиваем.",
+            "Искать новые списки в GitHub. Берём только репозитории, обновлённые за выбранное " +
+            "окно свежести; источники без даты публикации не добавляем.",
             settings.AutoDiscoverSources,
             value => settings.AutoDiscoverSources = value);
         AddAutomationToggle(page, "Авто-сбор серверов из источников",
-            "Периодически заново собирать серверы из включённых источников и подписок. " +
-            "GitHub-репозитории берём только обновлённые за последние 24 часа; " +
-            "если даты публикации нет — источник собирается как раньше.",
+            "Периодически заново собирать серверы из включённых источников. " +
+            "GitHub-источники берём только за выбранное окно свежести; без даты публикации удаляем.",
             settings.AutoCollectServers,
             value =>
             {
                 settings.AutoCollectServers = value;
                 settings.AutoUpdateSubscriptions = value;
             });
+
+        var freshness = Ui.Input(this, P, "Свежесть источников, ч", settings.SourceFreshnessHours.ToString());
+        freshness.InputType = Android.Text.InputTypes.ClassNumber;
+        freshness.FocusChange += (_, args) =>
+        {
+            if (args.HasFocus)
+            {
+                return;
+            }
+
+            if (int.TryParse(freshness.Text, out var hours))
+            {
+                settings.SourceFreshnessHours = Math.Clamp(hours, 1, 24 * 30);
+                freshness.Text = settings.SourceFreshnessHours.ToString();
+                SettingsStore.Save();
+            }
+        };
+        page.AddView(freshness);
+        page.AddView(Ui.Hint(this,
+            "Собирать серверы только из источников, опубликованных не позже этого времени. " +
+            "По умолчанию 24 часа; источники без даты публикации удаляются.", P));
+
         AddAutomationToggle(page, "Автопроверка серверов",
             "Проверять накопленные и рабочие серверы в фоне отдельным процессом :probe.",
             settings.IdleTestEnabled,

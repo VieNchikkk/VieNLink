@@ -54,6 +54,7 @@ public partial class MainWindow
         _settings.AutoUpdateHours = ParseInt(AutoUpdateHoursBox, _settings.AutoUpdateHours, 1, 168);
         _settings.KeepUnseenNodeDays = ParseInt(KeepUnseenDaysBox, _settings.KeepUnseenNodeDays, 1, 365);
         _settings.AutoRefreshMinutes = ParseInt(AutoRefreshBox, _settings.AutoRefreshMinutes, 0, 1440);
+        _settings.SourceFreshnessHours = ParseInt(SourceFreshnessHoursBox, _settings.SourceFreshnessHours, 1, 24 * 30);
         _settings.AutoCollectServers = AutoCollectServersCheck.IsChecked == true &&
                                       _settings.AutoRefreshMinutes > 0;
         _settings.AutoDiscoverSources = AutoDiscoverCheck.IsChecked == true;

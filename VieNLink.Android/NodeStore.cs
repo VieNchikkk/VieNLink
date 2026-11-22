@@ -525,8 +525,20 @@ internal static class NodeStore
         EnsureLoaded();
 
         var collected = await NodeSourceService
-            .CollectAsync(Sources, progress, cancellationToken)
+            .CollectAsync(Sources, progress, cancellationToken, null, Settings.SourceFreshnessHours)
             .ConfigureAwait(false);
+
+        // Источники без даты публикации больше не нужны — убираем из списка.
+        if (collected.SourcesToRemove.Count > 0)
+        {
+            lock (Gate)
+            {
+                foreach (var source in collected.SourcesToRemove)
+                {
+                    Sources.Remove(source);
+                }
+            }
+        }
 
         Merge(collected.Nodes);
 
@@ -786,6 +798,14 @@ internal static class NodeStore
         int removed;
         lock (Gate)
         {
+            // Рабочие серверы, которые перестали работать, не теряем: кладём в отсев
+            // для ручной перепроверки. Непроверенный мусор просто удаляется.
+            foreach (var node in tested.Where(node =>
+                         node.Status == NodeStatus.Dead && NodeAvailability.HasSuccess(node)))
+            {
+                RejectedNodeStore.Add(node);
+            }
+
             removed = Nodes.RemoveAll(node => dead.Contains(node.Id));
             if (removed > 0)
             {

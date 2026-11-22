@@ -116,6 +116,27 @@ internal sealed class MtProtoRow : INotifyPropertyChanged
     public void Refresh() => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(string.Empty));
 }
 
+/// <summary>Строка вкладки «Отсев — Перепроверка»: рабочий сервер, переставший работать.</summary>
+internal sealed class RejectedNodeRow
+{
+    public RejectedNodeRow(RejectedNode entry) => Entry = entry;
+
+    public RejectedNode Entry { get; }
+    public ProxyNode Node => Entry.Node;
+
+    public string Name => Node.Name;
+    public string ServerPort => Node.Server + ":" + Node.Port;
+    public string Protocol => Node.Protocol;
+    public string SourceName => Node.SourceName;
+    public string RejectedLabel => Entry.RejectedAtUtc.ToLocalTime().ToString("dd.MM HH:mm");
+    public string FailLabel => Node.FailCount + " / " + NodeLimits.RemoveAfterFailures;
+    public string DelayLabel => Node.DelayMs is null ? "—" : Node.DelayMs + " мс";
+    public string YoutubeLabel => Node.YoutubeOk == true ? "✓" : "—";
+    public string TelegramLabel => Node.TelegramOk == true ? "✓" : "—";
+    public string DiscordLabel => Node.DiscordOk == true ? "✓" : "—";
+    public string UniversalLabel => Node.UniversalOk == true ? "✓" : "—";
+}
+
 /// <summary>Строка списка источников: включает/выключает источник прямо в таблице.</summary>
 internal sealed class SourceRow : INotifyPropertyChanged
 {
@@ -139,6 +160,9 @@ internal sealed class SourceRow : INotifyPropertyChanged
     }
 
     public string Name => Source.IsAutoDiscovered ? "★ " + Source.Name : Source.Name;
+
+    /// <summary>Иконка «доверенный источник»: обновляется не реже раза в 24 часа.</summary>
+    public string TrustedIcon => Source.IsTrustedNow ? "✓" : string.Empty;
 
     public bool IsMine
     {

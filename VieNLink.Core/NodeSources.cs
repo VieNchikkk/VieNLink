@@ -13,12 +13,16 @@ internal sealed class FetchOutcome
     public List<MtProtoProxy> MtProto { get; init; } = new();
     public string? Error { get; init; }
     public bool Skipped { get; init; }
+
+    /// <summary>Дату публикации определить нельзя — источник пора удалить.</summary>
+    public bool RemoveSource { get; init; }
 }
 
 internal sealed class CollectResult
 {
     public List<ProxyNode> Nodes { get; init; } = new();
     public List<MtProtoProxy> MtProto { get; init; } = new();
+    public List<SourceDefinition> SourcesToRemove { get; init; } = new();
 }
 
 /// <summary>
@@ -148,6 +152,15 @@ internal static class NodeSourceService
     private static readonly HttpClient HttpDirect = CreateClient(useProxy: false);
 
     /// <summary>
+    /// Источники, которые больше не поставляем: репозиторий давно не обновлялся.
+    /// Удаляются и у существующих пользователей при загрузке списка.
+    /// </summary>
+    private static readonly string[] ObsoleteSourceUrls =
+    {
+        "https://raw.githubusercontent.com/Kwinshadow/TelegramV2rayCollector/main/sublinks/mix.txt",
+    };
+
+    /// <summary>
     /// Разовая миграция: включить все ранее выключенные источники. Ставится
     /// <see cref="SettingsUpgrade"/> для схем ниже 3 и сбрасывается после применения.
     /// </summary>
@@ -164,7 +177,17 @@ internal static class NodeSourceService
 
         // Небольшие списки с более высокой долей живых серверов.
         new() { Name = "openproxylist V2RAY (GitHub)", Url = "https://raw.githubusercontent.com/roosterkid/openproxylist/main/V2RAY_RAW.txt", Kind = SourceKind.PlainList },
-        new() { Name = "Kwinshadow mix (GitHub)", Url = "https://raw.githubusercontent.com/Kwinshadow/TelegramV2rayCollector/main/sublinks/mix.txt", Kind = SourceKind.PlainList },
+
+        // Проверены на ПК: обновляются каждый день/час и давали рабочие серверы.
+        new() { Name = "free-nodes (ежедневно)", Url = "https://raw.githubusercontent.com/free-nodes/v2rayfree/main/sub", Kind = SourceKind.Subscription },
+        new() { Name = "0xRadikal (Clash)", Url = "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/all/clash.yaml", Kind = SourceKind.PlainList },
+        new() { Name = "SoliSpirit configs", Url = "https://raw.githubusercontent.com/SoliSpirit/v2ray-configs/main/Protocols/vless.txt", Kind = SourceKind.PlainList },
+        new() { Name = "hamedcode port vless", Url = "https://raw.githubusercontent.com/hamedcode/port-based-v2ray-configs/main/sub/vless.txt", Kind = SourceKind.PlainList },
+        new() { Name = "AutoAiVPN", Url = "https://raw.githubusercontent.com/penhandev/AutoAiVPN/main/allConfigs.txt", Kind = SourceKind.PlainList },
+        new() { Name = "V2ray-Collector (Bahemmat)", Url = "https://raw.githubusercontent.com/MohammadBahemmat/V2ray-Collector/main/servers/vless_servers.txt", Kind = SourceKind.PlainList },
+        new() { Name = "ConfigV2Ray (Jafar)", Url = "https://raw.githubusercontent.com/jafarm83/ConfigV2Ray/main/jafar.txt", Kind = SourceKind.PlainList },
+        new() { Name = "node-sub-zixf", Url = "https://raw.githubusercontent.com/chenzhihan1751-cyber/node-sub-zixf/main/sub/v2ray.txt", Kind = SourceKind.PlainList },
+        new() { Name = "zhuhaiuk free-nodes", Url = "https://raw.githubusercontent.com/zhuhaiuk/free-nodes/main/nodes.txt", Kind = SourceKind.PlainList },
 
         // Крупные агрегаторы: серверов много, но и пользы больше — по умолчанию включены.
         new() { Name = "barry-far vless (GitHub)", Url = "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vless.txt", Kind = SourceKind.PlainList },
@@ -204,6 +227,16 @@ internal static class NodeSourceService
             return defaults;
         }
 
+        // Убираем источники, которые больше не поставляем (давно не обновлялись).
+        var obsoleteRemoved = saved.RemoveAll(source =>
+            ObsoleteSourceUrls.Any(url => source.Url.Equals(url, StringComparison.OrdinalIgnoreCase)));
+
+        // Источники серверов без даты публикации (не GitHub) больше не используем.
+        obsoleteRemoved += saved.RemoveAll(source =>
+            !source.IsMine &&
+            !SourceKinds.IsProxy(source) &&
+            GitHubSourceFreshness.TryGetLocation(source.Url) is null);
+
         if (!fromPlain)
         {
             // Зашифрованный файл прочитан: открытых копий от старых версий быть не должно.
@@ -212,12 +245,19 @@ internal static class NodeSourceService
 
         // Новые источники из обновлений добавляются включёнными: пользователь просил
         // держать все источники включёнными по умолчанию (и на ПК, и на телефоне).
+        var addedDefaults = 0;
         foreach (var defaultSource in DefaultSources())
         {
             if (saved.All(s => !s.Url.Equals(defaultSource.Url, StringComparison.OrdinalIgnoreCase)))
             {
                 saved.Add(defaultSource);
+                addedDefaults++;
             }
+        }
+
+        if (obsoleteRemoved > 0 || addedDefaults > 0)
+        {
+            SaveSources(saved);
         }
 
         // Разовая миграция со старых версий: включить и те источники, которые раньше
@@ -275,8 +315,10 @@ internal static class NodeSourceService
         IEnumerable<SourceDefinition> sources,
         IProgress<string>? progress,
         CancellationToken cancellationToken,
-        Action<FetchOutcome>? onSource = null)
+        Action<FetchOutcome>? onSource = null,
+        int freshnessHours = 24)
     {
+        var maximumAge = TimeSpan.FromHours(Math.Clamp(freshnessHours, 1, 168 * 24));
         // Каналы Telegram — источники MTProto-прокси, а не серверов: их читает
         // MtProtoService, и в общий сбор серверов они не попадают.
         var enabled = sources
@@ -288,17 +330,27 @@ internal static class NodeSourceService
             FetchOutcome outcome;
             try
             {
-                // Сбор серверов — только из свежих GitHub-списков. Если даты публикации
-                // нет, IsFreshAsync возвращает true и источник собирается как раньше.
-                if (!await GitHubSourceFreshness.IsFreshAsync(source, cancellationToken).ConfigureAwait(false))
+                // Сбор серверов — строго из источников, опубликованных не позже окна.
+                // Если дату определить нельзя, источник не собираем; при временном
+                // сбое GitHub API источник не удаляем, чтобы пережить недоступность API.
+                var freshness = await GitHubSourceFreshness
+                    .CheckAsync(source, maximumAge, cancellationToken).ConfigureAwait(false);
+                source.LastPublishedUtc = freshness.UpdatedAt?.UtcDateTime;
+                source.IsTrusted = freshness.DateKnown && freshness.Fresh;
+                if (!freshness.Fresh)
                 {
+                    var remove = !freshness.DateKnown && freshness.ApiReached && !source.IsMine;
                     outcome = new FetchOutcome
                     {
                         Source = source,
                         Skipped = true,
-                        Error = "репозиторий не обновлялся больше 24 ч — пропущен",
+                        RemoveSource = remove,
+                        Error = remove
+                            ? "дату публикации определить нельзя — источник удаляется"
+                            : "источник не обновлялся в выбранном окне — пропущен",
                     };
-                    AppLog.Write("sources", $"{source.Name}: пропущен, репозиторий старше 24 ч");
+                    AppLog.Write("sources",
+                        $"{source.Name}: {(remove ? "нет даты публикации, удаляю" : "пропущен по свежести")}");
                 }
                 else
                 {
@@ -323,7 +375,7 @@ internal static class NodeSourceService
             }
 
             progress?.Report(outcome.Skipped
-                ? $"{source.Name}: пропущен — репозиторий старше 24 ч"
+                ? $"{source.Name}: пропущен — {outcome.Error}"
                 : outcome.Error is null
                     ? $"{source.Name}: {outcome.Nodes.Count} серверов"
                     : $"{source.Name}: ошибка — {outcome.Error}");
@@ -361,6 +413,10 @@ internal static class NodeSourceService
             // Один сервер:порт — одна строка, даже если источников и ссылок несколько.
             Nodes = NodeDedup.Collapse(unique.Values),
             MtProto = mtproto.Values.ToList(),
+            SourcesToRemove = batches
+                .Where(outcome => outcome.RemoveSource)
+                .Select(outcome => outcome.Source)
+                .ToList(),
         };
     }
 
