@@ -9,7 +9,7 @@ Hysteria2) из открытых списков, подписок и Telegram-к
 - Статус: бета (флаг `AppInfo.IsBeta` в `VieNLink.Core/AppInfo.cs`).
 - Лицензия GPL-3.0 на весь репозиторий (Android линкует `libbox`, GPL). Репозиторий публичный.
 - Версия одна на ПК и Android: `build/Version.props` (`VieNLinkVersion`, `VieNLinkVersionCode`,
-  `VieNLinkIsBeta`). `versionCode` = major*10000 + minor*100 + patch, только растёт (1.3.2 → 10302).
+  `VieNLinkIsBeta`). `versionCode` = major*10000 + minor*100 + patch, только растёт (1.3.3 → 10303).
 
 ## Стек и ограничения
 - .NET 10, Windows: WPF, `net10.0-windows10.0.26100.0`. Android: `net10.0-android` без MAUI.

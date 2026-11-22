@@ -9,7 +9,7 @@ VieNLink использует Semantic Versioning: `MAJOR.MINOR.PATCH[-beta.N]`.
 - **PATCH** — исправления и небольшие улучшения.
 - **`-beta.N`** — предрелизная сборка. На GitHub такие релизы помечаются как **Pre-release**.
 
-Текущие версии: Windows и Android — **1.3.2** (единая линейка).
+Текущие версии: Windows и Android — **1.3.3** (единая линейка).
 
 ## Единая версия Windows и Android
 
@@ -21,7 +21,7 @@ VieNLink использует Semantic Versioning: `MAJOR.MINOR.PATCH[-beta.N]`.
   (`VieNLinkVersionCode`).
 
 `versionCode` Android вычисляется по номеру: `major*10000 + minor*100 + patch`
-(1.3.0 → 10300, 1.3.1 → 10301, 1.3.2 → 10302, 1.4.0 → 10400) и обязан только расти.
+(1.3.0 → 10300, 1.3.1 → 10301, 1.3.2 → 10302, 1.3.3 → 10303, 1.4.0 → 10400) и обязан только расти.
 Тег Windows — `v1.3.0-beta`, Android — `v1.3.0-android`: числовая часть одинаковая,
 суффикс платформы остаётся только в теге.
 
@@ -46,8 +46,8 @@ VieNLink использует Semantic Versioning: `MAJOR.MINOR.PATCH[-beta.N]`.
 
 | Версия | Поддержка |
 |---|---|
-| Windows 1.3.2-beta (текущая) | Да |
-| Android 1.3.2 (текущая) | Да |
+| Windows 1.3.3-beta (текущая) | Да |
+| Android 1.3.3 (текущая) | Да |
 | Windows 1.3.0 и старше | Нет — обновитесь до текущей беты |
 | Android 1.3.0 и старше | Нет |
 | < 1.0 | Нет |

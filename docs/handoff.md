@@ -16,18 +16,18 @@
 
 ## Состояние на 22.11.2026
 
-Выпущена **1.3.2** (Windows и Android, `versionCode` 10302):
+Выпущена **1.3.3** (Windows и Android, `versionCode` 10303):
 
-- Windows: `release\VieNLink-1.3.2-setup.exe` (подпись `CN=VieN`) + `VieNLink-1.3.2-win-x64.zip`
-  + `SHA256SUMS.txt` → https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.2-beta
-- Android: `release\VieNLink-1.3.2-android.apk` + `.apk.sha256` →
-  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.2-android
+- Windows: `release\VieNLink-1.3.3-setup.exe` (подпись `CN=VieN`) + `VieNLink-1.3.3-win-x64.zip`
+  + `SHA256SUMS.txt` → https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.3-beta
+- Android: `release\VieNLink-1.3.3-android.apk` + `.apk.sha256` →
+  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.3-android
   (APK на телефоне установлен, проверено live: подключение, счётчики, «Поделиться» = `IP:порт`,
-  «Добавить сервер», остановка сбора/проверки MTProto).
+  «Добавить сервер» в шапке, остановка сбора/проверки MTProto).
 - Магазинные артефакты (в RuStore/Play ещё не публикуем):
-  `release\VieNLink-1.3.2-store.apk` и `-store.aab` с `.sha256`.
+  `release\VieNLink-1.3.3-store.apk` и `-store.aab` с `.sha256`.
 
-В 1.3.2 вошли: счётчики раз в минуту и перепроверка серверов каждые 5 минут с мгновенным
+Содержимое 1.3.2–1.3.3: счётчики раз в минуту и перепроверка серверов каждые 5 минут с мгновенным
 обновлением после запуска; «Поделиться» только `IP:порт`; кнопки сервисов действительно меняют
 сервер; «Остановить/Запустить все процессы»; Android-шапка из трёх кнопок + «Добавить сервер»
 строкой ниже; вкладка «Общие» удалена (4 вкладки); прогресс и отмена сбора/проверки MTProto;
