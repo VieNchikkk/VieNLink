@@ -564,8 +564,24 @@ public sealed class TunnelService : VpnService
             int? delay;
             using (var api = new ClashApiClient(CoreRuntime.ApiPort, CoreRuntime.ApiSecret))
             {
+                var route = SettingsStore.Current;
+                var probeUrl = "https://cp.cloudflare.com/generate_204";
+                if (route.SiteRouteMode == SiteRouteMode.OnlyListed)
+                {
+                    var site = route.SiteList
+                        .Split(new[] { '\r', '\n', ';', ',' }, StringSplitOptions.RemoveEmptyEntries |
+                                                                  StringSplitOptions.TrimEntries)
+                        .FirstOrDefault();
+                    if (!string.IsNullOrWhiteSpace(site))
+                    {
+                        probeUrl = site.Contains("://", StringComparison.Ordinal)
+                            ? site
+                            : "https://" + site.Trim('/') + "/";
+                    }
+                }
+
                 delay = await api.TestDelayAsync(selected.Tag, 5000, CancellationToken.None,
-                    "https://cp.cloudflare.com/generate_204").ConfigureAwait(false);
+                    probeUrl).ConfigureAwait(false);
             }
 
             // Пока шёл запрос, пользователь мог нажать «Дальше» — сбой старого сервера
@@ -590,10 +606,9 @@ public sealed class TunnelService : VpnService
 
             _healthFailures = 0;
 
-            // Два провала подряд — сервер действительно перестал открывать сайт.
-            // Отмечаем это и в списке: счётчик сервисов сразу перестаёт его показывать.
-            NodeHealth.RegisterFailure(selected);
-            NodeStore.SaveNodes();
+            // Два провала подряд — сервер не открывает выбранный сайт, переключаемся.
+            // Статус и FailCount не меняем: проверка через активный туннель зависит
+            // от маршрута (например, «только сайты из списка») и не доказывает смерть.
 
             var family = NodeRanking.Family(selected);
             // Выбранный сервис важнее скорости: сначала живой сервер, открывающий его,

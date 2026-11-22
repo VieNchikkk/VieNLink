@@ -397,7 +397,7 @@ public partial class MainWindow
                 UpdateHeaderConnectionInfo();
                 SetStatus("Подключаюсь", candidate.Name + " · " + candidate.Protocol);
                 var progress = new Progress<string>(line => StatusDetail.Text = line);
-                var targetUrls = explicitUrls ?? ProxyManager.VerificationUrls(candidate);
+                var targetUrls = explicitUrls ?? RouteVerificationUrls(candidate);
 
                 try
                 {
@@ -443,17 +443,17 @@ public partial class MainWindow
                     }
 
                     AppLog.Write("proxy", $"Сервер «{candidate.Name}» не открыл проверочный адрес — пробую следующий");
-                    if (markFailures)
+                    if (markFailures && explicitUrls is null &&
+                        _settings.SiteRouteMode == SiteRouteMode.All)
                     {
                         DropFailedNode(candidate, "не открыл " + targetLabel);
                     }
                     else
                     {
-                        // Ручное переключение («Дальше») не повод удалять рабочий сервер:
-                        // разовый провал проверки может быть из-за смены маршрута,
-                        // а не потому, что сервер умер. Оставляем задержку и отметки,
-                        // фоновый проход всё равно перепроверит его в ближайшие минуты.
-                        AppendLog($"Сервер «{candidate.Name}» не открыл {targetLabel} — оставляю в списке (ручное переключение)");
+                        // Сервис/ручное переключение/ограниченный маршрут — не повод
+                        // помечать сервер мёртвым: статус меняет только прямая проверка.
+                        candidate.TriedAtUtc = DateTime.UtcNow;
+                        AppendLog($"Сервер «{candidate.Name}» не открыл {targetLabel} — оставляю в списке");
                     }
 
                     lastError = new InvalidOperationException("Сервер не открыл " + targetLabel);
@@ -849,6 +849,32 @@ public partial class MainWindow
     /// сервер убирается только после <see cref="NodeLimits.RemoveAfterFailures"/> провалов подряд —
     /// разовый сбой живого сервера не должен стирать его из списка.
     /// </summary>
+    /// <summary>
+    /// Адреса проверки через активный прокси. При режиме «только сайты из списка»
+    /// проверять Cloudflare бессмысленно: он идёт напрямую, и любой рабочий сервер
+    /// выглядел бы мёртвым. Берём сайты, которые действительно завернуты в туннель.
+    /// </summary>
+    private IReadOnlyList<string> RouteVerificationUrls(ProxyNode node)
+    {
+        if (_settings.SiteRouteMode == SiteRouteMode.OnlyListed)
+        {
+            var sites = _settings.SiteList
+                .Split(new[] { '\r', '\n', ';', ',' }, StringSplitOptions.RemoveEmptyEntries |
+                                                          StringSplitOptions.TrimEntries)
+                .Select(site => site.Contains("://", StringComparison.Ordinal)
+                    ? site
+                    : "https://" + site.Trim('/') + "/")
+                .Take(3)
+                .ToList();
+            if (sites.Count > 0)
+            {
+                return sites;
+            }
+        }
+
+        return ProxyManager.VerificationUrls(node);
+    }
+
     private void DropFailedNode(ProxyNode node, string reason)
     {
         var removed = NodeHealth.RegisterFailure(node);
