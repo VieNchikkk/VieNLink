@@ -42,10 +42,6 @@ public sealed partial class MainActivity
             () => Open(typeof(TelegramActivity)), Resource.Drawable.ic_mtproto, tone: P.Telegram);
         Ui.Add(page, mtproto, 8);
 
-        var addServer = Ui.Pill(this, P, "Добавить сервер", UiButtonKind.Secondary,
-            ShowAddServerDialog, Resource.Drawable.ic_nodes);
-        Ui.Add(page, addServer, 8);
-
         var explanation = Ui.Banner(P, this, P.Accent, "Кратко",
             "Нажмите кнопку сервиса — VieNLink сам выберет проверенный сервер с доступом к нему " +
             "и подключится. После подключения в шапке появятся страна, задержка, скорость и оценка.");

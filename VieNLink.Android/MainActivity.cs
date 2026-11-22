@@ -44,6 +44,7 @@ public sealed partial class MainActivity : BaseActivity
     private TextView? _universalCount;
     private TextView? _connectionStatus;
     private TextView? _shareButton;
+    private TextView? _addServerButton;
     private LinearLayout? _actionsRow2;
 
     private Handler? _handler;
@@ -393,7 +394,7 @@ public sealed partial class MainActivity : BaseActivity
             () => _ = SwitchToNextNodeAsync(), Resource.Drawable.ic_refresh);
         _shareButton = Ui.Pill(this, P, "Поделиться сервером", UiButtonKind.Secondary,
             ShareCurrentNode, Resource.Drawable.ic_export);
-        CompactHeaderButton(_nextNodeButton);
+        CompactWrapHeaderButton(_nextNodeButton);
         CompactWrapHeaderButton(_shareButton);
         // Оформление: главное действие — зелёный градиент, смена сервера — синяя,
         // «Поделиться» — фиолетовая; значки в тон текста.
@@ -405,21 +406,23 @@ public sealed partial class MainActivity : BaseActivity
         _actionsRow2.AddView(_shareButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         card.AddView(_actionsRow2);
 
+        // Ручное добавление — отдельной строкой под двумя кнопками: в тесном ряду
+        // из трёх подпись «Поделиться сервером» ломалась посреди слова.
+        var addRow = Ui.Row(this);
+        addRow.SetPadding(0, Ui.Dp(this, 8), 0, 0);
+        _addServerButton = Ui.Pill(this, P, "Добавить сервер", UiButtonKind.Accent,
+            ShowAddServerDialog, Resource.Drawable.ic_add);
+        CompactWideHeaderButton(_addServerButton);
+        StyleHeaderAction(_addServerButton, P.Positive, filled: false);
+        addRow.AddView(_addServerButton, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        card.AddView(addRow);
+
         _connectionStatus = Ui.Hint(this, "Загружаю серверы…", P);
         _connectionStatus.SetPadding(0, Ui.Dp(this, 10), 0, 0);
         card.AddView(_connectionStatus);
 
         return card;
-    }
-
-    /// <summary>Компактная кнопка второго ряда: значок + полная подпись в одну строку.</summary>
-    private void CompactHeaderButton(TextView button)
-    {
-        button.SetPadding(Ui.Dp(this, 8), 0, Ui.Dp(this, 8), 0);
-        button.TextSize = 12.5f;
-        button.SetSingleLine(true);
-        button.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-        button.SetMinHeight(Ui.Dp(this, 48));
     }
 
     /// <summary>Кнопка с длинной подписью: две строки, перенос только по словам.</summary>
@@ -431,6 +434,9 @@ public sealed partial class MainActivity : BaseActivity
         button.SetMaxLines(2);
         button.Gravity = Android.Views.GravityFlags.Center;
         button.SetMinHeight(Ui.Dp(this, 48));
+        // Без переносов по слогам: «Подел/иться» выглядело как ошибка.
+        button.BreakStrategy = Android.Text.BreakStrategy.Balanced;
+        button.HyphenationFrequency = Android.Text.HyphenationFrequency.None;
     }
 
     /// <summary>Кнопка главного действия на всю ширину.</summary>
@@ -574,6 +580,14 @@ public sealed partial class MainActivity : BaseActivity
             _shareButton.Visibility = ViewStates.Visible;
             _shareButton.Enabled = selected is not null;
             _shareButton.Alpha = _shareButton.Enabled ? 1f : 0.55f;
+        }
+
+        if (_addServerButton is not null)
+        {
+            // Ручное добавление доступно всегда, кроме момента, когда уже идёт подключение.
+            _addServerButton.Visibility = ViewStates.Visible;
+            _addServerButton.Enabled = !_connecting;
+            _addServerButton.Alpha = _addServerButton.Enabled ? 1f : 0.55f;
         }
 
         if (_actionsRow2 is not null)
