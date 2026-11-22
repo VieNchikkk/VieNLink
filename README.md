@@ -26,15 +26,15 @@ Shadowsocks / Hysteria2 из открытых списков и подписок
 
 Готовые сборки — в [Releases](https://github.com/VieNchikkk/VieNLink/releases):
 
-- **Windows:** `VieNLink-1.3.22-setup.exe` (установщик в профиль пользователя) или портативный
-  `VieNLink-1.3.22-win-x64.zip`. .NET устанавливать не нужно.
-- **Android (отдельный релиз):** [VieNLink-1.3.22-android.apk](https://github.com/VieNchikkk/VieNLink/releases/download/v1.3.22-android/VieNLink-1.3.22-android.apk)
+- **Windows:** `VieNLink-1.3.23-setup.exe` (установщик в профиль пользователя) или портативный
+  `VieNLink-1.3.23-win-x64.zip`. .NET устанавливать не нужно.
+- **Android (отдельный релиз):** [VieNLink-1.3.23-android.apk](https://github.com/VieNchikkk/VieNLink/releases/download/v1.3.23-android/VieNLink-1.3.23-android.apk)
   (Android 8.0+, arm64). Отдельной страницы в магазине нет — APK ставится вручную,
   с разрешением установки из этого источника.
 
-**Прямые ссылки:** [Windows setup.exe](https://github.com/VieNchikkk/VieNLink/releases/download/v1.3.22-beta/VieNLink-1.3.22-setup.exe)
-· [Windows ZIP](https://github.com/VieNchikkk/VieNLink/releases/download/v1.3.22-beta/VieNLink-1.3.22-win-x64.zip)
-· [Android APK](https://github.com/VieNchikkk/VieNLink/releases/download/v1.3.22-android/VieNLink-1.3.22-android.apk)
+**Прямые ссылки:** [Windows setup.exe](https://github.com/VieNchikkk/VieNLink/releases/download/v1.3.23-beta/VieNLink-1.3.23-setup.exe)
+· [Windows ZIP](https://github.com/VieNchikkk/VieNLink/releases/download/v1.3.23-beta/VieNLink-1.3.23-win-x64.zip)
+· [Android APK](https://github.com/VieNchikkk/VieNLink/releases/download/v1.3.23-android/VieNLink-1.3.23-android.apk)
 
 Контрольные суммы — в `SHA256SUMS.txt` рядом с файлами релиза. Android-версия при запуске
 сама проверяет GitHub: если там версия выше, APK скачивается и предлагается установка
@@ -143,9 +143,9 @@ Windows-версии без MAUI: VPN-туннель через `VpnService` и 
 (журнал открывается из «Инструментов»), виджет и плитка, split-tunnel по приложениям,
 MTProto для Telegram и TUN-обход (бета).
 
-1. Скачайте [VieNLink-1.3.22-android.apk](https://github.com/VieNchikkk/VieNLink/releases/download/v1.3.22-android/VieNLink-1.3.22-android.apk)
+1. Скачайте [VieNLink-1.3.23-android.apk](https://github.com/VieNchikkk/VieNLink/releases/download/v1.3.23-android/VieNLink-1.3.23-android.apk)
    и откройте файл на телефоне. Android-версия публикуется отдельным релизом
-   `v1.3.22-android`, независимо от Windows-релиза `v1.3.22-beta`.
+   `v1.3.23-android`, независимо от Windows-релиза `v1.3.23-beta`.
 2. Разрешите установку из выбранного источника (Android спросит один раз).
 3. В приложении нажмите «Проверить узлы», затем кнопку нужного сервиса — VPN поднимется
    на проверенном узле.
@@ -185,7 +185,7 @@ powershell -File build\publish-android.ps1
 первом запуске) и кладёт в `release\` подписанный APK и файл `.apk.sha256`. Храните этот ключ:
 следующие версии должны быть подписаны им же, иначе Android не установит обновление поверх.
 
-Версия для Windows публикуется отдельно: [VieNLink 1.3.22 (бета)](https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.22-beta).
+Версия для Windows публикуется отдельно: [VieNLink 1.3.23 (бета)](https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.23-beta).
 
 ## Сколько узлов живых
 
@@ -332,7 +332,7 @@ powershell -File build\publish-release.ps1
 
 ## Версии и обновления
 
-- Текущие версии: Windows — **1.3.22-beta**, Android — **1.3.22**; сборки —
+- Текущие версии: Windows — **1.3.23-beta**, Android — **1.3.23**; сборки —
   в [Releases](https://github.com/VieNchikkk/VieNLink/releases).
 - В Windows-релизе лежат `setup.exe`, портативный ZIP и `SHA256SUMS.txt`; в Android-релизе —
   APK и файл `.apk.sha256`.

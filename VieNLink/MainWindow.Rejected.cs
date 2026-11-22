@@ -149,19 +149,14 @@ public partial class MainWindow
             var recovered = nodes
                 .Where(node => node.Status == NodeStatus.Working)
                 .ToList();
-            if (recovered.Count > 0)
-            {
-                MergeNodes(recovered);
-            }
+            // Ничего не возвращаем автоматически: пользователь сам нажмёт
+            // «Вернуть (В рабочие)». Иначе сервер снова уедет в отсев после проверки.
 
             var remaining = RejectedNodeStore.Load();
             var testedById = nodes.ToDictionary(node => node.Id, StringComparer.OrdinalIgnoreCase);
-            remaining.RemoveAll(item => testedById.TryGetValue(item.Node.Id, out var tested) &&
-                                        tested.Status == NodeStatus.Working);
             foreach (var item in remaining)
             {
-                if (testedById.TryGetValue(item.Node.Id, out var tested) &&
-                    tested.Status != NodeStatus.Working)
+                if (testedById.TryGetValue(item.Node.Id, out var tested))
                 {
                     item.Node = tested;
                     item.RejectedAtUtc = DateTime.UtcNow;
@@ -171,8 +166,10 @@ public partial class MainWindow
             RejectedNodeStore.Save(remaining);
             ReloadRejected();
             SetStatus("Перепроверка отсева",
-                $"Вернулось рабочих: {recovered.Count} из {rows.Count}, открыли доменов: {summary.BestDomains}");
-            AppendLog($"Отсев: перепроверено {rows.Count}, вернулось рабочих {recovered.Count}");
+                $"Рабочих: {recovered.Count} из {rows.Count}, доменов: {summary.BestDomains}. " +
+                "Нажмите «Вернуть (В рабочие)», чтобы перенести сервер в список.");
+            AppendLog($"Отсев: перепроверено {rows.Count}, рабочих {recovered.Count}, " +
+                      "автоматически в рабочие не возвращаются");
         }
         catch (OperationCanceledException)
         {
@@ -202,12 +199,8 @@ public partial class MainWindow
             _manager.CurrentNode is { } current &&
             current.Id.Equals(node.Id, StringComparison.OrdinalIgnoreCase))
         {
-            node.Status = NodeStatus.Working;
-            node.FailCount = 0;
-            MergeNodes(new[] { node });
-            RejectedNodeStore.Remove(new[] { node.Id });
-            ReloadRejected();
-            SetStatus("Сервер вернулся", node.Name + " снова в рабочих");
+            // В рабочие переводит только кнопка «Вернуть (В рабочие)».
+            SetStatus("VPN подключён", "Сервер остаётся в отсеве — нажмите «Вернуть (В рабочие)»");
         }
         else
         {

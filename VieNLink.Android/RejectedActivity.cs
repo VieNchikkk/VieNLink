@@ -441,29 +441,10 @@ public sealed class RejectedActivity : BaseActivity
             return;
         }
 
-        var node = _pendingNode;
         VpnStarter.Start(this, _pendingConfig);
         _pendingConfig = null;
         _pendingNode = null;
-        SetStatus("Подключение запущено");
-        if (node is null)
-        {
-            return;
-        }
-
-        // Не убираем сервер из отсева сразу: ждём, пока служба действительно поднимется.
-        var handler = new Handler(Looper.MainLooper!);
-        handler.PostDelayed(() =>
-        {
-            if (TunnelService.State == TunnelState.Running)
-            {
-                Return(node);
-            }
-            else
-            {
-                SetStatus("Сервер не подключился — остался в отсеве");
-            }
-        }, 3000);
+        SetStatus("VPN запущен. Сервер остаётся в отсеве — нажмите «Вернуть», чтобы перенести его в рабочие.");
     }
 
     protected override void OnActivityResult(int requestCode, Result resultCode, Intent? data)
@@ -512,8 +493,23 @@ public sealed class RejectedActivity : BaseActivity
             var nodes = items.Select(item => item.Node).ToList();
             var progress = new Progress<string>(SetStatus);
             var summary = await NodeTester.TestNodesAsync(nodes, progress, _cts.Token);
-            NodeStore.RestoreRejected(nodes);
-            SetStatus($"Перепроверено {nodes.Count}: рабочих {summary.Working}");
+
+            // Перепроверка только обновляет результат. В рабочие сервер переводит
+            // пользователь кнопкой «Вернуть (В рабочие)», иначе он снова уедет в отсев.
+            var testedById = nodes.ToDictionary(node => node.Id, StringComparer.OrdinalIgnoreCase);
+            var stored = RejectedNodeStore.Load();
+            foreach (var item in stored)
+            {
+                if (testedById.TryGetValue(item.Node.Id, out var tested))
+                {
+                    item.Node = tested;
+                    item.RejectedAtUtc = DateTime.UtcNow;
+                }
+            }
+
+            RejectedNodeStore.Save(stored);
+            SetStatus($"Перепроверено {nodes.Count}: рабочих {summary.Working}. " +
+                      "Нажмите «Вернуть (В рабочие)», чтобы перенести сервер в список.");
             Reload();
         }
         catch (System.OperationCanceledException)
