@@ -139,7 +139,6 @@ public partial class MainWindow
         // NodeLimits.WorkingRecheckMinutes (5 мин), начиная за пару минут до истечения.
         // Бесплатный сервер живёт минуты, и «рабочий» из кэша без перепроверки — главная
         // причина, почему значок сервиса обещал сервер, которого нет.
-        var recheckCutoff = NodeAvailability.RecheckCutoffUtc(DateTime.UtcNow);
         static bool NeedsCheck(ProxyNode node, DateTime threshold) =>
             node.CheckedAtUtc is null || node.CheckedAtUtc < threshold;
 
@@ -152,10 +151,29 @@ public partial class MainWindow
         _idleTesting = true;
         _idleCts = new CancellationTokenSource();
         var token = _idleCts.Token;
+        var roundStartedUtc = DateTime.UtcNow;
+        const int roundBudgetMinutes = 6;
         try
         {
             for (var round = 1; round <= maxRounds; round++)
             {
+                // Один такт не должен занимать полчаса: после нескольких партий отдаём
+                // управление следующему такту. Иначе счётчики и интерфейс долго висят
+                // на «Проверяю серверы», а новые результаты не успевают примениться.
+                if (round > 1 &&
+                    DateTime.UtcNow - roundStartedUtc >= TimeSpan.FromMinutes(roundBudgetMinutes))
+                {
+                    AppendLog($"Фон: прошло {roundBudgetMinutes} мин — проход продолжится в следующем такте");
+                    break;
+                }
+
+                // Границу свежести считаем заново на каждом проходе: один вызов может
+                // идти до восьми партий (десятки минут), и замороженная граница
+                // исключала бы серверы, проверенные другими операциями уже после её
+                // расчёта. Живой сервер выпадал из счётчиков до конца цикла, хотя его
+                // давно пора было перепроверить.
+                var recheckCutoff = NodeAvailability.RecheckCutoffUtc(DateTime.UtcNow);
+
                 // Если какого-то сервиса не хватает, сначала проверяем серверы из источников,
                 // которые уже давали доступ именно к нему. Фокус меняется по кругу:
                 // иначе первый недостающий сервис забирал все раунды, а остальные ждали.
@@ -173,7 +191,7 @@ public partial class MainWindow
                 List<ProxyNode> candidates;
                 if (hidden)
                 {
-                    candidates = AllRows
+                    var ordered = AllRows
                         .Select(row => row.Node)
                         .Where(node => searchNew
                             ? node.Status == NodeStatus.Unknown ||
@@ -184,12 +202,20 @@ public partial class MainWindow
                         // их смерть важнее, чем поиск среди ещё не проверенных. Иначе
                         // «рабочие» из кэша висят часами и кнопки ведут в пустоту.
                         .OrderBy(node => node.Status == NodeStatus.Working ? 0 : 1)
-                        .ThenByDescending(node => serviceScores is not null &&
-                                                  serviceScores.TryGetValue(
-                                                      node.SourceName ?? string.Empty, out var score)
-                            ? score
+                        .ThenByDescending(node => serviceScores is not null
+                            ? NodeFailover.BestSourceScore(serviceScores, node.SourceName)
                             : 0)
                         .ThenBy(node => node.CheckedAtUtc ?? DateTime.MinValue)
+                        .ToList();
+
+                    // Рабочие — первыми. Новые серверы перемежаем по источникам: иначе
+                    // первые 200 позиций могут целиком прийти из одного мёртвого списка,
+                    // и партия тратит минуты на заведомо нерабочие серверы.
+                    var working = ordered.Where(node => node.Status == NodeStatus.Working).ToList();
+                    var rest = ordered.Where(node => node.Status != NodeStatus.Working).ToList();
+                    candidates = working
+                        .Concat(NodeFailover.InterleaveBySource(
+                            rest, Math.Max(0, batchSize - working.Count)))
                         .Take(batchSize)
                         .ToList();
                 }
@@ -209,8 +235,8 @@ public partial class MainWindow
 
                 var mode = hidden
                     ? (userIdle ? "скрытое ядро, простой" : "скрытое ядро, фон") +
-                      (bypassActive ? ", обход включён" : string.Empty)
-                    : "через работающий туннель";
+                      (bypassActive ? ", обход включён" : string.Empty) + ", напрямую"
+                    : "через работающее ядро (TUN), только загруженные";
                 var quotaNote = needQuota
                     ? $", свежих {FreshWorkingCount()} из {NodeLimits.MinWorkingNodes}" +
                       (missing.Count > 0 ? $", нет по {NodeLimits.MinWorkingPerService} для: {string.Join(", ", missing.Select(ServiceLabel))}" : string.Empty) +
@@ -230,10 +256,15 @@ public partial class MainWindow
                 var summary = hidden
                     ? await _probe.TestAsync(
                         candidates, _settings, progress, OnTested, token,
-                        concurrency: bypassActive ? 1 : (userIdle ? 4 : 2), timeoutMs: 3000,
+                        // Партия из мёртвых серверов — это почти одни таймауты; 8–12
+                        // одновременно сокращают проход в разы. При активном обходе
+                        // и работе пользователя держим запас по каналу.
+                        concurrency: bypassActive ? 2 : userIdle ? 12 : connected ? 6 : 8,
+                        timeoutMs: 3000,
                         waitForGate: false)
                     : await _manager.TestLoadedNodesAsync(
-                        candidates, progress, OnTested, token, 2, 2500,
+                        candidates, progress, OnTested, token,
+                        userIdle ? 6 : 4, 2500,
                         "https://www.youtube.com/generate_204");
 
                 if (summary.Total == 0)
@@ -351,6 +382,15 @@ public partial class MainWindow
         }
 
         UpdateTestedSummary();
+
+        // Проверка нашла сервер выбранного сервиса, а работаем на запасном из другого.
+        // Возврат делаем в фоне, чтобы не ждать следующего падения сервера.
+        if (node.Status == NodeStatus.Working &&
+            _activeService is { } service &&
+            NodeAvailability.OpenedFor(node, service))
+        {
+            _ = TryUpgradeToActiveServiceAsync();
+        }
     }
 
     /// <summary>Удаляет строку из таблицы: нерабочие серверы не держим в списке.</summary>
@@ -387,11 +427,14 @@ public partial class MainWindow
     /// </summary>
     private List<ProxyNode> SelectBatch(IEnumerable<ProxyNode> nodes)
     {
-        return nodes
+        var ordered = nodes
             .OrderBy(n => n.DelayMs is not null)
             .ThenBy(n => n.CheckedAtUtc ?? DateTime.MinValue)
-            .Take(TestBatchSize)
             .ToList();
+
+        // Перемешиваем по источникам: иначе первая партия может целиком прийти
+        // из одного мёртвого списка, и проверка 150–500 серверов не находит живых.
+        return NodeFailover.InterleaveBySource(ordered, TestBatchSize);
     }
 
     /// <summary>
@@ -440,20 +483,31 @@ public partial class MainWindow
     };
 
     /// <summary>
-    /// Доля серверов источника, которые открывают нужный сервис (0–1000). Проверяем
-    /// сначала источники, которые уже давали доступ к этому сервису.
+    /// Доля серверов источника, которые открывают нужный сервис (0–1000). Источники
+    /// у сервера склеены строкой, поэтому считаем каждый отдельно, а не всю строку целиком:
+    /// иначе оценка терялась и партия снова шла в первый попавшийся (часто мёртвый) список.
     /// </summary>
     private Dictionary<string, int> BuildServiceSourceScores(string service)
     {
-        var scores = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (var group in _workingRows.GroupBy(
-                     row => row.Node.SourceName ?? string.Empty,
-                     StringComparer.OrdinalIgnoreCase))
+        var totals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var opened = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in _workingRows)
         {
-            var total = group.Count();
-            scores[group.Key] = total == 0
-                ? 0
-                : group.Count(row => ServiceOpened(row.Node, service)) * 1000 / total;
+            var reached = ServiceOpened(row.Node, service);
+            foreach (var source in NodeFailover.SplitSources(row.Node.SourceName))
+            {
+                totals[source] = totals.GetValueOrDefault(source) + 1;
+                if (reached)
+                {
+                    opened[source] = opened.GetValueOrDefault(source) + 1;
+                }
+            }
+        }
+
+        var scores = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in totals)
+        {
+            scores[pair.Key] = opened.GetValueOrDefault(pair.Key) * 1000 / pair.Value;
         }
 
         return scores;

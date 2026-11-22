@@ -256,9 +256,10 @@ public partial class MainWindow
                 progress,
                 node => Dispatcher.BeginInvoke(() => ApplyTestedNode(node)),
                 _operation!.Token,
-                concurrency: 4,
+                concurrency: 8,
                 timeoutMs: 3000,
-                waitForGate: false);
+                waitForGate: false,
+                precheck: !(_manager.IsConnected && _settings.TunnelMode == TunnelMode.Tun));
             await RepartitionAndSaveAsync();
             if (summary.Total == 0)
             {
@@ -363,10 +364,16 @@ public partial class MainWindow
         {
             // Задержка ещё не гарантирует доступ к сайту: пробуем сервер, затем следующие по скорости.
             // Адрес проверки зависит от режима: Telegram — несколько его доменов, видео — YouTube.
-            IReadOnlyList<string> targetUrls = probeUrls ?? new[] { _settings.TestUrl };
-            var targetLabel = targetUrls.Count == 1
-                ? targetUrls[0]
-                : targetUrls[0] + $" и ещё {targetUrls.Count - 1}";
+            // Без явного сервиса проверяем то, чем сервер уже подтвердил работу: универсальный
+            // Cloudflare и один открытый сервис. Проверка только по YouTube браковала сервер,
+            // который на этом провайдере открывает лишь Telegram/Cloudflare, — после нескольких
+            // таких подключений рабочий сервер удалялся.
+            var explicitUrls = probeUrls;
+            var targetLabel = explicitUrls is null
+                ? "проверочные адреса сервера"
+                : explicitUrls.Count == 1
+                    ? explicitUrls[0]
+                    : explicitUrls[0] + $" и ещё {explicitUrls.Count - 1}";
             var telegramNeeded = _sources.Any(s => s.Enabled && SourceKinds.IsProxy(s));
             var firstFamily = NodeRanking.Family(node);
             var candidates = new List<ProxyNode> { node };
@@ -390,14 +397,19 @@ public partial class MainWindow
                 UpdateHeaderConnectionInfo();
                 SetStatus("Подключаюсь", candidate.Name + " · " + candidate.Protocol);
                 var progress = new Progress<string>(line => StatusDetail.Text = line);
+                var targetUrls = explicitUrls ?? ProxyManager.VerificationUrls(candidate);
 
                 try
                 {
                     await _manager.ConnectAsync(candidate, progress, _operation.Token, targetUrls);
-                    StatusDetail.Text = "Проверяю, открывается ли " + targetLabel;
+                    StatusDetail.Text = explicitUrls is null
+                        ? "Проверяю, открывается ли сайт через сервер"
+                        : "Проверяю, открывается ли " + targetLabel;
                     if (await _manager.VerifyAnyThroughProxyAsync(_operation.Token, targetUrls))
                     {
-                        StatusDetail.Text = "Открылось: " + targetLabel;
+                        StatusDetail.Text = explicitUrls is null
+                            ? "Сайт открылся через сервер"
+                            : "Открылось: " + targetLabel;
                         FooterText.Text = $"Прокси 127.0.0.1:{_manager.ActiveMixedPort} — сайт открылся через «{candidate.Name}»";
                         var backup = PickBackupNode(candidate);
                         if (backup is not null)
@@ -620,8 +632,15 @@ public partial class MainWindow
         var nodeName = unhealthy.Name;
         var stopwatch = Stopwatch.StartNew();
         _failedForSession.Add(current.Id);
-        _activeService = null;
-        DropFailedNode(current, "перестал открывать проверочный адрес");
+        // Сервис сохраняем: если упал «Универсальный», переключаемся на следующий
+        // универсальный, а не на первый попавшийся.
+        // Проверка живости идёт через сам туннель, и её провал — повод переключиться,
+        // но не доказательство смерти сервера: один заторможенный домен (YouTube у
+        // провайдера) или занятый канал дают тот же результат. Статус и FailCount
+        // меняет только прямая проверка в скрытом ядре, иначе рабочие серверы
+        // удалялись бы именно во время работы VPN.
+        AppLog.Write("proxy",
+            $"Сервер «{nodeName}» перестал открывать проверочный адрес — переключаюсь, статус не меняю");
         AppendLog($"Сервер «{nodeName}» перестал отвечать — ищу замену");
 
         var failedFamily = NodeRanking.Family(current);
@@ -692,6 +711,139 @@ public partial class MainWindow
     }
 
     /// <summary>
+    /// Возврат на выбранный сервис: очередная проверка нашла свежий сервер, который его
+    /// открывает, а текущее подключение идёт через запасной сервер другого сервиса.
+    /// Сначала пробуем тёплое переключение (без перезапуска ядра), иначе — обычное
+    /// подключение. При неудаче остаёмся на прежнем рабочем сервере.
+    /// </summary>
+    private async Task TryUpgradeToActiveServiceAsync()
+    {
+        if (_closing || _busy || _settings.AutomationPaused || !_settings.AutoFailover ||
+            !_manager.IsConnected || _activeService is not { } service)
+        {
+            return;
+        }
+
+        var current = _manager.CurrentNode;
+        if (current is null || NodeAvailability.OpenedFor(current, service))
+        {
+            return;
+        }
+
+        // Фоновая проверка обновляет десятки серверов подряд: без паузы приложение
+        // дёргало бы подключение после каждой партии.
+        if (DateTime.UtcNow - _lastServiceUpgradeUtc < TimeSpan.FromMinutes(1))
+        {
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _serviceUpgradeBusy, 1) == 1)
+        {
+            return;
+        }
+
+        try
+        {
+            var now = DateTime.UtcNow;
+            var preferred = NodeFailover.Rank(
+                    _workingRows.Select(row => row.Node),
+                    service,
+                    now,
+                    _settings.ConnectOnlyMine,
+                    filter: node => !_failedForSession.Contains(node.Id) &&
+                                    (!_upgradeRetryAfter.TryGetValue(node.Id, out var retryAt) ||
+                                     retryAt <= now))
+                .FirstOrDefault(node => NodeAvailability.OpenedFor(node, service));
+            if (preferred is null || preferred.Id == current.Id)
+            {
+                return;
+            }
+
+            _lastServiceUpgradeUtc = now;
+            var name = ServiceDisplayName(service);
+            var serviceUrls = ProbeUrlsForService(service);
+            AppLog.Write("proxy",
+                $"«{name}» снова доступен: «{preferred.Name}» ({preferred.DisplayDelay}) — возвращаюсь");
+
+            // Тёплое переключение: сервер уже в конфиге, TUN и прокси не перезапускаются.
+            if (_manager.IsNodeLoaded(preferred) && BeginOperation("возврат на " + name))
+            {
+                try
+                {
+                    var progress = new Progress<string>(line => StatusDetail.Text = line);
+                    SetStatus("Возвращаюсь на " + name, preferred.Name);
+                    if (await _manager.SwitchToAsync(preferred, progress, _operation!.Token) &&
+                        await _manager.VerifyAnyThroughProxyAsync(_operation.Token, serviceUrls))
+                    {
+                        _warmSwitchCount++;
+                        _lastFailoverUtc = DateTime.UtcNow;
+                        _lastFailoverNote = "возврат на " + name;
+                        FooterText.Text = $"Прокси 127.0.0.1:{_manager.ActiveMixedPort} — сервер {preferred.Name}";
+                        AppendLog($"Возврат на {name}: «{preferred.Name}»");
+                        _ = RefreshExitInfoAsync();
+                        UpdateDiagnostics();
+                        return;
+                    }
+
+                    // Новый сервер не открыл сервис — возвращаем прежний рабочий,
+                    // чтобы не оставить пользователя без прокси.
+                    _upgradeRetryAfter[preferred.Id] = DateTime.UtcNow.AddMinutes(15);
+                    try
+                    {
+                        if (await _manager.SwitchToAsync(current, progress, _operation.Token))
+                        {
+                            AppendLog($"«{preferred.Name}» не открыл {name} — оставил «{current.Name}»");
+                        }
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        AppLog.Write("proxy", "Не удалось вернуться на прежний сервер", exception);
+                    }
+
+                    return;
+                }
+                finally
+                {
+                    EndOperation();
+                    UpdateConnectionUi();
+                }
+            }
+
+            // Сервер не в текущем конфиге: обычное подключение с проверкой выбранного
+            // сервиса, после него конфиг пересобран. Провал улучшения не должен
+            // засчитываться серверам как проверка: это не фоновая проверка.
+            SetStatus("Возвращаюсь на " + name, preferred.Name);
+            await ConnectAsync(preferred, automatic: true, markFailures: false, probeUrls: serviceUrls);
+            if (_manager.IsConnected)
+            {
+                _coldSwitchCount++;
+                _lastFailoverUtc = DateTime.UtcNow;
+                _lastFailoverNote = "возврат на " + name;
+                UpdateDiagnostics();
+            }
+            else
+            {
+                _upgradeRetryAfter[preferred.Id] = DateTime.UtcNow.AddMinutes(15);
+                // Неудачная попытка улучшения не должна оставить без прокси.
+                await ConnectAsync(current, automatic: true, markFailures: false,
+                    probeUrls: ProxyManager.VerificationUrls(current));
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Отмена — штатное завершение: остаёмся на текущем сервере.
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("proxy", "Возврат на выбранный сервис не удался", exception);
+        }
+        finally
+        {
+            Volatile.Write(ref _serviceUpgradeBusy, 0);
+        }
+    }
+
+    /// <summary>
     /// Сервер перестал открывать проверочный адрес: счётчик провалов растёт, из списка
     /// сервер убирается только после <see cref="NodeLimits.RemoveAfterFailures"/> провалов подряд —
     /// разовый сбой живого сервера не должен стирать его из списка.
@@ -708,7 +860,11 @@ public partial class MainWindow
             : $"Сервер не отвечает ({node.FailCount} из {NodeLimits.RemoveAfterFailures}) — {reason}");
     }
 
-    /// <summary>Кнопка «Дальше»: следующий проверенный сервер по возрастанию пинга.</summary>
+    /// <summary>
+    /// Кнопка «Дальше»: следующий проверенный сервер в порядке приоритета.
+    /// Сначала серверы выбранного сервиса (по возрастанию пинга), затем остальные —
+    /// поэтому при «Универсальном» переключение не уходит на сервер без универсального доступа.
+    /// </summary>
     private async void OnNextNodeClick(object sender, RoutedEventArgs e)
     {
         if (!_manager.IsConnected || _closing)
@@ -728,9 +884,9 @@ public partial class MainWindow
             return;
         }
 
-        // Ручное переключение — сервис больше не определён однозначно.
-        _activeService = null;
-
+        // Ручное переключение остаётся в выбранном сервисе: «Универсальный» и «Дальше»
+        // должны по-прежнему искать универсальные серверы. Сервис сбрасывается только
+        // при отключении или выборе конкретного сервера в списке.
         try
         {
             var progress = new Progress<string>(line => StatusDetail.Text = line);
@@ -739,7 +895,8 @@ public partial class MainWindow
                 await _manager.SwitchToAsync(next, progress, _operation!.Token))
             {
                 StatusDetail.Text = "Проверяю новый сервер…";
-                if (await _manager.VerifyThroughProxyAsync(_operation.Token))
+                if (await _manager.VerifyAnyThroughProxyAsync(
+                        _operation.Token, ProxyManager.VerificationUrls(next)))
                 {
                     _warmSwitchCount++;
                     _lastFailoverUtc = DateTime.UtcNow;
@@ -765,56 +922,44 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Очередь «Дальше»: текущий сервер уходит в конец, следующий берётся из начала.
-    /// Так все проверенные серверы участвуют по кругу и рабочий сервер не теряется
-    /// из-за ручного переключения.
+    /// Очередь «Дальше»: следующий сервер в порядке приоритета, с переходом по кругу.
+    /// Выбранный сервис важнее пинга, поэтому «Универсальный» не переключится на сервер
+    /// без универсального доступа, пока есть живые универсальные.
     /// </summary>
     private ProxyNode? PickNextNode()
     {
-        var now = DateTime.UtcNow;
-        var usable = _workingRows
-            .Select(row => row.Node)
-            .Where(node => NodeAvailability.IsUsable(
-                node, NodeLimits.WorkingRecheckMinutes, _settings.ConnectOnlyMine, now))
-            .OrderBy(node => node.DelayMs ?? int.MaxValue)
-            .ThenByDescending(node => node.IsMine)
-            .ThenByDescending(node => node.OpenDomains)
-            .ToList();
-        if (usable.Count == 0)
+        var ordered = NodeFailover.Rank(
+            _workingRows.Select(row => row.Node),
+            _activeService,
+            DateTime.UtcNow,
+            _settings.ConnectOnlyMine,
+            filter: node => !_failedForSession.Contains(node.Id));
+        if (ordered.Count == 0)
         {
             return null;
         }
 
-        var byId = usable.ToDictionary(node => node.Id, StringComparer.OrdinalIgnoreCase);
-        // Убираем из очереди то, что перестало быть пригодным, и добавляем новые:
-        // порядок уже набранной очереди сохраняется, а не сбрасывается каждый раз.
-        _nodeRotation.RemoveAll(id => !byId.ContainsKey(id));
-        foreach (var id in byId.Keys)
-        {
-            if (!_nodeRotation.Contains(id))
-            {
-                _nodeRotation.Add(id);
-            }
-        }
-
-        // Текущий сервер — в конец очереди, чтобы следующий раз он был последним.
         var currentId = _manager.CurrentNode?.Id;
-        if (currentId is not null)
+        var currentIndex = currentId is null
+            ? -1
+            : ordered.FindIndex(node => string.Equals(node.Id, currentId, StringComparison.OrdinalIgnoreCase));
+        if (currentIndex < 0)
         {
-            var index = _nodeRotation.IndexOf(currentId);
-            if (index >= 0)
+            return ordered[0];
+        }
+
+        // Идём по кругу от текущего: все серверы участвуют, а свежие и лучшие —
+        // первыми в своей группе приоритета.
+        for (var step = 1; step <= ordered.Count; step++)
+        {
+            var candidate = ordered[(currentIndex + step) % ordered.Count];
+            if (!string.Equals(candidate.Id, currentId, StringComparison.OrdinalIgnoreCase))
             {
-                _nodeRotation.RemoveAt(index);
-                _nodeRotation.Add(currentId);
+                return candidate;
             }
         }
 
-        if (_nodeRotation.Count < 2)
-        {
-            return null;
-        }
-
-        return byId[_nodeRotation[0]];
+        return null;
     }
 
     /// <summary>Поделиться подключённым сервером: ссылка копируется в буфер обмена.</summary>
@@ -850,18 +995,20 @@ public partial class MainWindow
     }
 
     /// <summary>Следующий рабочий сервер, по возможности из другого семейства камуфляжа.</summary>
-    private ProxyNode? PickFailoverNode(string? avoidFamily)    {
-        var telegramNeeded = _sources.Any(s => s.Enabled && SourceKinds.IsProxy(s));
-        return _workingRows
-            .Select(r => r.Node)
-            .Where(n => n.DelayMs is not null && !_failedForSession.Contains(n.Id))
-            .OrderBy(n => n.DelayMs ?? int.MaxValue)
-            .ThenBy(n => avoidFamily is not null && NodeRanking.Family(n) == avoidFamily ? 1 : 0)
-            .ThenByDescending(n => telegramNeeded && n.TelegramOk == true)
-            .ThenByDescending(n => n.OpenDomains)
-            .ThenByDescending(n => n.IsMine)
-            .ThenByDescending(n => n.RankScore)
-            .FirstOrDefault();
+    private ProxyNode? PickFailoverNode(string? failedFamily)
+    {
+        // Выбранный сервис — главный приоритет: сначала серверы, которые его открывают,
+        // затем следующий лучший из остальных. Свежесть обязательна: переключаться
+        // на «рабочий» из старого кэша нельзя.
+        var ordered = NodeFailover.Rank(
+            _workingRows.Select(row => row.Node),
+            _activeService,
+            DateTime.UtcNow,
+            _settings.ConnectOnlyMine,
+            failedFamily,
+            preferTelegram: _sources.Any(s => s.Enabled && SourceKinds.IsProxy(s)),
+            filter: node => !_failedForSession.Contains(node.Id));
+        return ordered.FirstOrDefault();
     }
 
     /// <summary>Запасной сервер другого камуфляжного семейства — показываем его после подключения.</summary>

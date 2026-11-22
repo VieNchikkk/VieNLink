@@ -695,7 +695,26 @@ internal static class NodeStore
     /// доменов, затем самый быстрый. Задержка null означает недавний провал
     /// (см. <c>NodeHealth</c>), поэтому такие серверы не берём. null — здоровых нет.
     /// </summary>
-    private static ProxyNode? PickAutoNode(ProxyNode? selected) => BestVerified(selected);
+    private static ProxyNode? PickAutoNode(ProxyNode? selected, QuickService? preferService = null)
+    {
+        // Автоподключение и пересборка после сбоя остаются в выбранном сервисе:
+        // сначала сервер, открывающий его, и только потом общий «лучший».
+        if (preferService is { } wanted)
+        {
+            var preferred = NodeFailover.Rank(
+                    Nodes,
+                    ServiceKey(wanted),
+                    DateTime.UtcNow,
+                    Settings.ConnectOnlyMine)
+                .FirstOrDefault(node => OpenedFor(node, wanted));
+            if (preferred is not null)
+            {
+                return preferred;
+            }
+        }
+
+        return BestVerified(selected);
+    }
 
     /// <summary>
     /// Запоминает лучший проверенный сервер по правилам Windows (Telegram, личные,
@@ -756,15 +775,19 @@ internal static class NodeStore
         }
     }
 
+    /// <summary>Ключ сервиса для общего порядка переключения (см. <see cref="NodeFailover"/>).</summary>
+    public static string? ServiceKey(QuickService? service) => service switch
+    {
+        QuickService.YouTube => "youtube",
+        QuickService.Telegram => "telegram",
+        QuickService.Discord => "discord",
+        QuickService.Universal => "universal",
+        _ => null,
+    };
+
     /// <summary>Есть ли у сервера подтверждённый доступ к сервису.</summary>
-    private static bool OpenedFor(ProxyNode node, QuickService service) =>
-        NodeAvailability.OpenedFor(node, service switch
-        {
-            QuickService.YouTube => "youtube",
-            QuickService.Telegram => "telegram",
-            QuickService.Discord => "discord",
-            _ => "universal",
-        });
+    public static bool OpenedFor(ProxyNode node, QuickService service) =>
+        NodeAvailability.OpenedFor(node, ServiceKey(service) ?? "universal");
 
     /// <summary>
     /// Сервер, который прямо сейчас реально открывает сайт. Кэш мог устареть (сервер умер,
@@ -888,7 +911,10 @@ internal static class NodeStore
     /// выбирает, поэтому вместо прежнего (возможно, уже мёртвого) берём проверенный рабочий.
     /// null и текст ошибки — если подключать нечего.
     /// </summary>
-    public static string? BuildTunnelConfig(out string? error, bool preferWorking = false)
+    public static string? BuildTunnelConfig(
+        out string? error,
+        bool preferWorking = false,
+        QuickService? preferService = null)
     {
         EnsureLoaded();
 
@@ -898,7 +924,7 @@ internal static class NodeStore
         // считаем только сервер с задержкой и без провалов; иначе оставляем как есть.
         if (preferWorking)
         {
-            var auto = PickAutoNode(selected);
+            var auto = PickAutoNode(selected, preferService);
             if (auto is not null && (selected is null || auto.Id != selected.Id))
             {
                 AppLog.Write("android", "Автоподключение: выбран рабочий сервер " + auto.Name);

@@ -246,11 +246,11 @@ internal sealed class ProxyManager : IAsyncDisposable
                 node.OpenDomains, node.FailCount));
         }
 
-        // Скорость проверки подстраивается под ситуацию: стартуем скромно (8 серверов
-        // одновременно), а когда видно, что серверы живые, добавляем параллельность. Так слабый
+        // Скорость проверки подстраивается под ситуацию: стартуем с 10 серверов
+        // одновременно, а когда видно, что серверы живые, добавляем параллельность. Так слабый
         // канал и слабая машина не душат сами себя, а хороший список проверяется быстро.
         var limit = concurrency > 0 ? concurrency : 32;
-        var start = Math.Min(limit, 8);
+        var start = Math.Min(limit, 10);
         using var limiter = new SemaphoreSlim(start);
         var ramp = 0;
         var tasks = nodes.Select(async node =>
@@ -317,13 +317,13 @@ internal sealed class ProxyManager : IAsyncDisposable
                 // Плавный разгон: если первые 40 серверов в основном живые, добавляем параллельность.
                 if (finished == 40 && limit > start &&
                     Interlocked.CompareExchange(ref ramp, 1, 0) == 0 &&
-                    Volatile.Read(ref working) * 100 / finished >= 35)
+                    Volatile.Read(ref working) * 100 / finished >= 20)
                 {
                     limiter.Release(Math.Min(16, limit - start));
                 }
                 else if (finished == 120 && limit > start + 16 &&
                          Interlocked.CompareExchange(ref ramp, 2, 1) == 0 &&
-                         Volatile.Read(ref working) * 100 / finished >= 55)
+                         Volatile.Read(ref working) * 100 / finished >= 35)
                 {
                     limiter.Release(limit - start - 16);
                 }
@@ -456,28 +456,8 @@ internal sealed class ProxyManager : IAsyncDisposable
     }
 
     /// <summary>Прямой HTTPS без прокси: нужен, чтобы отличить «все серверы мертвы» от «нет интернета».</summary>
-    private static async Task<bool> DirectInternetWorksAsync(CancellationToken cancellationToken)
-    {
-        try
-        {
-            using var handler = new SocketsHttpHandler
-            {
-                UseProxy = false,
-                ConnectTimeout = TimeSpan.FromSeconds(4),
-            };
-            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(6) };
-            using var response = await client.GetAsync(
-                "https://cp.cloudflare.com/generate_204",
-                HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken);
-            return response.IsSuccessStatusCode;
-        }
-        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException
-                                             or OperationCanceledException)
-        {
-            return false;
-        }
-    }
+    private static Task<bool> DirectInternetWorksAsync(CancellationToken cancellationToken) =>
+        NetworkHealth.HasDirectInternetAsync(cancellationToken);
 
     public async Task ConnectAsync(
         ProxyNode? node,
@@ -645,6 +625,32 @@ internal sealed class ProxyManager : IAsyncDisposable
         node.DelayMs = delay;
         node.CheckedAtUtc = DateTime.UtcNow;
         return delay;
+    }
+
+    /// <summary>
+    /// Адреса проверки через поднятый прокси: универсальный Cloudflare и один сервис,
+    /// который сервер уже открывал. Проверка сервера (в скрытом ядре) считает рабочим
+    /// любой открывшийся адрес, поэтому проверка через прокси не должна браковать сервер,
+    /// у которого заблокирован только один домен. Иначе рабочий сервер удалялся бы после
+    /// нескольких подключений из-за чужого провала — например, когда провайдер режет YouTube.
+    /// </summary>
+    public static IReadOnlyList<string> VerificationUrls(ProxyNode node)
+    {
+        var urls = new List<string> { UniversalTestUrl };
+        if (node.YoutubeOk == true)
+        {
+            urls.Add(YoutubeTestUrl);
+        }
+        else if (node.TelegramOk == true)
+        {
+            urls.Add(TelegramTestUrls[0]);
+        }
+        else if (node.DiscordOk == true)
+        {
+            urls.Add(DiscordTestUrl);
+        }
+
+        return urls;
     }
 
     public async ValueTask DisposeAsync()
@@ -848,8 +854,18 @@ internal sealed class ProxyManager : IAsyncDisposable
                 {
                     _healthFailures++;
                     _nextHealthCheckUtc = DateTime.UtcNow.AddSeconds(Math.Min(120, 25 + _healthFailures * 12));
+                    // Два провала подряд: одиночный таймаут на загруженном канале не должен
+                    // дёргать подключение. Android использует то же правило.
+                    if (_healthFailures < 2)
+                    {
+                        AppLog.Write("proxy",
+                            $"Сервер не открыл проверочный адрес (сбой {_healthFailures}/2) — проверю ещё раз");
+                        return;
+                    }
+
+                    _healthFailures = 0;
                     AppLog.Write("proxy",
-                        $"Сервер перестал открывать проверочный адрес (сбой {_healthFailures}) — нужно переключение");
+                        "Сервер перестал открывать проверочный адрес (2 сбоя подряд) — нужно переключение");
                     NodeUnhealthy?.Invoke(testedNode);
                     return;
                 }

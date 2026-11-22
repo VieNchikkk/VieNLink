@@ -89,6 +89,19 @@ public sealed class TunnelService : VpnService
     /// </summary>
     public static TunnelService? Active { get; private set; }
 
+    /// <summary>
+    /// Сервис, выбранный кнопкой на главном экране. Хранится в службе, а не в Activity:
+    /// переживает пересоздание экрана и задаёт приоритет при переключении серверов.
+    /// null — подключались к конкретному серверу, приоритета сервиса нет.
+    /// </summary>
+    internal static NodeStore.QuickService? ActiveService { get; set; }
+
+    private static int _upgradeBusy;
+    private static DateTime _lastUpgradeUtc;
+
+    /// <summary>Сервер, на который уже не удалось вернуться: не долбим его каждую минуту.</summary>
+    private static readonly Dictionary<string, DateTime> _upgradeRetryAfter = new(StringComparer.OrdinalIgnoreCase);
+
     private ParcelFileDescriptor? _tunDescriptor;
     private ConnectivityManager? _connectivity;
     private Libbox.IInterfaceUpdateListener? _interfaceListener;
@@ -561,20 +574,22 @@ public sealed class TunnelService : VpnService
             NodeStore.SaveNodes();
 
             var family = NodeRanking.Family(selected);
-            var replacement = NodeStore.Snapshot()
-                .Where(node => node.Id != selected.Id &&
-                               node.Status == NodeStatus.Working &&
-                               node.DelayMs is not null &&
-                               loaded.Contains(node.Tag))
-                .OrderBy(node => node.DelayMs)
-                .ThenByDescending(node => NodeRanking.Family(node) != family)
-                .ThenByDescending(node => node.OpenDomains)
+            // Выбранный сервис важнее скорости: сначала живой сервер, открывающий его,
+            // затем следующий лучший из других. Свежесть проверки обязательна.
+            var replacement = NodeFailover.Rank(
+                    NodeStore.Snapshot().Where(node =>
+                        node.Id != selected.Id && loaded.Contains(node.Tag)),
+                    NodeStore.ServiceKey(ActiveService),
+                    DateTime.UtcNow,
+                    NodeStore.Settings.ConnectOnlyMine,
+                    family)
                 .FirstOrDefault();
             if (replacement is null)
             {
                 // Запасного сервера в текущем конфиге нет: пересобираем конфиг по тем же
-                // правилам, что и при обычном подключении.
-                var rebuilt = NodeStore.BuildTunnelConfig(out var error, preferWorking: true);
+                // правилам, что и при обычном подключении, сохраняя выбранный сервис.
+                var rebuilt = NodeStore.BuildTunnelConfig(
+                    out var error, preferWorking: true, preferService: ActiveService);
                 if (rebuilt is null)
                 {
                     AppLog.Write("health", "Автопереключение: " + error);
@@ -606,6 +621,135 @@ public sealed class TunnelService : VpnService
     }
 
     /// <summary>
+    /// Проверка нашла сервер выбранного сервиса, а туннель работает через запасной
+    /// из другого сервиса. Возвращаемся на выбранный сервис: тёплым переключением,
+    /// если сервер уже в конфиге, иначе пересборкой конфига (короткий перезапуск ядра).
+    /// При ошибке остаёмся на прежнем рабочем сервере.
+    /// </summary>
+    internal static void MaybeReturnToActiveService()
+    {
+        if (ActiveService is not { } service ||
+            State != TunnelState.Running || IsBypassMode || !CoreRuntime.IsRunning)
+        {
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _upgradeBusy, 1) == 1)
+        {
+            return;
+        }
+
+        try
+        {
+            var settings = NodeStore.Settings;
+            if (!settings.AutoFailover || settings.AutomationPaused)
+            {
+                return;
+            }
+
+            var selected = NodeStore.Selected;
+            if (selected is not null && NodeStore.OpenedFor(selected, service))
+            {
+                return;
+            }
+
+            // Не чаще раза в минуту: проверка обновляет десятки серверов подряд.
+            var now = DateTime.UtcNow;
+            if (now - _lastUpgradeUtc < TimeSpan.FromMinutes(1))
+            {
+                return;
+            }
+
+            var key = NodeStore.ServiceKey(service);
+            var loaded = CoreRuntime.LoadedTags;
+            var loadedPreferred = NodeFailover.Rank(
+                    NodeStore.Snapshot().Where(node => loaded.Contains(node.Tag)),
+                    key,
+                    now,
+                    settings.ConnectOnlyMine,
+                    filter: node => (selected is null || node.Id != selected.Id) &&
+                                    (!_upgradeRetryAfter.TryGetValue(node.Id, out var loadedRetry) ||
+                                     loadedRetry <= now))
+                .FirstOrDefault(node => NodeStore.OpenedFor(node, service));
+            if (loadedPreferred is not null)
+            {
+                _lastUpgradeUtc = now;
+                AppLog.Write("health",
+                    $"«{service}» снова доступен: «{loadedPreferred.Name}» — тёплое переключение");
+                _ = SwitchWarmAsync(loadedPreferred);
+                return;
+            }
+
+            // В конфиге нужного сервиса нет: пересобираем с приоритетом сервиса.
+            var preferred = NodeFailover.Rank(
+                    NodeStore.Snapshot(),
+                    key,
+                    now,
+                    settings.ConnectOnlyMine,
+                    filter: node => (selected is null || node.Id != selected.Id) &&
+                                    (!_upgradeRetryAfter.TryGetValue(node.Id, out var retryAt) ||
+                                     retryAt <= now))
+                .FirstOrDefault(node => NodeStore.OpenedFor(node, service));
+            var active = Active;
+            if (preferred is null || active is null)
+            {
+                return;
+            }
+
+            _lastUpgradeUtc = now;
+            NodeStore.Select(preferred);
+            var config = NodeStore.BuildTunnelConfig(
+                out var error, preferWorking: true, preferService: service);
+            if (config is null)
+            {
+                _upgradeRetryAfter[preferred.Id] = now.AddMinutes(15);
+                if (selected is not null)
+                {
+                    NodeStore.Select(selected);
+                }
+
+                AppLog.Write("health", "Возврат на выбранный сервис: " + error);
+                return;
+            }
+
+            AppLog.Write("health",
+                $"«{service}» снова доступен: «{preferred.Name}» — конфиг пересобран");
+            active.StartCore(config);
+            if (State != TunnelState.Running)
+            {
+                _upgradeRetryAfter[preferred.Id] = DateTime.UtcNow.AddMinutes(15);
+            }
+
+            UpdateNodeLabel(NodeStore.Selected?.DisplayDelay);
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("health", "Возврат на выбранный сервис не удался", exception);
+        }
+        finally
+        {
+            Volatile.Write(ref _upgradeBusy, 0);
+        }
+    }
+
+    private static async Task SwitchWarmAsync(ProxyNode node)
+    {
+        try
+        {
+            using var api = new ClashApiClient(CoreRuntime.ApiPort, CoreRuntime.ApiSecret);
+            await api.SelectAsync(SingBoxConfigBuilder.SelectorTag, node.Tag, CancellationToken.None)
+                .ConfigureAwait(false);
+            NodeStore.Select(node);
+            UpdateNodeLabel(node.DisplayDelay);
+        }
+        catch (Exception exception)
+        {
+            _upgradeRetryAfter[node.Id] = DateTime.UtcNow.AddMinutes(15);
+            AppLog.Write("health", "Тёплое переключение на выбранный сервис не удалось", exception);
+        }
+    }
+
+    /// <summary>
     /// Переключает selector на рабочий сервер, который уже загружен в текущий конфиг.
     /// null — подходящего нет. Нужен, когда выбранный сервер выпал из конфига
     /// (например, его выбрала фоновая проверка) — иначе health-check тестирует
@@ -614,13 +758,12 @@ public sealed class TunnelService : VpnService
     private static async Task<ProxyNode?> SwitchToLoadedNodeAsync(ProxyNode? avoid)
     {
         var loaded = CoreRuntime.LoadedTags;
-        var candidate = NodeStore.Snapshot()
-            .Where(node => node.Status == NodeStatus.Working &&
-                           node.DelayMs is not null &&
-                           loaded.Contains(node.Tag) &&
-                           (avoid is null || node.Id != avoid.Id))
-            .OrderBy(node => node.DelayMs)
-            .ThenByDescending(node => node.OpenDomains)
+        var candidate = NodeFailover.Rank(
+                NodeStore.Snapshot().Where(node => loaded.Contains(node.Tag)),
+                NodeStore.ServiceKey(ActiveService),
+                DateTime.UtcNow,
+                NodeStore.Settings.ConnectOnlyMine,
+                filter: node => avoid is null || node.Id != avoid.Id)
             .FirstOrDefault();
         if (candidate is null)
         {
@@ -1113,6 +1256,7 @@ public sealed class TunnelService : VpnService
     private void StopTunnel()
     {
         _bypassMode = false; IsBypassMode = false;
+        ActiveService = null;
         StopHealthMonitor();
 
         // Ядро закрываем через CoreRuntime: у процесса один CommandServer.

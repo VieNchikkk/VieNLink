@@ -61,9 +61,16 @@ public partial class MainWindow : Window
     private bool _trayHintShown;
     private readonly HashSet<string> _failedForSession = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Последний сервис, к которому подключались кнопкой: при смене сервиса
-    /// текущий сервер исключается из выбора, чтобы было реальное переподключение.</summary>
+    /// <summary>Сервис, к которому подключались кнопкой: приоритет при переключении
+    /// (сначала его серверы, затем остальные) и исключение текущего сервера при смене
+    /// сервиса, чтобы было реальное переподключение. Сбрасывается при отключении
+    /// и выборе конкретного сервера в списке.</summary>
     private string? _activeService;
+    private DateTime _lastServiceUpgradeUtc;
+    private int _serviceUpgradeBusy;
+
+    /// <summary>Сервер, на который уже не удалось вернуться: не долбим его каждую минуту.</summary>
+    private readonly Dictionary<string, DateTime> _upgradeRetryAfter = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, NodeRow> _rowIndex = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ObservableCollection<NodeRow>> _rowOwner = new(StringComparer.OrdinalIgnoreCase);
 
@@ -79,9 +86,6 @@ public partial class MainWindow : Window
 
     /// <summary>Сбой сервера пришёл во время другой операции: переключимся сразу после неё.</summary>
     private ProxyNode? _pendingFailoverNode;
-
-    /// <summary>Очередь кнопки «Дальше»: текущий сервер уходит в конец, следующий — из начала.</summary>
-    private readonly List<string> _nodeRotation = new();
 
     /// <summary>
     /// Возврат в окно после простоя: если свежих серверов нет, сразу запускаем

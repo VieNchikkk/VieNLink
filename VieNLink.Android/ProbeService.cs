@@ -282,8 +282,8 @@ public sealed class ProbeService : Service
                         Volatile.Read(ref _progressWorking));
                 },
                 token,
-                concurrency: 6,
-                timeoutMs: 3500,
+                concurrency: 8,
+                timeoutMs: 3000,
                 fullDomains: request?.FullDomains ?? true);
 
             foreach (var (id, node) in accepted)

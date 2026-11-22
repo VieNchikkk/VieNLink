@@ -948,15 +948,23 @@ public sealed partial class MainActivity : BaseActivity
     private bool _connecting;
     private string? _connectText;
     private CancellationTokenSource? _connectCts;
-    private NodeStore.QuickService? _activeService;
+
+    /// <summary>
+    /// Выбранный сервис живёт в службе: Activity пересоздаётся, а приоритет
+    /// переключения должен сохраниться.
+    /// </summary>
+    private NodeStore.QuickService? _activeService
+    {
+        get => TunnelService.ActiveService;
+        set => TunnelService.ActiveService = value;
+    }
+
     private bool _finding;
     private bool _switchingNode;
     private string? _headerDetail;
     private DateTime _headerDetailUntil = DateTime.MinValue;
     private TextView? _findButton;
 
-    /// <summary>Очередь «Дальше»: текущий сервер уходит в конец, следующий — из начала.</summary>
-    private readonly List<string> _nodeRotation = new();
     private TextView? _nextNodeButton;
 
     /// <summary>
@@ -966,7 +974,8 @@ public sealed partial class MainActivity : BaseActivity
     private const int FindForServiceBatches = 10;
 
     /// <summary>
-    /// Кнопка «Дальше»: переключает на следующий проверенный сервер, отсортированный по пингу.
+    /// Кнопка «Дальше»: переключает на следующий проверенный сервер. Приоритет — сервис,
+    /// выбранный кнопкой; внутри него — по пингу, затем остальные серверы.
     /// Если сервер уже в текущем конфиге — переключение через Clash selector, без перезапуска
     /// TUN и без разрыва уже открытых приложений.
     /// </summary>
@@ -990,51 +999,41 @@ public sealed partial class MainActivity : BaseActivity
             var settings = NodeStore.Settings;
             // Снимок и сортировка тысяч серверов — в фоне: на UI-потоке это давало ANR
             // при нажатии «Дальше» (ColorOS закрывал приложение).
-            var usable = await Task.Run(() => NodeStore.Snapshot()
-                .Where(node => NodeAvailability.IsUsable(
-                    node, NodeLimits.WorkingRecheckMinutes, settings.ConnectOnlyMine, now))
-                .OrderBy(node => node.DelayMs ?? int.MaxValue)
-                .ThenByDescending(node => node.IsMine)
-                .ThenByDescending(node => node.OpenDomains)
-                .ToList());
+            // Приоритет — сервис, выбранный кнопкой: сначала его серверы (по пингу),
+            // затем остальные, поэтому «Универсальный» не уйдёт на сервер без
+            // универсального доступа, пока есть живые универсальные.
+            var usable = await Task.Run(() => NodeFailover.Rank(
+                NodeStore.Snapshot(),
+                NodeStore.ServiceKey(_activeService),
+                now,
+                settings.ConnectOnlyMine));
             if (usable.Count == 0)
             {
                 Ui.Toast(this, "Нет проверенных серверов: нажмите «Проверить серверы»");
                 return;
             }
 
-            // Очередь «Дальше»: текущий сервер уходит в конец, а не выпадает из списка.
-            // Порядок уже набранной очереди сохраняется между нажатиями; из неё убираются
-            // только серверы, которые перестали быть свежими.
-            var byId = usable.ToDictionary(node => node.Id, StringComparer.OrdinalIgnoreCase);
-            _nodeRotation.RemoveAll(id => !byId.ContainsKey(id));
-            foreach (var id in byId.Keys)
-            {
-                if (!_nodeRotation.Contains(id))
-                {
-                    _nodeRotation.Add(id);
-                }
-            }
-
             var currentId = NodeStore.Selected?.Id;
-            if (currentId is not null)
+            var currentIndex = currentId is null
+                ? -1
+                : usable.FindIndex(node =>
+                    string.Equals(node.Id, currentId, StringComparison.OrdinalIgnoreCase));
+            ProxyNode? next;
+            if (currentIndex < 0)
             {
-                var currentIndex = _nodeRotation.IndexOf(currentId);
-                if (currentIndex >= 0)
-                {
-                    _nodeRotation.RemoveAt(currentIndex);
-                    _nodeRotation.Add(currentId);
-                }
+                next = usable[0];
+            }
+            else
+            {
+                // Идём по кругу от текущего: участвуют все, а свежие и лучшие —
+                // первыми в своей группе приоритета.
+                next = Enumerable.Range(1, usable.Count - 1)
+                    .Select(step => usable[(currentIndex + step) % usable.Count])
+                    .FirstOrDefault(node => !string.Equals(
+                        node.Id, currentId, StringComparison.OrdinalIgnoreCase));
             }
 
-            if (_nodeRotation.Count < 2)
-            {
-                Ui.Toast(this, "Других проверенных серверов нет");
-                return;
-            }
-
-            var next = byId[_nodeRotation[0]];
-            if (currentId == next.Id)
+            if (next is null)
             {
                 Ui.Toast(this, "Других проверенных серверов нет");
                 return;
@@ -1048,7 +1047,6 @@ public sealed partial class MainActivity : BaseActivity
                 NodeStore.Select(next);
                 TunnelService.UpdateNodeLabel(next.DisplayDelay);
                 _speedMeasured = false;
-                _activeService = null;
                 ShowHeaderDetail("Сервер переключён · " + next.DisplayDelay, 10);
                 Ui.Toast(this, "Сервер переключён · " + next.DisplayDelay);
                 ScheduleExitProbe();
@@ -1079,7 +1077,6 @@ public sealed partial class MainActivity : BaseActivity
             }
 
             _speedMeasured = false;
-            _activeService = null;
             ShowHeaderDetail("Переключаю сервер…", 6);
             StartWithConfig(config);
         }

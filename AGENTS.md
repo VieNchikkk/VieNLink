@@ -20,7 +20,7 @@ Hysteria2) из открытых списков, подписок и Telegram-к
 
 ## Карта файлов (сокращённо)
 **Core:** `Models`, `LinkParser`, `SubscriptionParser`, `NodeSources`, `NodeRanking`,
-`NodeAvailability`, `NodeDedup`/`NodeHealth`/`NodeLimits` (в `NodeRanking`/`Models`), `ShareLink`,
+`NodeAvailability`, `NodeFailover`, `NodeDedup`/`NodeHealth`/`NodeLimits` (в `NodeRanking`/`Models`), `ShareLink`,
 `SingBoxConfigBuilder`, `ClashApiClient`, `TlsHello`, `TlsFragmentForwarder`, `MtProtoService`,
 `MtProtoProbe`, `SourceDiscoveryService`, `JsonFileStore`, `AppLog`, `AppPaths`, `SecretProtector`,
 `BypassProfiles`.
@@ -53,10 +53,19 @@ CoreLog, TrayState, ProductFeatures, BypassProfiles, Layout); сервисы `Si
   по Cloudflare (`cp.cloudflare.com` — универсальный доступ), YouTube, Telegram, Discord.
   Windows дополнительно по `TlsHello.TargetDomains` (18 заблокированных доменов) → `OpenDomains`.
   Выбор: больше доменов, затем меньше задержка; «мои» подписки первыми (`NodeRanking`).
+  Перед полной проверкой мёртвые `host:port` отсеиваются TCP-опросом (`NodePrecheck`):
+  в пробное ядро попадают только отвечающие адреса; UDP-протоколы не трогаются.
+  Проверка через уже поднятый прокси (health-check, проверка после подключения) — только повод
+  переключиться; `Working`/`FailCount` меняет лишь прямая проверка в скрытом ядре.
 - Одно правило показа и выбора: `NodeAvailability.IsUsable` — статус `Working`, есть задержка,
   проверка не старше `NodeLimits.WorkingRecheckMinutes` (5 мин), фильтр «Только мои».
   Фоновая проверка перепроверяет рабочие с истекающим окном (`RecheckCutoffUtc`), поэтому
   счётчики не врут. Счётчики в UI обновляются раз в минуту.
+- Переключение (`NodeFailover.Rank`): сначала серверы выбранного сервиса («Универсальный»,
+  YouTube, Telegram, Discord), затем лучшие из других. Сервис сохраняется при сбое и на кнопке
+  «Сменить сервер». Новый сервер выбранного сервиса встаёт первым; если работаем на запасном
+  из другого сервиса, приложение плавно возвращается на него (тёплое переключение, если он
+  уже в конфиге).
 - Квоты: `NodeLimits.MinWorkingNodes` (10), `MinWorkingPerService` (2) для YouTube/Telegram/
   Discord/универсального; при дефиците поиск идёт несколькими партиями подряд, фокус сервиса
   меняется по кругу.
@@ -66,6 +75,7 @@ CoreLog, TrayState, ProductFeatures, BypassProfiles, Layout); сервисы `Si
 - Проверки идут во **вспомогательном** ядре (`HiddenProbeService`, порты 22000+ на Windows;
   процесс `:probe`, порты 21800+ на Android) — текущее подключение и TUN не перезапускаются.
   При активном TUN проверяются только уже загруженные серверы; при TUN-обходе проверка запрещена.
+  Партия перемешивается по источникам; фон-такт ограничен 6 минутами, затем следующий такт.
 - Дедупликация (`NodeDedup.Collapse`): точные дубли по outbound убираются, на один хост:порт
   остаётся до `NodeLimits.MaxPerEndpoint` (4) вариантов; результаты проверок переносятся только
   между точными дублями.

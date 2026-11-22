@@ -27,7 +27,8 @@ internal sealed class HiddenProbeService : IAsyncDisposable
         CancellationToken cancellationToken,
         int concurrency = 3,
         int timeoutMs = 3000,
-        bool waitForGate = true)
+        bool waitForGate = true,
+        bool precheck = true)
     {
         if (nodes.Count == 0)
         {
@@ -64,6 +65,50 @@ internal sealed class HiddenProbeService : IAsyncDisposable
                 return new TestSummary(0, 0, 0, 0);
             }
 
+            // Мёртвые хост:порты отсеиваем TCP-опросом: не тащим их в пробное ядро
+            // и не ждём трёхсекундный таймаут. Один опрос на endpoint, а не на аккаунт.
+            // precheck=false — когда включён TUN: сырые TCP-соединения из приложения
+            // ушли бы в туннель.
+            var originalCount = ordered.Count;
+            if (precheck)
+            {
+                var alive = await NodePrecheck.FilterAliveAsync(
+                        ordered,
+                        NodePrecheck.DefaultConcurrency,
+                        NodePrecheck.DefaultTimeoutMs,
+                        progress,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+                if (alive.Count < originalCount)
+                {
+                    // Если не ответил вообще никто, сначала отличаем обрыв сети от мёртвых
+                    // серверов: иначе сетевой сбой вычистил бы весь список.
+                    if (alive.Count == 0 &&
+                        !await NetworkHealth.HasDirectInternetAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        AppLog.Write("probe", "TCP-отсев: прямой интернет недоступен — статусы не изменены");
+                        throw new InvalidOperationException(
+                            "Нет прямого интернета: проверка серверов не выполнялась");
+                    }
+
+                    var aliveIds = new HashSet<string>(
+                        alive.Select(node => node.Id), StringComparer.OrdinalIgnoreCase);
+                    foreach (var node in ordered.Where(node => !aliveIds.Contains(node.Id)))
+                    {
+                        NodeHealth.RegisterFailure(node);
+                        onNodeTested?.Invoke(node);
+                    }
+
+                    progress?.Report(
+                        $"TCP-отсев: {originalCount - alive.Count} из {originalCount} не отвечают");
+                    ordered = alive;
+                    if (ordered.Count == 0)
+                    {
+                        return new TestSummary(originalCount, 0, 0, 0);
+                    }
+                }
+            }
+
             // Копия настроек: проверка не должна менять режим подключения пользователя.
             var probeSettings = settings.Clone();
             probeSettings.TunnelMode = TunnelMode.SystemProxy;
@@ -84,7 +129,7 @@ internal sealed class HiddenProbeService : IAsyncDisposable
             SingBoxConfigBuilder.WriteToFile(configPath, json);
             await SingBoxRunner.CheckConfigAsync(configPath, cancellationToken).ConfigureAwait(false);
 
-            AppLog.Write("probe", $"Скрытая проверка: серверов {ordered.Count}, mixed {mixedPort}, API {apiPort}");
+            AppLog.Write("probe", $"Скрытая проверка: серверов {ordered.Count} из {originalCount}, mixed {mixedPort}, API {apiPort} (напрямую, вне VPN)");
             await _runner.StartAsync(configPath, apiPort, TimeSpan.FromSeconds(20), cancellationToken)
                 .ConfigureAwait(false);
 
@@ -99,7 +144,7 @@ internal sealed class HiddenProbeService : IAsyncDisposable
                 await Task.Delay(150, cancellationToken).ConfigureAwait(false);
             }
 
-            return await ProxyManager.TestWithApiAsync(
+            var summary = await ProxyManager.TestWithApiAsync(
                 api,
                 ordered,
                 progress,
@@ -109,6 +154,12 @@ internal sealed class HiddenProbeService : IAsyncDisposable
                 timeoutMs,
                 youtubeUrl: null,
                 telegramUrl: null).ConfigureAwait(false);
+            return new TestSummary(
+                originalCount,
+                summary.YoutubeOk,
+                summary.TelegramOk,
+                summary.Working,
+                summary.BestDomains);
         }
         finally
         {

@@ -318,7 +318,7 @@ public partial class MainWindow
                     nodes, progress, OnNodeTested, _operation!.Token, concurrency: 8, timeoutMs: 3000)
                 : await _probe.TestAsync(
                     nodes, _settings, progress, OnNodeTested, _operation!.Token,
-                    concurrency: _zapret.IsRunning || _desync.IsRunning ? 3 : 8,
+                    concurrency: _zapret.IsRunning || _desync.IsRunning ? 3 : (_manager.IsConnected ? 8 : 16),
                     timeoutMs: 3000);
         }
         finally

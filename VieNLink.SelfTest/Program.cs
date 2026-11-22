@@ -2328,6 +2328,112 @@ internal static class Program
         Check(retried.Status == NodeStatus.Working && retried.FailCount == 0,
             "успешная проверка обнуляет счётчик");
 
+        // Проверка через поднятый прокси: Cloudflare первым и сервис, который сервер
+        // уже открывал. Только YouTube браковал рабочий сервер на провайдере, где
+        // YouTube режется по IP, — и после пяти подключений сервер удалялся.
+        var urlsNode = new ProxyNode { UniversalOk = false, YoutubeOk = true };
+        var verifyUrls = ProxyManager.VerificationUrls(urlsNode);
+        Check(verifyUrls[0] == ProxyManager.UniversalTestUrl,
+            "проверка через прокси: универсальный Cloudflare первым");
+        Check(verifyUrls.Contains(ProxyManager.YoutubeTestUrl),
+            "проверка через прокси: добавлен открытый сервис");
+        Check(ProxyManager.VerificationUrls(new ProxyNode { UniversalOk = true }).Count == 1,
+            "проверка через прокси: для универсального сервера хватает Cloudflare");
+
+        // 5. Переключение: сначала серверы выбранного сервиса, даже если они медленнее,
+        // затем следующие лучшие из других сервисов. Новый универсальный — первым.
+        var nowForRank = DateTime.UtcNow;
+        ProxyNode RankNode(string tag, int delay, bool universal = false, bool youtube = false,
+            bool telegram = false, DateTime? checkedAt = null) => new()
+        {
+            Tag = tag,
+            Name = tag,
+            Status = NodeStatus.Working,
+            DelayMs = delay,
+            UniversalOk = universal,
+            YoutubeOk = youtube,
+            TelegramOk = telegram,
+            CheckedAtUtc = checkedAt ?? nowForRank,
+        };
+
+        var universalSlow = RankNode("universal-slow", 900, universal: true);
+        var youtubeFast = RankNode("youtube-fast", 100, youtube: true);
+        var telegramFast = RankNode("telegram-fast", 50, telegram: true);
+        var staleUniversal = RankNode("universal-stale", 10, universal: true,
+            checkedAt: nowForRank.AddHours(-2));
+        var rankPool = new[] { telegramFast, youtubeFast, universalSlow, staleUniversal };
+
+        var universalRank = NodeFailover.Rank(rankPool, "universal", nowForRank, onlyMine: false);
+        Check(universalRank[0].Tag == "universal-slow",
+            "переключение: сервер выбранного сервиса важнее скорости");
+        Check(universalRank.All(node => node.Tag != "universal-stale"),
+            "переключение: устаревшая проверка не участвует");
+        Check(universalRank.Count == 3, "переключение: остальные сервисы остаются в резерве");
+
+        var youtubeRank = NodeFailover.Rank(rankPool, "youtube", nowForRank, onlyMine: false);
+        Check(youtubeRank[0].Tag == "youtube-fast", "переключение: YouTube первым для YouTube");
+        Check(youtubeRank[1].Tag == "telegram-fast", "переключение: затем лучший из других сервисов");
+
+        var newUniversal = RankNode("universal-new", 10, universal: true);
+        var withNew = NodeFailover.Rank(rankPool.Append(newUniversal), "universal", nowForRank, onlyMine: false);
+        Check(withNew[0].Tag == "universal-new",
+            "переключение: новый быстрый универсальный встаёт на 1 место");
+        Check(withNew.Take(2).All(node => node.UniversalOk == true),
+            "переключение: оба универсальных впереди остальных");
+
+        // 6. TCP-отсев: закрытый порт отбрасывается, живой — остаётся, UDP-протокол
+        // (Hysteria2) не трогаем, потому что TCP для него ничего не значит.
+        var preListener = new TcpListener(IPAddress.Loopback, 0);
+        preListener.Start();
+        var livePort = ((IPEndPoint)preListener.LocalEndpoint).Port;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                while (true)
+                {
+                    using var accepted = await preListener.AcceptTcpClientAsync();
+                }
+            }
+            catch (Exception)
+            {
+                // Слушатель остановлен после проверки.
+            }
+        });
+
+        try
+        {
+            ProxyNode PreNode(string tag, string protocol, int port) => new()
+            {
+                Tag = tag,
+                Name = tag,
+                Protocol = protocol,
+                Server = "127.0.0.1",
+                Port = port,
+            };
+
+            var prePool = Enumerable.Range(0, 10)
+                .SelectMany(_ => new[]
+                {
+                    PreNode("pre-closed", "vless", 1),
+                    PreNode("pre-open", "vless", livePort),
+                    PreNode("pre-udp", "hysteria2", 1),
+                })
+                .ToList();
+            var preAlive = await NodePrecheck.FilterAliveAsync(
+                prePool, 16, 2000, null, CancellationToken.None);
+            Check(preAlive.All(node => node.Tag != "pre-closed"),
+                "TCP-отсев: закрытый порт отброшен");
+            Check(preAlive.Count(node => node.Tag == "pre-open") == 10,
+                "TCP-отсев: живой адрес остаётся");
+            Check(preAlive.Count(node => node.Tag == "pre-udp") == 10,
+                "TCP-отсев: UDP-протокол не отсеивается по TCP");
+        }
+        finally
+        {
+            preListener.Stop();
+        }
+
         var now = DateTime.UtcNow;
 
         // 4. Значки сервисов показывают только свежие проверки: устаревший кэш

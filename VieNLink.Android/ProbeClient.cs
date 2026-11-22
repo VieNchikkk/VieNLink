@@ -126,7 +126,7 @@ internal static class ProbeClient
         var workingCutoff = NodeAvailability.RecheckCutoffUtc(DateTime.UtcNow);
         // Снимок и сортировка тысяч серверов — в фоне: на UI-потоке это давало ANR
         // при нажатии кнопок сервисов и «Универсальный».
-        var candidates = await Task.Run(() =>
+        var ordered = await Task.Run(() =>
             NodeStore.OrderForConfig(NodeStore.Snapshot())
                 // Один сервер — одна проверка: одинаковые outbound'ы не попадают в партию дважды.
                 .DistinctBy(node => node.Tag, StringComparer.OrdinalIgnoreCase)
@@ -146,8 +146,18 @@ internal static class ProbeClient
                 .ThenBy(node => node.TriedAtUtc is null ? 0 : 1)
                 .ThenByDescending(node => node.LastSeenUtc)
                 .ThenByDescending(node => sourceScore?.Invoke(node) ?? 0)
-                .Take(Math.Clamp(max, 1, 200))
                 .ToList(), cancellationToken).ConfigureAwait(false);
+
+        // Рабочие — первыми, новые перемешиваем по источникам: первый большой мёртвый
+        // список не должен занимать всю партию.
+        var batchLimit = Math.Clamp(max, 1, 200);
+        var workingNodes = ordered.Where(node => node.Status == NodeStatus.Working).ToList();
+        var freshNodes = ordered.Where(node => node.Status != NodeStatus.Working).ToList();
+        var candidates = workingNodes
+            .Concat(NodeFailover.InterleaveBySource(
+                freshNodes, Math.Max(0, batchLimit - workingNodes.Count)))
+            .Take(batchLimit)
+            .ToList();
 
         if (candidates.Count == 0)
         {
@@ -279,20 +289,32 @@ internal static class ProbeClient
         IReadOnlyList<ProxyNode> snapshot,
         Func<ProxyNode, bool> reached)
     {
-        var scores = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (var group in snapshot.GroupBy(
-                     node => node.SourceName ?? string.Empty,
-                     StringComparer.OrdinalIgnoreCase))
+        var totals = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var opened = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var node in snapshot)
         {
-            var total = group.Count();
-            scores[group.Key] = total == 0 ? 0 : group.Count(reached) * 1000 / total;
+            var hasAccess = reached(node);
+            foreach (var source in NodeFailover.SplitSources(node.SourceName))
+            {
+                totals[source] = totals.GetValueOrDefault(source) + 1;
+                if (hasAccess)
+                {
+                    opened[source] = opened.GetValueOrDefault(source) + 1;
+                }
+            }
+        }
+
+        var scores = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in totals)
+        {
+            scores[pair.Key] = opened.GetValueOrDefault(pair.Key) * 1000 / pair.Value;
         }
 
         return scores;
     }
 
     private static int SourceScoreOf(Dictionary<string, int> scores, string? sourceName) =>
-        sourceName is not null && scores.TryGetValue(sourceName, out var score) ? score : 0;
+        NodeFailover.BestSourceScore(scores, sourceName);
 
     /// <summary>Есть ли у сервера подтверждённый доступ к сервису.</summary>
     private static bool Reached(ProxyNode node, NodeStore.QuickService service) =>
@@ -378,10 +400,56 @@ internal static class ProbeClient
         {
             progress?.Report(new ProbeProgress("Готовлю проверку…", 0, nodes.Count, 0));
             ReportActivity("Проверяю серверы: готовлю проверку…", 30);
+
+            // Мёртвые хост:порты отсеиваем быстрым TCP-опросом в этом процессе.
+            // В :probe уходят только живые адреса — иначе партия тратит минуты
+            // на ожидание таймаутов заведомо нерабочих серверов.
+            var toTest = nodes;
+            var dropped = 0;
+            if (nodes.Count >= NodePrecheck.MinBatch)
+            {
+                ReportActivity("Проверяю доступность серверов…", 20);
+                var alive = await NodePrecheck.FilterAliveAsync(
+                        nodes,
+                        64,
+                        NodePrecheck.DefaultTimeoutMs,
+                        null,
+                        token)
+                    .ConfigureAwait(false);
+                if (alive.Count < nodes.Count)
+                {
+                    if (alive.Count == 0 &&
+                        !await NetworkHealth.HasDirectInternetAsync(token).ConfigureAwait(false))
+                    {
+                        return new NodeTestSummary(0, 0, 0,
+                            "Нет сети: статусы серверов не изменены.");
+                    }
+
+                    var aliveIds = alive
+                        .Select(node => node.Id)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    foreach (var node in nodes.Where(node => !aliveIds.Contains(node.Id)))
+                    {
+                        NodeHealth.RegisterFailure(node);
+                        dropped++;
+                    }
+
+                    NodeStore.SaveNodes();
+                    toTest = alive;
+                    if (toTest.Count == 0)
+                    {
+                        ReportActivity($"TCP-отсев: {dropped} серверов не отвечают", 10);
+                        return new NodeTestSummary(dropped, 0, 0, null);
+                    }
+
+                    ReportActivity($"TCP-отсев: осталось {toTest.Count} из {nodes.Count}", 10);
+                }
+            }
+
             var request = new ProbeRequest
             {
                 FullDomains = fullDomains,
-                Nodes = nodes
+                Nodes = toTest
                     .Select(node => new ProbeRequestNode { Id = node.Id, RawLink = node.RawLink })
                     .ToList(),
             };
@@ -507,10 +575,13 @@ internal static class ProbeClient
             }
 
             var summary = Apply(result, nodes);
-            ReportActivity(summary.Error is null
-                ? $"Проверено {summary.Tested}: рабочих {summary.Working}"
-                : summary.Error, 20);
-            return summary;
+            var total = dropped > 0
+                ? summary with { Tested = summary.Tested + dropped }
+                : summary;
+            ReportActivity(total.Error is null
+                ? $"Проверено {total.Tested}: рабочих {total.Working}"
+                : total.Error, 20);
+            return total;
         }
         catch (OperationCanceledException)
         {
@@ -626,6 +697,10 @@ internal static class ProbeClient
         AppLog.Write("probe",
             $"Результаты :probe: рабочих {working} из {result.Nodes.Count}, удалено {removed}" +
             (best is null ? ", живых нет" : ", выбран " + best.Name));
+
+        // Если работаем на запасном сервере, а проверка нашла сервер выбранного
+        // сервиса — плавно возвращаемся на него (тёплое переключение или пересборка).
+        TunnelService.MaybeReturnToActiveService();
 
         return new NodeTestSummary(result.Nodes.Count, working, removed, result.Error,
             universal, youtube, telegram, discord, bestDomains);
