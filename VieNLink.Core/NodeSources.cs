@@ -12,6 +12,7 @@ internal sealed class FetchOutcome
     public List<ProxyNode> Nodes { get; init; } = new();
     public List<MtProtoProxy> MtProto { get; init; } = new();
     public string? Error { get; init; }
+    public bool Skipped { get; init; }
 }
 
 internal sealed class CollectResult
@@ -287,7 +288,22 @@ internal static class NodeSourceService
             FetchOutcome outcome;
             try
             {
-                outcome = await FetchAsync(source, cancellationToken).ConfigureAwait(false);
+                // Сбор серверов — только из свежих GitHub-списков. Если даты публикации
+                // нет, IsFreshAsync возвращает true и источник собирается как раньше.
+                if (!await GitHubSourceFreshness.IsFreshAsync(source, cancellationToken).ConfigureAwait(false))
+                {
+                    outcome = new FetchOutcome
+                    {
+                        Source = source,
+                        Skipped = true,
+                        Error = "репозиторий не обновлялся больше 24 ч — пропущен",
+                    };
+                    AppLog.Write("sources", $"{source.Name}: пропущен, репозиторий старше 24 ч");
+                }
+                else
+                {
+                    outcome = await FetchAsync(source, cancellationToken).ConfigureAwait(false);
+                }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -301,10 +317,16 @@ internal static class NodeSourceService
 
             source.LastCheckedUtc = DateTime.UtcNow;
             source.LastError = outcome.Error;
-            source.LastNodeCount = outcome.Nodes.Count;
-            progress?.Report(outcome.Error is null
-                ? $"{source.Name}: {outcome.Nodes.Count} серверов"
-                : $"{source.Name}: ошибка — {outcome.Error}");
+            if (!outcome.Skipped)
+            {
+                source.LastNodeCount = outcome.Nodes.Count;
+            }
+
+            progress?.Report(outcome.Skipped
+                ? $"{source.Name}: пропущен — репозиторий старше 24 ч"
+                : outcome.Error is null
+                    ? $"{source.Name}: {outcome.Nodes.Count} серверов"
+                    : $"{source.Name}: ошибка — {outcome.Error}");
             onSource?.Invoke(outcome);
             return outcome;
         })).ConfigureAwait(false);

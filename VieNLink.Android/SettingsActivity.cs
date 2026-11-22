@@ -122,7 +122,9 @@ public sealed class SettingsActivity : BaseActivity
             settings.AutoDiscoverSources,
             value => settings.AutoDiscoverSources = value);
         AddAutomationToggle(page, "Авто-сбор серверов из источников",
-            "Периодически заново собирать серверы из включённых источников и подписок.",
+            "Периодически заново собирать серверы из включённых источников и подписок. " +
+            "GitHub-репозитории берём только обновлённые за последние 24 часа; " +
+            "если даты публикации нет — источник собирается как раньше.",
             settings.AutoCollectServers,
             value =>
             {

@@ -2353,6 +2353,24 @@ internal static class Program
               SourceDiscoveryService.IsRepositoryFresh("не дата", freshnessNow),
             "автопоиск: без даты публикации источник не отсеивается");
 
+        // Сбор серверов: GitHub-репозиторий старше 24 ч пропускается.
+        Check(GitHubSourceFreshness.TryGetRepository(
+                "https://raw.githubusercontent.com/owner/repo/main/sub.txt") == "owner/repo",
+            "сбор: ссылка raw.githubusercontent разобрана в owner/repo");
+        var fileLocation = GitHubSourceFreshness.TryGetLocation(
+            "https://raw.githubusercontent.com/owner/repo/main/sub/file.txt");
+        Check(fileLocation is not null &&
+              fileLocation.Reference == "main" &&
+              fileLocation.Path == "sub/file.txt",
+            "сбор: путь к файлу в источнике разобран");
+        Check(GitHubSourceFreshness.TryGetRepository("https://example.com/sub") is null,
+            "сбор: не-GitHub источник не фильтруется");
+        var pushedNow = DateTimeOffset.UtcNow;
+        Check(GitHubSourceFreshness.IsPushedAtFresh(pushedNow.AddHours(-23), pushedNow.UtcDateTime) &&
+              !GitHubSourceFreshness.IsPushedAtFresh(pushedNow.AddHours(-25), pushedNow.UtcDateTime) &&
+              GitHubSourceFreshness.IsPushedAtFresh(null, pushedNow.UtcDateTime),
+            "сбор: свежесть репозитория 24 ч и отсутствие даты");
+
         // 1. Оба проверочных адреса доступны → узел рабочий, отметки стоят.
         var working = DirectNode("direct-a");
         var summary = await manager.TestNodesAsync(
