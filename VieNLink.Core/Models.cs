@@ -518,10 +518,19 @@ internal sealed class SourceDefinition
     public int TotalNodeCount { get; set; }
 
     /// <summary>
+    /// Сколько уникальных серверов из источника хотя бы раз подтвердили работу
+    /// (открыли сайт через себя). Считается по <see cref="RegisteredWorkingNodeIds"/>.
+    /// </summary>
+    public int TotalWorkingNodeCount { get; set; }
+
+    /// <summary>
     /// Id уже засчитанных серверов: нужен, чтобы «всего зарегистрировано» не росло
     /// при каждом обновлении одного и того же списка. Файл источников шифруется.
     /// </summary>
     public HashSet<string> RegisteredNodeIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Id серверов, которые хотя бы раз были рабочими; повторные проверки не считаются.</summary>
+    public HashSet<string> RegisteredWorkingNodeIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Учитывает серверы источника в общем счётчике (повторы не считаются).</summary>
     public void RegisterNodes(IEnumerable<ProxyNode> nodes)
@@ -544,6 +553,21 @@ internal sealed class SourceDefinition
         if (RegisteredNodeIds.Add(id))
         {
             TotalNodeCount++;
+        }
+    }
+
+    /// <summary>Учитывает сервер, который хотя бы раз был рабочим.</summary>
+    public void RegisterWorkingId(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return;
+        }
+
+        RegisteredWorkingNodeIds ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (RegisteredWorkingNodeIds.Add(id))
+        {
+            TotalWorkingNodeCount++;
         }
     }
 

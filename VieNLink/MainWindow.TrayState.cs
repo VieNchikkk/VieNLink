@@ -79,6 +79,11 @@ public partial class MainWindow
         SetBusy(false);
         _operationLabel = "текущее действие";
         UpdateSourceWorkingStats();
+        if (_sourceTotalsDirty)
+        {
+            NodeSourceService.SaveSources(_sources);
+            _sourceTotalsDirty = false;
+        }
 
         // Сбой сервера, замеченный во время проверки или другой операции, обрабатываем сейчас.
         if (_pendingFailoverNode is { } pending)

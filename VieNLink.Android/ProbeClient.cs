@@ -881,6 +881,7 @@ internal static class ProbeClient
 
             if (node.Status == NodeStatus.Working)
             {
+                NodeStore.RegisterWorking(node);
                 working++;
                 if (!wasWorking)
                 {

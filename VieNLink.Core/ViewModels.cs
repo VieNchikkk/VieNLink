@@ -208,6 +208,11 @@ internal sealed class SourceRow : INotifyPropertyChanged
         ? "—"
         : !_workingCountSet ? "—" : _workingCount.ToString();
 
+    /// <summary>Сколько уникальных серверов источника хотя бы раз были рабочими.</summary>
+    public string TotalWorkingLabel => SourceKinds.IsProxy(Source)
+        ? "—"
+        : Source.TotalWorkingNodeCount.ToString();
+
     public string TrafficLabel => Source.SubscriptionInfo ?? "—";
 
     public string StatusLabel => Source.LastError is not null

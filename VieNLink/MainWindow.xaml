@@ -849,6 +849,14 @@
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
+                                <GridViewColumn Header="Рабочих всего" Width="105">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding TotalWorkingLabel}" VerticalAlignment="Center"
+                                                       ToolTip="Уникальные серверы этого источника, которые хотя бы раз открыли сайт через себя" />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
                                 <GridViewColumn Header="Статус" Width="150">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>

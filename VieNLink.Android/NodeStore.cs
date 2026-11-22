@@ -36,6 +36,7 @@ internal static class NodeStore
     private static readonly TimeSpan PoolDirtyInterval = TimeSpan.FromSeconds(60);
     private static DateTime _lastPoolSaveUtc = DateTime.MinValue;
     private static volatile bool _poolDirty;
+    private static volatile bool _sourceTotalsDirty;
 
     public static List<SourceDefinition> Sources { get; } = new();
     public static List<ProxyNode> Nodes { get; } = new();
@@ -166,6 +167,23 @@ internal static class NodeStore
     /// Читаем опубликованный снимок без блокировки.
     /// </summary>
     public static Dictionary<string, int> WorkingBySource() => NodeSourceStats.WorkingBySource(_snapshot);
+
+    /// <summary>
+    /// Запоминает, что сервер из этих источников хотя бы раз открыл сайт. Источники
+    /// записываются вместе с кэшем в <see cref="SaveNodes"/>, а не на каждый сервер.
+    /// </summary>
+    public static void RegisterWorking(ProxyNode node)
+    {
+        if (node.Status != NodeStatus.Working)
+        {
+            return;
+        }
+
+        lock (Gate)
+        {
+            _sourceTotalsDirty |= NodeSourceStats.RegisterWorking(Sources, node);
+        }
+    }
 
     /// <summary>
     /// Счётчики для шапки и экрана «Серверы» без копирования всего списка: шапка обновляется
@@ -685,6 +703,13 @@ internal static class NodeStore
             }
 
             NodeSourceService.SaveCache(working, allowEmpty: true, AppPaths.WorkingNodesPath);
+
+            if (_sourceTotalsDirty)
+            {
+                // «Рабочих всего» по источникам: пишем пачкой после проверки.
+                NodeSourceService.SaveSources(Sources);
+                _sourceTotalsDirty = false;
+            }
 
             var now = DateTime.UtcNow;
             var poolDue = now - _lastPoolSaveUtc >= PoolSaveInterval;

@@ -205,7 +205,8 @@ public sealed class SourcesActivity : BaseActivity
         {
             var working = workingBySource.TryGetValue(source.Name, out var found) ? found : 0;
             var total = source.TotalNodeCount > 0 ? source.TotalNodeCount : source.LastNodeCount;
-            count = "всего: " + total + " · рабочих: " + working;
+            count = "всего: " + total + " · сейчас рабочих: " + working +
+                    "\nрабочих всего: " + source.TotalWorkingNodeCount;
         }
         else
         {

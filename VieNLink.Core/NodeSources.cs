@@ -52,6 +52,36 @@ internal static class NodeSourceStats
     }
 
     /// <summary>
+    /// Учитывает сервер как «хотя бы раз рабочий» у всех источников, из которых он пришёл.
+    /// Вызывается после проверки, когда сервер открыл сайт через себя.
+    /// </summary>
+    public static bool RegisterWorking(IEnumerable<SourceDefinition> sources, ProxyNode node)
+    {
+        if (node.Status != NodeStatus.Working)
+        {
+            return false;
+        }
+
+        var changed = false;
+        foreach (var name in NodeFailover.SplitSources(node.SourceName))
+        {
+            foreach (var source in sources)
+            {
+                if (!string.Equals(source.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var before = source.TotalWorkingNodeCount;
+                source.RegisterWorkingId(node.Id);
+                changed |= source.TotalWorkingNodeCount != before;
+            }
+        }
+
+        return changed;
+    }
+
+    /// <summary>
     /// Первичное заполнение «всего зарегистрировано» по уже загруженному кэшу:
     /// без этого у старых источников счётчик начинался бы с нуля до следующего сбора.
     /// Возвращает true, если что-то добавилось и источники стоит сохранить.
@@ -92,6 +122,13 @@ internal static class NodeSourceStats
                     var before = source.TotalNodeCount;
                     source.RegisterId(node.Id);
                     changed |= source.TotalNodeCount != before;
+
+                    if (node.Status == NodeStatus.Working)
+                    {
+                        var beforeWorking = source.TotalWorkingNodeCount;
+                        source.RegisterWorkingId(node.Id);
+                        changed |= source.TotalWorkingNodeCount != beforeWorking;
+                    }
                 }
             }
         }

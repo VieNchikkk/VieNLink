@@ -27,6 +27,7 @@ public partial class MainWindow : Window
     private readonly ObservableCollection<NodeRow> _rows = new();
     private readonly ObservableCollection<NodeRow> _workingRows = new();
     private readonly ObservableCollection<SourceRow> _sourceRows = new();
+    private bool _sourceTotalsDirty;
     private readonly ObservableCollection<MtProtoRow> _mtprotoRows = new();
     private readonly ObservableCollection<MtProtoRow> _mtprotoDeadRows = new();
     private List<SourceDefinition> _sources = new();

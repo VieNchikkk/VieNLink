@@ -206,6 +206,7 @@ internal static class NodeTester
                     if (anyOpened)
                     {
                         NodeHealth.RegisterSuccess(node);
+                        NodeStore.RegisterWorking(node);
                         Interlocked.Increment(ref working);
                         if (universalDelay is not null)
                         {
@@ -413,6 +414,7 @@ internal static class NodeTester
                     }
 
                     NodeHealth.RegisterSuccess(node);
+                    NodeStore.RegisterWorking(node);
                     Interlocked.Increment(ref working);
                     if (!wasWorking)
                     {

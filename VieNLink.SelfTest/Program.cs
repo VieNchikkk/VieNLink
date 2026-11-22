@@ -2318,6 +2318,28 @@ internal static class Program
         Check(seededChanged && seeded.TotalNodeCount == 1,
             "источники: старый кэш заполняет «всего зарегистрировано»");
 
+        // «Рабочих всего»: сервер засчитывается источнику один раз, только если был рабочим.
+        var workingSource = new SourceDefinition { Name = "W" };
+        var workingNode = new ProxyNode
+        {
+            Identity = "working-1",
+            Status = NodeStatus.Working,
+            SourceName = "W",
+        };
+        Check(NodeSourceStats.RegisterWorking(new[] { workingSource }, workingNode) &&
+              workingSource.TotalWorkingNodeCount == 1,
+            "источники: рабочий сервер засчитан источнику");
+        NodeSourceStats.RegisterWorking(new[] { workingSource }, workingNode);
+        Check(workingSource.TotalWorkingNodeCount == 1,
+            "источники: повторная проверка не увеличивает «рабочих всего»");
+        var deadSource = new SourceDefinition { Name = "D" };
+        NodeSourceStats.RegisterWorking(new[] { deadSource },
+            new ProxyNode { Identity = "dead-1", Status = NodeStatus.Dead, SourceName = "D" });
+        Check(deadSource.TotalWorkingNodeCount == 0,
+            "источники: мёртвый сервер не считается рабочим");
+        Check(seeded.TotalWorkingNodeCount == 1,
+            "источники: рабочий сервер из кэша попадает в «рабочих всего»");
+
         // 1. Оба проверочных адреса доступны → узел рабочий, отметки стоят.
         var working = DirectNode("direct-a");
         var summary = await manager.TestNodesAsync(

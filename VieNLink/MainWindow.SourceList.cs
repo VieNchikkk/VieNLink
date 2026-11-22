@@ -349,7 +349,23 @@ public partial class MainWindow
         foreach (var row in _sourceRows)
         {
             row.WorkingCount = counts.TryGetValue(row.Source.Name, out var count) ? count : 0;
+            // «Рабочих всего» могло вырасти после проверки — обновляем и его.
+            row.Refresh();
         }
+    }
+
+    /// <summary>
+    /// Запоминает, что сервер из этих источников хотя бы раз открыл сайт.
+    /// Сохраняем источники не на каждый сервер, а по завершении операции.
+    /// </summary>
+    private void RegisterWorkingNode(ProxyNode node)
+    {
+        if (node.Status != NodeStatus.Working)
+        {
+            return;
+        }
+
+        _sourceTotalsDirty |= NodeSourceStats.RegisterWorking(_sources, node);
     }
 
     private void OnToolsTabsSelectionChanged(object sender, SelectionChangedEventArgs e)

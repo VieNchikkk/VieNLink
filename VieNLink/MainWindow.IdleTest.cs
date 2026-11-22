@@ -373,6 +373,11 @@ public partial class MainWindow
 
         row.Refresh();
 
+        if (node.Status == NodeStatus.Working)
+        {
+            RegisterWorkingNode(node);
+        }
+
         var target = node.Status == NodeStatus.Working ? _workingRows : _rows;
         if (_rowOwner.TryGetValue(node.Id, out var current) && !ReferenceEquals(current, target))
         {
