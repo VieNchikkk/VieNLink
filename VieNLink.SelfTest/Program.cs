@@ -93,6 +93,29 @@ internal static class Program
             case "sources":
                 RunSourcesList();
                 break;
+            case "sourcestats":
+                RunSourceStats();
+                break;
+            case "sourceprobe":
+                if (args.Length < 2)
+                {
+                    Console.WriteLine("Использование: sourceprobe <url> [limit]");
+                    return 2;
+                }
+
+                var sourceLimit = args.Length > 2 && int.TryParse(args[2], out var sourceParsed) ? sourceParsed : 60;
+                await RunSourceProbeAsync(args[1], sourceLimit);
+                break;
+            case "linkprobe":
+                if (args.Length < 2)
+                {
+                    Console.WriteLine("Использование: linkprobe <vless://…> [limit]");
+                    return 2;
+                }
+
+                var linkLimit = args.Length > 2 && int.TryParse(args[2], out var linkParsed) ? linkParsed : 60;
+                await RunSourceProbeAsync(args[1], linkLimit, singleLink: true);
+                break;
             case "compare":
                 var perClass = args.Length > 1 && int.TryParse(args[1], out var compareParsed) ? compareParsed : 80;
                 await RunCompareAsync(perClass);
@@ -3177,6 +3200,80 @@ internal static class Program
     /// Скрытая проверка: отдельный процесс sing-box на своих портах, без системного прокси.
     /// Берём уже рабочие узлы, чтобы отличить «ядро не работает» от «узлы мертвы».
     /// </summary>
+    /// <summary>
+    /// Проверка произвольного источника: скачать, разобрать и прогнать выборку
+    /// через скрытое ядро. Нужна для оценки новых публичных списков без добавления их в кэш.
+    /// </summary>
+    private static async Task RunSourceProbeAsync(string url, int limit, bool singleLink = false)
+    {
+        var source = new SourceDefinition
+        {
+            Name = "Проверка источника",
+            Url = url,
+            Kind = singleLink ? SourceKind.SingleLink : SourceKinds.Classify(url),
+        };
+
+        Console.WriteLine($"Скачиваю источник: {url}");
+        FetchOutcome outcome;
+        try
+        {
+            outcome = await NodeSourceService.FetchAsync(source, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            Console.WriteLine("Ошибка загрузки: " + exception.Message);
+            _failed++;
+            return;
+        }
+
+        Console.WriteLine($"Разобрано серверов: {outcome.Nodes.Count}" +
+                          (outcome.Error is null ? string.Empty : " · " + outcome.Error));
+        if (outcome.Nodes.Count == 0)
+        {
+            _failed++;
+            return;
+        }
+
+        var candidates = outcome.Nodes
+            .OrderByDescending(NodeRanking.Score)
+            .ThenBy(node => node.Server)
+            .Take(Math.Clamp(limit, 1, 300))
+            .ToList();
+        Console.WriteLine($"Проверяю {candidates.Count} из {outcome.Nodes.Count} через скрытое ядро…");
+
+        var settings = new AppSettings
+        {
+            MaxNodesInConfig = Math.Min(candidates.Count, 400),
+            ProxyBypass = "*.deepseek.com;*.opencode.ai;*.anthropic.com;*.openai.com;localhost;127.0.0.1;::1",
+        };
+        await using var probe = new HiddenProbeService();
+        var summary = await probe.TestAsync(
+            candidates,
+            settings,
+            new Progress<string>(line => Console.WriteLine("    " + line)),
+            null,
+            CancellationToken.None,
+            concurrency: 3,
+            timeoutMs: 4000);
+
+        var working = candidates.Count(node => node.Status == NodeStatus.Working);
+        Console.WriteLine($"Рабочих: {working} из {candidates.Count} (всего в источнике {outcome.Nodes.Count})");
+        foreach (var node in candidates
+                     .Where(node => node.Status == NodeStatus.Working)
+                     .OrderByDescending(node => node.OpenDomains)
+                     .ThenBy(node => node.DelayMs)
+                     .Take(5))
+        {
+            Console.WriteLine($"  {node.Name} — {node.DelayMs} мс, доменов {node.OpenDomains}, " +
+                              $"YouTube={node.YoutubeOk}, Telegram={node.TelegramOk}, Discord={node.DiscordOk}");
+        }
+
+        if (working == 0)
+        {
+            _failed++;
+        }
+    }
+
     private static async Task RunHiddenProbeAsync(int limit)
     {
         var cached = NodeSourceService.LoadCache();
@@ -3527,6 +3624,32 @@ internal static class Program
     }
 
     /// <summary>Список источников: показывает, что прочиталось из зашифрованного sources.dat.</summary>
+    private static void RunSourceStats()
+    {
+        var sources = NodeSourceService.LoadSources();
+        var working = NodeSourceService.LoadCache(
+            out _, out _, DateTime.UtcNow.AddDays(-30), AppPaths.WorkingNodesPath);
+        var current = NodeSourceStats.WorkingBySource(working);
+
+        Console.WriteLine($"Источников: {sources.Count}, рабочих серверов в кэше: {working.Count}");
+        Console.WriteLine("Имя | Всего | Рабочих всего | Рабочих сейчас | Ошибка");
+        foreach (var item in sources
+                     .Select(source => new
+                     {
+                         Source = source,
+                         Current = current.TryGetValue(source.Name, out var count) ? count : 0,
+                     })
+                     .OrderByDescending(item => item.Current)
+                     .ThenByDescending(item => item.Source.TotalWorkingNodeCount)
+                     .ThenByDescending(item => item.Source.TotalNodeCount))
+        {
+            var source = item.Source;
+            Console.WriteLine(
+                $"{ShortenText(source.Name, 52)} | {source.TotalNodeCount} | " +
+                $"{source.TotalWorkingNodeCount} | {item.Current} | {source.LastError ?? string.Empty}");
+        }
+    }
+
     private static void RunSourcesList()
     {
         var sources = NodeSourceService.LoadSources();
