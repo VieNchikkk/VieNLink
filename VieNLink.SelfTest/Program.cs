@@ -2434,6 +2434,18 @@ internal static class Program
             preListener.Stop();
         }
 
+        // 7. Кэш: возраст источника не должен выбрасывать уже проверенный рабочий сервер.
+        var cacheCutoff = DateTime.UtcNow.AddDays(-7);
+        Check(!NodeSourceService.IsExpiredBySourceAge(
+                NodeStatus.Working, cacheCutoff.AddDays(-1), cacheCutoff),
+            "кэш: рабочий сервер не выбрасывается по возрасту источника");
+        Check(NodeSourceService.IsExpiredBySourceAge(
+                NodeStatus.Unknown, cacheCutoff.AddDays(-1), cacheCutoff),
+            "кэш: старый непроверенный сервер отбрасывается");
+        Check(!NodeSourceService.IsExpiredBySourceAge(
+                NodeStatus.Unknown, cacheCutoff.AddDays(1), cacheCutoff),
+            "кэш: свежий непроверенный сервер остаётся");
+
         var now = DateTime.UtcNow;
 
         // 4. Значки сервисов показывают только свежие проверки: устаревший кэш

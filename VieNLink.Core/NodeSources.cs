@@ -457,7 +457,11 @@ internal static class NodeSourceService
             // В старом кэше нет отметки LastSeen: возраст считаем от времени сохранения,
             // иначе первый запуск после обновления выбросил бы разом все серверы.
             var lastSeen = item.LastSeenUtc ?? cacheSavedAt;
-            if (freshAfterUtc is { } cutoff && lastSeen < cutoff)
+            // Рабочий сервер не выбрасываем по возрасту источника: он уже проверен,
+            // а источник мог не обновиться, временно исчезнуть или перестать отдавать
+            // этот сервер. Его судьбу решает перепроверка, а не LastSeen — иначе после
+            // обновления/долгого простоя рабочие серверы пропадали бы из кэша.
+            if (IsExpiredBySourceAge(item.Status, lastSeen, freshAfterUtc))
             {
                 dropped++;
                 continue;
@@ -520,6 +524,18 @@ internal static class NodeSourceService
         duplicates = nodes.Count - collapsed.Count;
         return collapsed;
     }
+
+    /// <summary>
+    /// Отбрасывается ли запись кэша по возрасту источника. Рабочие серверы не отбрасываются:
+    /// они уже проверены, и их судьбу решает перепроверка, а не LastSeen источника.
+    /// </summary>
+    internal static bool IsExpiredBySourceAge(
+        NodeStatus status,
+        DateTime lastSeenUtc,
+        DateTime? freshAfterUtc) =>
+        status != NodeStatus.Working &&
+        freshAfterUtc is { } cutoff &&
+        lastSeenUtc < cutoff;
 
     private static HttpClient CreateClient(bool useProxy = true)
     {
