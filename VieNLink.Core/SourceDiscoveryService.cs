@@ -32,6 +32,12 @@ internal static class SourceDiscoveryService
     private const int ArticlesPerSite = 2;
     private const int SubscriptionLinksPerArticle = 3;
 
+    /// <summary>
+    /// Свежесть источника на GitHub: смотрим время последнего push репозитория.
+    /// Если даты нет — источник не отсеиваем.
+    /// </summary>
+    private static readonly TimeSpan MaximumRepositoryAge = TimeSpan.FromHours(24);
+
     private static readonly HttpClient Api = CreateClient();
     private static readonly HttpClient Raw = CreateClient();
 
@@ -132,9 +138,7 @@ internal static class SourceDiscoveryService
                     continue;
                 }
 
-                if (pushedAt is not null &&
-                    DateTime.TryParse(pushedAt, null, System.Globalization.DateTimeStyles.AdjustToUniversal, out var pushed) &&
-                    DateTime.UtcNow - pushed > TimeSpan.FromDays(21))
+                if (!IsRepositoryFresh(pushedAt, DateTime.UtcNow))
                 {
                     continue;
                 }
@@ -149,7 +153,7 @@ internal static class SourceDiscoveryService
         }
 
         result.RepositoriesSeen = candidates.Count;
-        progress?.Report($"Найдено репозиториев: {candidates.Count}");
+        progress?.Report($"Найдено репозиториев: {candidates.Count} (обновлены за 24 ч)");
 
         foreach (var candidate in candidates.Take(RepositoriesPerRun))
         {
@@ -484,6 +488,30 @@ internal static class SourceDiscoveryService
             .Take(FilesPerRepository)
             .Select(item => item.Path)
             .ToList();
+    }
+
+    /// <summary>
+    /// Свежий ли репозиторий: время последнего push не старше 24 часов.
+    /// Если даты публикации нет или её не удалось разобрать — не отсеиваем.
+    /// </summary>
+    internal static bool IsRepositoryFresh(string? pushedAt, DateTime nowUtc)
+    {
+        if (string.IsNullOrWhiteSpace(pushedAt))
+        {
+            return true;
+        }
+
+        if (!DateTime.TryParse(
+                pushedAt,
+                null,
+                System.Globalization.DateTimeStyles.AdjustToUniversal |
+                System.Globalization.DateTimeStyles.AssumeUniversal,
+                out var pushed))
+        {
+            return true;
+        }
+
+        return nowUtc - pushed <= MaximumRepositoryAge;
     }
 
     private static async Task<List<ProxyNode>?> TryLoadAsync(string url, string sourceName, CancellationToken cancellationToken)

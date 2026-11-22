@@ -116,7 +116,9 @@ public sealed class SettingsActivity : BaseActivity
         var settings = SettingsStore.Current;
         var android = AndroidSettingsStore.Current;
         AddAutomationToggle(page, "Автопоиск новых источников",
-            "Искать новые списки и подписки в GitHub и на публичных сайтах.",
+            "Искать новые списки и подписки в GitHub и на публичных сайтах. " +
+            "GitHub-репозитории берём только обновлённые за последние 24 часа; " +
+            "если даты публикации нет — источник не отсеиваем.",
             settings.AutoDiscoverSources,
             value => settings.AutoDiscoverSources = value);
         AddAutomationToggle(page, "Авто-сбор серверов из источников",

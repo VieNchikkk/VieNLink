@@ -2340,6 +2340,19 @@ internal static class Program
         Check(seeded.TotalWorkingNodeCount == 1,
             "источники: рабочий сервер из кэша попадает в «рабочих всего»");
 
+        // Автопоиск источников: GitHub-репозитории старше 24 ч отсеиваются,
+        // без даты публикации — не отсеиваются.
+        var freshnessNow = DateTime.UtcNow;
+        Check(SourceDiscoveryService.IsRepositoryFresh(
+                freshnessNow.AddHours(-23).ToString("O"), freshnessNow),
+            "автопоиск: репозиторий возрастом 23 ч принимается");
+        Check(!SourceDiscoveryService.IsRepositoryFresh(
+                freshnessNow.AddHours(-25).ToString("O"), freshnessNow),
+            "автопоиск: репозиторий возрастом 25 ч отсеивается");
+        Check(SourceDiscoveryService.IsRepositoryFresh(null, freshnessNow) &&
+              SourceDiscoveryService.IsRepositoryFresh("не дата", freshnessNow),
+            "автопоиск: без даты публикации источник не отсеивается");
+
         // 1. Оба проверочных адреса доступны → узел рабочий, отметки стоят.
         var working = DirectNode("direct-a");
         var summary = await manager.TestNodesAsync(
