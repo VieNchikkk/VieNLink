@@ -1,13 +1,96 @@
 using System.IO;
+using System.Text.Json.Serialization;
 
 namespace VieNLink;
 
 /// <summary>Рабочий сервер, который перестал работать. Хранится для ручной перепроверки.</summary>
 internal sealed class RejectedNode
 {
-    public required ProxyNode Node { get; set; }
+    /// <summary>Сериализуемая копия со всеми полями, включая OutboundJson.</summary>
+    public CachedNode NodeData { get; set; } = new();
+
+    /// <summary>Старый формат 1.3.19: ProxyNode без OutboundJson. Читаем и перестраиваем.</summary>
+    [JsonPropertyName("Node")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProxyNode? LegacyNode { get; set; }
+
     public DateTime RejectedAtUtc { get; set; } = DateTime.UtcNow;
     public string Reason { get; set; } = "перестал работать";
+
+    [JsonIgnore]
+    public ProxyNode Node { get; set; } = new();
+
+    public static RejectedNode Create(ProxyNode node, string reason)
+    {
+        return new RejectedNode
+        {
+            NodeData = ToCached(node),
+            Node = node,
+            Reason = reason,
+            RejectedAtUtc = DateTime.UtcNow,
+        };
+    }
+
+    public static CachedNode ToCached(ProxyNode node) => new()
+    {
+        RawLink = node.RawLink,
+        SourceName = node.SourceName,
+        Protocol = node.Protocol,
+        Name = node.Name,
+        Server = node.Server,
+        Port = node.Port,
+        Tag = node.Tag,
+        Identity = node.Identity,
+        OutboundJson = node.OutboundJson,
+        DelayMs = node.DelayMs,
+        CheckedAtUtc = node.CheckedAtUtc,
+        TriedAtUtc = node.TriedAtUtc,
+        LastSeenUtc = node.LastSeenUtc,
+        IsMine = node.IsMine,
+        SpeedMbps = node.SpeedMbps,
+        AllowInsecure = node.AllowInsecure,
+        YoutubeOk = node.YoutubeOk,
+        TelegramOk = node.TelegramOk,
+        UniversalOk = node.UniversalOk,
+        DiscordOk = node.DiscordOk,
+        OpenDomains = node.OpenDomains,
+        Status = node.Status,
+        FailCount = node.FailCount,
+    };
+
+    public static ProxyNode? FromCached(CachedNode data)
+    {
+        if (string.IsNullOrWhiteSpace(data.RawLink))
+        {
+            return null;
+        }
+
+        var node = SubscriptionParser.Parse(data.RawLink, data.SourceName).FirstOrDefault();
+        if (node is null)
+        {
+            return null;
+        }
+
+        node.Name = string.IsNullOrWhiteSpace(data.Name) ? node.Name : data.Name;
+        node.Tag = string.IsNullOrWhiteSpace(data.Tag) ? node.Tag : data.Tag;
+        node.Identity = data.Identity;
+        node.OutboundJson = string.IsNullOrWhiteSpace(data.OutboundJson) ? node.OutboundJson : data.OutboundJson;
+        node.DelayMs = data.DelayMs;
+        node.CheckedAtUtc = data.CheckedAtUtc;
+        node.TriedAtUtc = data.TriedAtUtc;
+        node.LastSeenUtc = data.LastSeenUtc;
+        node.IsMine = data.IsMine;
+        node.SpeedMbps = data.SpeedMbps;
+        node.AllowInsecure = data.AllowInsecure;
+        node.YoutubeOk = data.YoutubeOk;
+        node.TelegramOk = data.TelegramOk;
+        node.UniversalOk = data.UniversalOk;
+        node.DiscordOk = data.DiscordOk;
+        node.OpenDomains = data.OpenDomains;
+        node.Status = data.Status;
+        node.FailCount = data.FailCount;
+        return node;
+    }
 }
 
 /// <summary>
@@ -22,11 +105,30 @@ internal static class RejectedNodeStore
     public static List<RejectedNode> Load()
     {
         var items = JsonFileStore.Read<List<RejectedNode>>(AppPaths.RejectedNodesPath) ?? new();
-        return items
-            .Where(item => item.Node is not null && !string.IsNullOrWhiteSpace(item.Node.RawLink))
-            .OrderByDescending(item => item.RejectedAtUtc)
-            .Take(MaximumCount)
-            .ToList();
+        var result = new List<RejectedNode>();
+        foreach (var item in items.OrderByDescending(item => item.RejectedAtUtc))
+        {
+            var node = RejectedNode.FromCached(item.NodeData);
+            if (node is null && item.LegacyNode is not null)
+            {
+                node = RejectedNode.FromCached(RejectedNode.ToCached(item.LegacyNode));
+            }
+
+            if (node is null)
+            {
+                continue;
+            }
+
+            item.Node = node;
+            item.LegacyNode = null;
+            result.Add(item);
+            if (result.Count >= MaximumCount)
+            {
+                break;
+            }
+        }
+
+        return result;
     }
 
     public static void Save(IEnumerable<RejectedNode> items)
@@ -35,6 +137,13 @@ internal static class RejectedNodeStore
             .Where(item => item.Node is not null)
             .OrderByDescending(item => item.RejectedAtUtc)
             .Take(MaximumCount)
+            .Select(item => new RejectedNode
+            {
+                NodeData = RejectedNode.ToCached(item.Node),
+                LegacyNode = null,
+                RejectedAtUtc = item.RejectedAtUtc,
+                Reason = item.Reason,
+            })
             .ToList();
         try
         {
@@ -54,7 +163,7 @@ internal static class RejectedNodeStore
             item.Node.Id.Equals(node.Id, StringComparison.OrdinalIgnoreCase));
         if (existing is null)
         {
-            items.Add(new RejectedNode { Node = node, RejectedAtUtc = DateTime.UtcNow, Reason = reason });
+            items.Add(RejectedNode.Create(node, reason));
         }
         else
         {
