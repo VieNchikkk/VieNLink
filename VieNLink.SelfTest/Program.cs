@@ -2418,7 +2418,7 @@ internal static class Program
             if (attempt < NodeLimits.RemoveAfterFailures)
             {
                 Check(retried.Status == NodeStatus.Working,
-                    $"провал {attempt}: узел остаётся в «Рабочих» до 5-го провала");
+                    $"провал {attempt}: узел остаётся в «Рабочих» до {NodeLimits.RemoveAfterFailures}-го провала");
             }
         }
 
@@ -2561,19 +2561,9 @@ internal static class Program
               failing.DelayMs == 100 && failing.UniversalOk == true,
             "провал: первый провал рабочего сервера не стирает его результат");
         NodeHealth.RegisterFailure(failing);
-        Check(failing.FailCount == NodeHealth.GraceFailures && failing.DelayMs == 100,
-            "провал: второй провал тоже в мягком режиме");
-        NodeHealth.RegisterFailure(failing);
-        Check(failing.Status == NodeStatus.Working && failing.FailCount == 3 &&
-              failing.DelayMs == 100 && failing.UniversalOk == true,
-            "провал: результат рабочего сервера сохраняется все 5 попыток");
-        for (var i = 3; i < NodeLimits.RemoveAfterFailures; i++)
-        {
-            NodeHealth.RegisterFailure(failing);
-        }
-
-        Check(failing.Status == NodeStatus.Dead && failing.FailCount == NodeLimits.RemoveAfterFailures,
-            "провал: после 5 провалов подряд сервер помечается мёртвым");
+        Check(failing.Status == NodeStatus.Dead &&
+              failing.FailCount == NodeLimits.RemoveAfterFailures,
+            $"провал: после {NodeLimits.RemoveAfterFailures} провалов подряд сервер помечается мёртвым");
         var unproven = new ProxyNode { Status = NodeStatus.Unknown };
         NodeHealth.RegisterFailure(unproven);
         Check(unproven.Status == NodeStatus.Unknown,

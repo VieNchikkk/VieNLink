@@ -25,7 +25,7 @@ internal sealed class ProbeRequestNode
     /// </summary>
     public NodeStatus Status { get; set; }
 
-    /// <summary>Счётчик провалов подряд: рабочий сервер удаляется только после 5-го.</summary>
+    /// <summary>Счётчик провалов подряд: рабочий сервер удаляется после 2-го.</summary>
     public int FailCount { get; set; }
 
     /// <summary>

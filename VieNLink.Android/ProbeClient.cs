@@ -912,8 +912,8 @@ internal static class ProbeClient
             }
             else if (wasWorking)
             {
-                // Рабочий сервер провалил одну проверку: остаётся в списке до 5-го провала
-                // подряд (счётчик приехал из :probe вместе с сервером).
+                // Рабочий сервер провалил одну проверку: остаётся в списке до второго
+                // провала подряд (счётчик приехал из :probe вместе с сервером).
                 failedWorking++;
             }
         }
@@ -933,7 +933,7 @@ internal static class ProbeClient
             : NodeStore.SelectBestWorking();
         AppLog.Write("probe",
             $"Результаты :probe: рабочих {working} из {result.Nodes.Count}, удалено {removed}, " +
-            $"рабочих с провалом (остаются до 5-го): {failedWorking}" +
+            $"рабочих с провалом (остаются до {NodeLimits.RemoveAfterFailures}-го): {failedWorking}" +
             (best is null ? ", живых нет" : ", выбран " + best.Name));
 
         // Если работаем на запасном сервере, а проверка нашла сервер выбранного
