@@ -363,7 +363,7 @@ public partial class MainWindow : Window
             {
                 _settings.LastDiscoveryUtc = now;
                 SaveSettings();
-                await DiscoverSourcesCoreAsync();
+                await DiscoverSourcesCoreAsync(includeNodes: _settings.AutoCollectServers);
             }
         }
         catch (OperationCanceledException)
@@ -417,7 +417,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task DiscoverSourcesCoreAsync()
+    private async Task DiscoverSourcesCoreAsync(bool includeNodes = true)
     {
         if (AtNodeLimit)
         {
@@ -441,15 +441,21 @@ public partial class MainWindow : Window
 
         if (result.Sources.Count > 0)
         {
-            MergeNodes(result.Nodes);
+            if (includeNodes)
+            {
+                MergeNodes(result.Nodes);
+            }
+
             var removed = PruneAutoSources();
             NodeSourceService.SaveSources(_sources);
-            AppendLog($"Найдено источников: {result.Sources.Count}, серверов {result.Nodes.Count}" +
+            var nodesNote = includeNodes ? $", серверов {result.Nodes.Count}" : ", серверы не добавлялись (авто-сбор выключен)";
+            AppendLog($"Найдено источников: {result.Sources.Count}{nodesNote}" +
                       (removed > 0 ? $", старых автоисточников удалено: {removed}" : string.Empty));
-            SetStatus("Найдены новые источники", $"Добавлено {result.Sources.Count}, серверов {result.Nodes.Count}");
+            SetStatus("Найдены новые источники", $"Добавлено {result.Sources.Count}{nodesNote}");
             _tray?.ShowBalloon(
                 "Найдены новые источники",
-                string.Join(Environment.NewLine, result.Sources.Select(s => s.Name)) + Environment.NewLine + $"Серверов: {result.Nodes.Count}");
+                string.Join(Environment.NewLine, result.Sources.Select(s => s.Name)) + Environment.NewLine +
+                (includeNodes ? $"Серверов: {result.Nodes.Count}" : "Серверы не добавлялись: авто-сбор выключен"));
         }
         else
         {

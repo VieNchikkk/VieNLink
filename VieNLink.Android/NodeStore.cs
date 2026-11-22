@@ -730,7 +730,7 @@ internal static class NodeStore
     /// Добавляет источники и серверы, найденные автопоиском. Возвращает число новых источников.
     /// Уже известные адреса не дублируются, проверенные статусы сохраняются.
     /// </summary>
-    public static int AddDiscovered(DiscoveryResult result)
+    public static int AddDiscovered(DiscoveryResult result, bool includeNodes = true)
     {
         lock (Gate)
         {
@@ -752,7 +752,7 @@ internal static class NodeStore
                 added++;
             }
 
-            if (result.Nodes.Count > 0)
+            if (includeNodes && result.Nodes.Count > 0)
             {
                 Merge(result.Nodes);
             }

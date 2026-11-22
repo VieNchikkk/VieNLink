@@ -181,7 +181,7 @@ internal static class Maintenance
                 {
                     var discovery = await SourceDiscoveryService.DiscoverAsync(
                         NodeStore.SnapshotSources(), null, cancellationToken).ConfigureAwait(false);
-                    var added = NodeStore.AddDiscovered(discovery);
+                    var added = NodeStore.AddDiscovered(discovery, settings.AutoCollectServers);
                     var mtproto = MtProtoStore.AddDiscovered(discovery.MtProto);
                     settings.LastDiscoveryUtc = DateTime.UtcNow;
                     SettingsStore.Save();
