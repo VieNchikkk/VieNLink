@@ -186,17 +186,28 @@ internal static class NodeStore
     }
 
     /// <summary>Возвращает перепроверенные серверы из отсева в рабочий список.</summary>
-    public static void RestoreRejected(IEnumerable<ProxyNode> nodes)
+    public static bool RestoreRejected(IEnumerable<ProxyNode> nodes)
     {
         var working = nodes.Where(node => node.Status == NodeStatus.Working).ToList();
         if (working.Count == 0)
         {
-            return;
+            return false;
         }
 
         Merge(working);
-        RejectedNodeStore.Remove(working.Select(node => node.Id));
+
+        var ids = working.Select(node => node.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var present = _snapshot
+            .Where(node => ids.Contains(node.Id))
+            .Select(node => node.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (present.Count > 0)
+        {
+            RejectedNodeStore.Remove(present);
+        }
+
         SaveNodes(force: true);
+        return present.Count == working.Count;
     }
 
     /// <summary>

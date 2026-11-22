@@ -560,8 +560,10 @@ public sealed class RejectedActivity : BaseActivity
     {
         node.Status = NodeStatus.Working;
         node.FailCount = 0;
-        NodeStore.RestoreRejected(new[] { node });
-        SetStatus("Возвращён в рабочие: " + node.Name);
+        var restored = NodeStore.RestoreRejected(new[] { node });
+        SetStatus(restored
+            ? "Возвращён в рабочие: " + node.Name
+            : "Не удалось вернуть: список серверов переполнен — сначала проверьте и удалите лишние");
         Reload();
     }
 

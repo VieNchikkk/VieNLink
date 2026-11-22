@@ -249,9 +249,18 @@ public partial class MainWindow
         }
 
         MergeNodes(nodes);
-        RejectedNodeStore.Remove(nodes.Select(node => node.Id));
+        var ids = nodes.Select(node => node.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var present = AllRows
+            .Select(row => row.Node.Id)
+            .Where(ids.Contains)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (present.Count > 0)
+        {
+            RejectedNodeStore.Remove(present);
+        }
+
         ReloadRejected();
-        SetStatus("Возвращено в рабочие", nodes.Count.ToString());
+        SetStatus("Возвращено в рабочие", $"{present.Count} из {nodes.Count}");
     }
 
     private void OnRemoveRejectedClick(object sender, RoutedEventArgs e)
