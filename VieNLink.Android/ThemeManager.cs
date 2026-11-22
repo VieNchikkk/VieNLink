@@ -1,5 +1,6 @@
 using Android.App;
 using Android.Content;
+using Android.Content.PM;
 using Android.Graphics;
 using Android.OS;
 using Android.Views;
@@ -150,6 +151,10 @@ public abstract class BaseActivity : Activity
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
+        // Приложение — вертикальное. Фиксируем портрет, чтобы окно не крутилось
+        // само по датчику и не зависело от системного автоповорота. Системную
+        // настройку приложение не меняет.
+        RequestedOrientation = ScreenOrientation.Portrait;
         ThemeManager.ApplyTheme(this);
         base.OnCreate(savedInstanceState);
         P = ThemeManager.Palette;

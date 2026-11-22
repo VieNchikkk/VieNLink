@@ -96,8 +96,8 @@ public sealed partial class MainActivity
                     ? "Трафик идёт в TUN и в локальный форвардер с фрагментацией TLS. Прокси-сервер не нужен. " +
                       "Режим в бете: часть сайтов может не открываться."
                     : running
-                        ? "При подключении к серверу обход DPI останавливается: режимы взаимоисключающие."
-                        : "Выберите режим ниже. TUN-обход (бета) работает без сервера; Zapret и WinDivert на Android недоступны.",
+                        ? "TUN-обход и прокси-сервер взаимоисключающие: при подключении к серверу обход останавливается."
+                        : "TUN-обход (бета) работает без сервера. Остальные сайты — через прокси-сервер.",
                 P));
         page.AddView(status);
 
@@ -109,7 +109,7 @@ public sealed partial class MainActivity
         tunTop.AddView(Ui.Badge(this, P, "БЕТА", P.Warning));
         tun.AddView(tunTop);
         var tunHint = Ui.Hint(this,
-            "Без прокси-сервера и без WinDivert: sing-box поднимает TUN, TCP идёт в собственный " +
+            "Без прокси-сервера: sing-box поднимает TUN, TCP идёт в собственный " +
             "SOCKS5-форвардер, который режет TLS ClientHello. На SNI-блоках помогает, при блоке по IP — нет.", P);
         tunHint.SetPadding(0, Ui.Dp(this, 6), 0, 0);
         tun.AddView(tunHint);
@@ -129,41 +129,8 @@ public sealed partial class MainActivity
         tun.AddView(tunActions, actionsLayout);
         page.AddView(tun);
 
-        page.AddView(Ui.Section(this, "Windows-режимы", P));
-        page.AddView(DevelopmentCard(
-            "Обход Zapret",
-            "Переносится не полностью",
-            "В Windows это winws.exe + драйвер WinDivert: перехват пакетов на уровне ядра и права " +
-            "администратора. На Android без root драйвер WinDivert установить нельзя, поэтому режим " +
-            "отмечен «в разработке». Его задача на телефоне решается TUN-обходом."));
-
-        Ui.AddSpacer(page, this, 8);
-        page.AddView(DevelopmentCard(
-            "Свой обход DPI",
-            "Переносится не полностью",
-            "Собственный движок Windows тоже работает через WinDivert (split/disorder/fake TLS " +
-            "ClientHello, QUIC-фейк). На Android он недоступен по той же причине. В разработке: " +
-            "user-space варианты через TUN и локальный форвардер, без root."));
-
         Ui.AddSpacer(page, this, 12);
         return page;
-    }
-
-    private View DevelopmentCard(string title, string subtitle, string body)
-    {
-        var card = Ui.Card(P, this);
-        var top = Ui.Row(this);
-        top.AddView(Ui.Text(this, title, 15f, P.TextStrong, bold: true),
-            new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        top.AddView(Ui.Badge(this, P, "В РАЗРАБОТКЕ", P.Warning));
-        card.AddView(top);
-        var sub = Ui.Text(this, subtitle, 12f, P.Warning);
-        sub.SetPadding(0, Ui.Dp(this, 3), 0, 0);
-        card.AddView(sub);
-        var hint = Ui.Hint(this, body, P);
-        hint.SetPadding(0, Ui.Dp(this, 6), 0, 0);
-        card.AddView(hint);
-        return card;
     }
 
     private void StartLastBypass()
