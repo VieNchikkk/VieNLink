@@ -21,6 +21,13 @@ internal static class AppPaths
     /// <summary>Зашифрованный DPAPI список источников: ссылки подписок содержат токены.</summary>
     public static string SourcesProtectedPath { get; } = Path.Combine(DataDirectory, "sources.dat");
     public static string NodesPath { get; } = Path.Combine(DataDirectory, "nodes.json");
+
+    /// <summary>
+    /// Проверенные рабочие серверы отдельно от кучи непроверенных: файл маленький,
+    /// его можно переписывать после каждой проверки, не трогая кэш на тысячи записей.
+    /// </summary>
+    public static string WorkingNodesPath { get; } = Path.Combine(DataDirectory, "nodes-working.json");
+
     public static string SettingsPath { get; } = Path.Combine(DataDirectory, "settings.json");
     public static string LogsDirectory { get; } = Path.Combine(DataDirectory, "logs");
     public static string CoreDirectory { get; } = Path.Combine(DataDirectory, "core");

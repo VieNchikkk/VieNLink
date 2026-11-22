@@ -258,6 +258,10 @@ internal sealed class ProxyManager : IAsyncDisposable
             await limiter.WaitAsync(cancellationToken);
             try
             {
+                // Статус до проверки: рабочему серверу даём вторую попытку, чтобы одна
+                // ошибка сети (или занятость бесплатного сервера) не убирала его из счётчиков.
+                var wasWorking = node.Status == NodeStatus.Working;
+
                 // Два направления проверяем параллельно: вдвое быстрее при том же лимите серверов.
                 // Telegram пробуем по нескольким доменам — хватает первого ответившего.
                 var youtubeTask = api.TestDelayAsync(node.Tag, timeoutMs, cancellationToken, youtubeTarget);
@@ -266,22 +270,40 @@ internal sealed class ProxyManager : IAsyncDisposable
                 var youtubeDelay = await youtubeTask;
                 var telegramDelay = await telegramTask;
 
-                node.YoutubeOk = youtubeDelay is not null;
-                node.TelegramOk = telegramDelay is not null;
-                node.CheckedAtUtc = DateTime.UtcNow;
+                if (youtubeDelay is null && telegramDelay is null && wasWorking)
+                {
+                    await Task.Delay(600, cancellationToken).ConfigureAwait(false);
+                    youtubeTask = api.TestDelayAsync(node.Tag, timeoutMs, cancellationToken, youtubeTarget);
+                    telegramTask = TestAnyDelayAsync(api, node.Tag, telegramTargets, timeoutMs, cancellationToken);
+                    await Task.WhenAll(youtubeTask, telegramTask);
+                    youtubeDelay = await youtubeTask;
+                    telegramDelay = await telegramTask;
+                }
 
                 if (youtubeDelay is null && telegramDelay is null)
                 {
-                    // Провал не удаляет сервер сразу: считаем и убираем только после
-                    // NodeLimits.RemoveAfterFailures провалов подряд.
-                    node.DelayMs = null;
-                    node.UniversalOk = false;
-                    node.DiscordOk = false;
-                    node.OpenDomains = 0;
+                    // Провал не трогает результат последней удачной проверки и не удаляет
+                    // сервер сразу: считаем провалы и убираем только после
+                    // NodeLimits.RemoveAfterFailures подряд. Для непроверенного сервера
+                    // отметок и так нет — фиксируем только сам провал.
+                    if (!wasWorking)
+                    {
+                        node.CheckedAtUtc = DateTime.UtcNow;
+                        node.YoutubeOk = false;
+                        node.TelegramOk = false;
+                        node.DelayMs = null;
+                        node.UniversalOk = false;
+                        node.DiscordOk = false;
+                        node.OpenDomains = 0;
+                    }
+
                     NodeHealth.RegisterFailure(node);
                 }
                 else
                 {
+                    node.YoutubeOk = youtubeDelay is not null;
+                    node.TelegramOk = telegramDelay is not null;
+                    node.CheckedAtUtc = DateTime.UtcNow;
                     node.DelayMs = youtubeDelay ?? telegramDelay;
 
                     // Полный список заблокированных доменов прогоняем только у живого сервера:

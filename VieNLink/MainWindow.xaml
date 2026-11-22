@@ -605,7 +605,7 @@
                         <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap"
                                    Text="Серверы, источники, туннелирование, настройки и общие параметры. Начните с «Обновить списки», затем запустите ручную проверку серверов." />
                     </Border>
-                    <TabControl x:Name="ToolsTabs">
+                    <TabControl x:Name="ToolsTabs" SelectionChanged="OnToolsTabsSelectionChanged">
             <!-- СЕРВЕРЫ -->
             <TabItem x:Name="NodesTab" Header="Серверы" Style="{StaticResource AppTabItem}">
                 <DockPanel>
@@ -756,49 +756,6 @@
             <!-- ИСТОЧНИКИ -->
             <TabItem x:Name="SourcesTab" Header="Источники" Style="{StaticResource AppTabItem}">
                 <DockPanel Margin="16,8,16,10">
-                    <Border DockPanel.Dock="Top" Margin="0,0,0,10" Visibility="Collapsed">
-                        <StackPanel>
-                            <TextBlock Style="{StaticResource SectionTitle}" Text="Автообновление источников" />
-                        <CheckBox x:Name="AutoUpdateCheck" Content="Обновлять подписки при запуске, если данные устарели" Style="{StaticResource AppCheckBox}" Margin="0,4" />
-                        <Grid Margin="0,4,0,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="260" />
-                                <ColumnDefinition Width="120" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="Считать устаревшими через, ч" VerticalAlignment="Center" Foreground="{DynamicResource TextSoftBrush}" />
-                            <TextBox Grid.Column="1" x:Name="AutoUpdateHoursBox" Style="{StaticResource AppTextBox}" />
-                        </Grid>
-                        <Grid Margin="0,4,0,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="260" />
-                                <ColumnDefinition Width="120" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="Хранить серверы, не встречавшиеся в источниках, дн" VerticalAlignment="Center" Foreground="{DynamicResource TextSoftBrush}"
-                                       ToolTip="Сервер, который перестал приходить из всех включённых источников, удаляется из кэша через это число суток" />
-                            <TextBox Grid.Column="1" x:Name="KeepUnseenDaysBox" Style="{StaticResource AppTextBox}" />
-                        </Grid>
-                        <Grid Margin="0,4,0,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="260" />
-                                <ColumnDefinition Width="120" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="Обновлять списки каждые, мин (0 — выкл)" VerticalAlignment="Center" Foreground="{DynamicResource TextSoftBrush}" />
-                            <TextBox Grid.Column="1" x:Name="AutoRefreshBox" Style="{StaticResource AppTextBox}" />
-                        </Grid>
-                        <CheckBox x:Name="AutoDiscoverCheck" Content="Искать новые источники автоматически (GitHub и публичные сайты)" Style="{StaticResource AppCheckBox}" Margin="0,4" />
-                        <Grid Margin="0,4,0,4">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="260" />
-                                <ColumnDefinition Width="120" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="Искать новые не чаще, чем раз в, ч" VerticalAlignment="Center" Foreground="{DynamicResource TextSoftBrush}" />
-                            <TextBox Grid.Column="1" x:Name="AutoDiscoverHoursBox" Style="{StaticResource AppTextBox}" />
-                        </Grid>
-                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
-                                <Button Content="Сохранить настройки" Style="{StaticResource PrimaryButton}" Click="OnSaveSettingsClick" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
                     <Border DockPanel.Dock="Bottom" Margin="0,6,0,0"
                             Background="{DynamicResource PanelBrush}"
                             BorderBrush="{DynamicResource TableGridLineBrush}" BorderThickness="1"
@@ -876,7 +833,22 @@
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
-                                <GridViewColumn Header="Серверов" Width="70" DisplayMemberBinding="{Binding CountLabel}" />
+                                <GridViewColumn Header="Всего" Width="70">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding TotalLabel}" VerticalAlignment="Center"
+                                                       ToolTip="Всего уникальных серверов, когда-либо собранных из этого источника" />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
+                                <GridViewColumn Header="Рабочих" Width="75">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding WorkingLabel}" VerticalAlignment="Center"
+                                                       ToolTip="Рабочие серверы, которые сейчас пришли из этого источника. 0 — живых серверов нет: источник можно удалить." />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
                                 <GridViewColumn Header="Статус" Width="150">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
@@ -1137,7 +1109,63 @@
                                 Style="{StaticResource WarningButton}" HorizontalAlignment="Left"
                                 Click="OnAutomationToggleClick"
                                 ToolTip="Полностью выключить или снова включить фоновую работу приложения" />
-                                    <TextBlock Style="{StaticResource SectionTitle}" Text="Фоновая проверка серверов" Margin="0,20,0,8" />
+
+                                    <TextBlock Style="{StaticResource SectionTitle}" Text="Автоматические работы" Margin="0,20,0,8" />
+                        <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,6"
+                                   Text="Каждую работу можно выключить отдельно. «Остановить все процессы» выше выключает их все сразу; туннель и ручные кнопки работают всегда." />
+                        <CheckBox x:Name="AutoDiscoverCheck" Content="Автопоиск новых источников (GitHub и публичные сайты)"
+                                  Style="{StaticResource AppCheckBox}" Margin="0,4"
+                                  ToolTip="Искать новые публичные списки и подписки, чтобы список серверов не зависел от нескольких старых источников" />
+                        <Grid Margin="0,2,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="260" />
+                                <ColumnDefinition Width="120" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Искать новые не чаще, чем раз в, ч" VerticalAlignment="Center" Foreground="{DynamicResource TextSoftBrush}" />
+                            <TextBox Grid.Column="1" x:Name="AutoDiscoverHoursBox" Style="{StaticResource AppTextBox}" />
+                        </Grid>
+                        <CheckBox x:Name="AutoCollectServersCheck" Content="Авто-сбор серверов из источников"
+                                  Style="{StaticResource AppCheckBox}" Margin="0,4"
+                                  ToolTip="Периодически заново собирать серверы из включённых источников и подписок, чтобы мёртвые адреса заменялись свежими" />
+                        <Grid Margin="0,2,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="260" />
+                                <ColumnDefinition Width="120" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Собирать каждые, мин (0 — выкл.)" VerticalAlignment="Center" Foreground="{DynamicResource TextSoftBrush}" />
+                            <TextBox Grid.Column="1" x:Name="AutoRefreshBox" Style="{StaticResource AppTextBox}" />
+                        </Grid>
+                        <CheckBox x:Name="AutoUpdateCheck" Content="Обновлять подписки при запуске, если данные устарели"
+                                  Style="{StaticResource AppCheckBox}" Margin="0,4"
+                                  ToolTip="При запуске приложения сразу подтянуть источники, которые давно не обновлялись" />
+                        <Grid Margin="0,2,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="260" />
+                                <ColumnDefinition Width="120" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Считать устаревшими через, ч" VerticalAlignment="Center" Foreground="{DynamicResource TextSoftBrush}" />
+                            <TextBox Grid.Column="1" x:Name="AutoUpdateHoursBox" Style="{StaticResource AppTextBox}" />
+                        </Grid>
+                        <Grid Margin="0,2,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="260" />
+                                <ColumnDefinition Width="120" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Хранить серверы, не встречавшиеся в источниках, дн" VerticalAlignment="Center" Foreground="{DynamicResource TextSoftBrush}"
+                                       ToolTip="Сервер, который перестал приходить из всех включённых источников, удаляется из кэша через это число суток" />
+                            <TextBox Grid.Column="1" x:Name="KeepUnseenDaysBox" Style="{StaticResource AppTextBox}" />
+                        </Grid>
+                        <CheckBox x:Name="AutoMtProtoCheck" Content="Автосбор и проверка MTProto-прокси"
+                                  Style="{StaticResource AppCheckBox}" Margin="0,4"
+                                  ToolTip="Читать каналы Telegram через RSS-зеркала и проверять MTProto-прокси настоящим рукопожатием в фоне" />
+                        <CheckBox x:Name="AutoCoreUpdateCheck" Content="Автообновление ядра sing-box"
+                                  Style="{StaticResource AppCheckBox}" Margin="0,4"
+                                  ToolTip="Сравнивать установленное ядро с последним релизом sing-box и обновлять его при запуске. Если ядра нет, оно будет установлено в любом случае" />
+                        <CheckBox x:Name="AutoCheckAppUpdatesCheck" Content="Автопроверка обновлений приложения"
+                                  Style="{StaticResource AppCheckBox}" Margin="0,4"
+                                  ToolTip="Проверять релизы VieNLink на GitHub при запуске. Кнопка «Проверить обновление» в «Общих» работает всегда" />
+
+                                    <TextBlock Style="{StaticResource SectionTitle}" Text="Автопроверка серверов" Margin="0,20,0,8" />
                         <CheckBox x:Name="IdleTestCheck" Content="Проверять серверы в фоне, в том числе при работе (скрытый туннель)" Style="{StaticResource AppCheckBox}" Margin="0,4"
                                   ToolTip="Отдельное ядро sing-box на своих портах: не трогает системный прокси и TUN, поэтому не мешает текущему подключению. В простое — крупные партии, при работе — частые маленькие" />
                         <Grid Margin="0,2,0,4">
@@ -1205,6 +1233,15 @@
                                               Checked="OnAutostartChanged" Unchecked="OnAutostartChanged"
                                               ToolTip="Ключ автозапуска текущего пользователя: права администратора не нужны" />
                                     <TextBlock x:Name="AppVersionText" Style="{StaticResource HintText}" Margin="0,10,0,0" />
+                                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                        <Button x:Name="CheckAppUpdateButton" Content="Проверить обновление" Style="{StaticResource AccentSmallButton}"
+                                                Margin="0,0,8,0" Click="OnCheckAppUpdateClick"
+                                                ToolTip="Сравнить установленную версию с последним релизом на GitHub" />
+                                        <Button x:Name="InstallAppUpdateButton" Content="Скачать и установить" Style="{StaticResource AccentSmallButton}"
+                                                Visibility="Collapsed" Click="OnInstallAppUpdateClick"
+                                                ToolTip="Скачать установщик и запустить его кнопкой «Запустить установщик»" />
+                                    </StackPanel>
+                                    <TextBlock x:Name="AppUpdateText" Style="{StaticResource HintText}" Margin="0,6,0,0" TextWrapping="Wrap" />
                                     <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
                                         <Button Content="Сохранить настройки" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0" Click="OnSaveSettingsClick" />
                                         <Button Content="Открыть папку данных" Style="{StaticResource AccentSmallButton}" Click="OnOpenDataClick" />

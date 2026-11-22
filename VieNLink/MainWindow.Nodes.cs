@@ -123,7 +123,7 @@ public partial class MainWindow
         var all = AllRows.Select(r => r.Node).Where(n => !ReferenceEquals(n, row.Node)).ToList();
         ReplaceNodes(all);
         // Кэш пишется в фоне, чтобы удаление не подмораживало окно на большом списке.
-        _ = Task.Run(() => NodeSourceService.SaveCache(all));
+        _ = Task.Run(() => NodeCacheWriter.Save(all, force: true));
     }
 
 }

@@ -42,6 +42,19 @@ internal static class SettingsUpgrade
             changed = true;
         }
 
+        if (settings.SchemaVersion < 4)
+        {
+            // 12 000 серверов тяжело для телефона: память, старт и разбор кэша.
+            // Оставляем 5 000 — этого достаточно для поиска рабочих.
+            if (settings.MaxTotalNodes > NodeLimits.DefaultMaxTotal)
+            {
+                settings.MaxTotalNodes = NodeLimits.DefaultMaxTotal;
+            }
+
+            settings.SchemaVersion = 4;
+            changed = true;
+        }
+
         if (settings.SchemaVersion > SchemaVersions.Settings)
         {
             AppLog.Write("settings",

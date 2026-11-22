@@ -300,7 +300,7 @@ public partial class MainWindow
         var merged = NodeDedup.Collapse(map.Values);
         ReplaceNodes(merged);
         // ReplaceNodes применяет общий лимит — в кэш пишем уже подрезанный список.
-        NodeSourceService.SaveCache(AllRows.Select(r => r.Node).ToList());
+        NodeCacheWriter.Save(AllRows.Select(r => r.Node).ToList(), force: true);
     }
 
     private async void OnRefreshSourceClick(object sender, RoutedEventArgs e)
@@ -332,6 +332,33 @@ public partial class MainWindow
     }
 
     private void OnSourceToggled(object sender, RoutedEventArgs e) => NodeSourceService.SaveSources(_sources);
+
+    /// <summary>
+    /// Пересчитывает колонку «Рабочих»: сколько рабочих серверов сейчас числится
+    /// за каждым источником. Считаем по текущему списку рабочих, а не по числу
+    /// найденных ссылок: так видно источник, из которого живых серверов не приходит.
+    /// </summary>
+    private void UpdateSourceWorkingStats()
+    {
+        if (_sourceRows.Count == 0)
+        {
+            return;
+        }
+
+        var counts = NodeSourceStats.WorkingBySource(_workingRows.Select(row => row.Node));
+        foreach (var row in _sourceRows)
+        {
+            row.WorkingCount = counts.TryGetValue(row.Source.Name, out var count) ? count : 0;
+        }
+    }
+
+    private void OnToolsTabsSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (SourcesTab is not null && ReferenceEquals(ToolsTabs.SelectedItem, SourcesTab))
+        {
+            UpdateSourceWorkingStats();
+        }
+    }
 
     private async void OnCheckSourcesClick(object sender, RoutedEventArgs e)
     {

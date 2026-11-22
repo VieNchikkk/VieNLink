@@ -17,9 +17,25 @@ internal static class NodeStore
     public const int MobileMaxNodesInConfig = 200;
 
     private static readonly object Gate = new();
-    private static bool _loaded;
-    private static string? _selectedId;
+    private static volatile bool _loaded;
+
+    /// <summary>
+    /// Опубликованный снимок списка: UI читает его без блокировки. Пока кэш разбирается
+    /// или список меняется, шапка и счётчики не ждут <see cref="Gate"/> — иначе первый
+    /// кадр и нажатия замирали на всё время разбора тысяч серверов.
+    /// </summary>
+    private static ProxyNode[] _snapshot = Array.Empty<ProxyNode>();
+
+    private static volatile string? _selectedId;
     private static ProxyNode? _selected;
+
+    /// <summary>Как часто можно переписывать кэш непроверенных: он большой, а статусы не меняются.</summary>
+    private static readonly TimeSpan PoolSaveInterval = TimeSpan.FromMinutes(5);
+
+    /// <summary>Минимальный шаг записи кучи после удаления мёртвых: не чаще раза в минуту.</summary>
+    private static readonly TimeSpan PoolDirtyInterval = TimeSpan.FromSeconds(60);
+    private static DateTime _lastPoolSaveUtc = DateTime.MinValue;
+    private static volatile bool _poolDirty;
 
     public static List<SourceDefinition> Sources { get; } = new();
     public static List<ProxyNode> Nodes { get; } = new();
@@ -29,16 +45,7 @@ internal static class NodeStore
     public static AppSettings Settings => SettingsStore.Current;
 
     /// <summary>Кэш уже прочитан: тяжёлую загрузку не повторяем и не держим UI-поток.</summary>
-    public static bool IsLoaded
-    {
-        get
-        {
-            lock (Gate)
-            {
-                return _loaded;
-            }
-        }
-    }
+    public static bool IsLoaded => _loaded;
 
     /// <summary>Добавляет сервер, введённый вручную, и возвращает его Id.</summary>
     public static string? AddManual(ProxyNode node)
@@ -50,6 +57,15 @@ internal static class NodeStore
     /// <summary>Читает источники, кэш серверов и выбранный сервер. Тяжёлая операция — вызывать из фона.</summary>
     public static void EnsureLoaded()
     {
+        if (_loaded)
+        {
+            return;
+        }
+
+        // Настройки читаем до Gate: иначе UI-поток, ждущий Settings, и загрузка,
+        // держащая Gate, могут встать навстречу друг другу.
+        var settings = Settings;
+
         lock (Gate)
         {
             if (_loaded)
@@ -60,36 +76,96 @@ internal static class NodeStore
             AppPaths.EnsureDirectories();
             AppLog.Initialize();
 
-            // Настройки читаются до источников: миграция схемы включает все источники
-            // (`EnableAllSourcesOnce`), и LoadSources должен увидеть этот флаг.
-            var settings = Settings;
-
             var sources = NodeSourceService.LoadSources();
             Sources.Clear();
             Sources.AddRange(sources);
 
             var freshAfter = DateTime.UtcNow.AddDays(-Math.Max(1, settings.KeepUnseenNodeDays));
             var cached = NodeSourceService.LoadCache(out var dropped, out var duplicates, freshAfter);
+            // Рабочие лежат отдельно: их файл маленький и переписывается после каждой
+            // проверки, а кэш непроверенных не трогается.
+            var working = NodeSourceService.LoadCache(out _, out _, freshAfter, AppPaths.WorkingNodesPath);
             Nodes.Clear();
-            Nodes.AddRange(cached);
+            if (working.Count > 0)
+            {
+                var known = new Dictionary<string, ProxyNode>(StringComparer.OrdinalIgnoreCase);
+                foreach (var node in working)
+                {
+                    known[node.Id] = node;
+                    Nodes.Add(node);
+                }
+
+                foreach (var node in cached)
+                {
+                    if (!known.ContainsKey(node.Id))
+                    {
+                        Nodes.Add(node);
+                    }
+                }
+            }
+            else
+            {
+                Nodes.AddRange(cached);
+            }
+
+            // Старые источники получают «всего зарегистрировано» по всему кэшу,
+            // ещё до подрезки лимитом: иначе часть истории потерялась бы.
+            if (NodeSourceStats.SeedTotals(Sources, Nodes))
+            {
+                NodeSourceService.SaveSources(Sources);
+            }
+
+            // Кэш мог быть записан старой версией с большим лимитом: подрезаем сразу
+            // при чтении, иначе телефон держит в памяти лишние тысячи серверов.
+            var (trimmed, overLimit) = NodeLimits.Trim(Nodes, settings.MaxTotalNodes);
+            if (overLimit > 0)
+            {
+                Nodes.Clear();
+                Nodes.AddRange(trimmed);
+            }
 
             _selectedId = JsonFileStore.Read<SelectedNodeState>(SelectedPath)?.Id;
             _selected = null;
+            // Снимок публикуется до флага: тот, кто увидел _loaded, увидит и все серверы.
+            _snapshot = Nodes.ToArray();
             _loaded = true;
 
             Android.Util.Log.Info("VieNLink",
-                $"серверы: {Nodes.Count} из кэша, источников: {Sources.Count}, отброшено: {dropped}, дублей: {duplicates}");
+                $"серверы: {Nodes.Count} из кэша, источников: {Sources.Count}, отброшено: {dropped}, дублей: {duplicates}, по лимиту: {overLimit}");
         }
     }
 
-    /// <summary>Снимок списка для адаптера: UI не должен держать ссылку на изменяемый список.</summary>
-    public static List<ProxyNode> Snapshot()
+    /// <summary>Снимок списка без блокировки: UI не ждёт разбора кэша и обновления источников.</summary>
+    public static List<ProxyNode> Snapshot() => _snapshot.ToList();
+
+    /// <summary>
+    /// Сколько серверов лежит в списке рабочих — ровно то, что сохраняется
+    /// в <c>nodes-working.json</c>. Значок «рабочих серверов» читает именно это число,
+    /// а не пересчёт по всем найденным.
+    /// </summary>
+    public static int WorkingCount
     {
-        lock (Gate)
+        get
         {
-            return Nodes.ToList();
+            var snapshot = _snapshot;
+            var count = 0;
+            foreach (var node in snapshot)
+            {
+                if (node.Status == NodeStatus.Working)
+                {
+                    count++;
+                }
+            }
+
+            return count;
         }
     }
+
+    /// <summary>
+    /// Рабочие серверы по названиям источников — для карточек источников.
+    /// Читаем опубликованный снимок без блокировки.
+    /// </summary>
+    public static Dictionary<string, int> WorkingBySource() => NodeSourceStats.WorkingBySource(_snapshot);
 
     /// <summary>
     /// Счётчики для шапки и экрана «Серверы» без копирования всего списка: шапка обновляется
@@ -97,52 +173,62 @@ internal static class NodeStore
     /// лишние аллокации и давление на сборщик мусора.
     /// </summary>
     /// <remarks>
-    /// Считаются только свежие проверки: сервер, проверенный много часов назад, мог уже
-    /// умереть. Иначе значок обещает сервер, которого кнопка сервиса не найдёт.
+    /// <paramref name="requireFresh"/> = false — счётчики для шапки: свежесть проверки
+    /// не учитывается, иначе значки «таяли» бы сами по себе, без проверки, и общее число
+    /// не сходилось бы с сервисами. Для выбора сервера и квот остаётся строгий режим
+    /// (проверка не старше 5 минут).
     /// </remarks>
-    public static (int Total, int Working, int Universal, int Youtube, int Telegram, int Discord) Summary()
+    public static (int Total, int Working, int Universal, int Youtube, int Telegram, int Discord) Summary(
+        bool requireFresh = true)
     {
-        lock (Gate)
+        var snapshot = _snapshot;
+        if (!_loaded)
         {
-            var now = DateTime.UtcNow;
-            var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
-            var onlyMine = Settings.ConnectOnlyMine;
-            var working = 0;
-            var universal = 0;
-            var youtube = 0;
-            var telegram = 0;
-            var discord = 0;
-            foreach (var node in Nodes)
+            return (0, 0, 0, 0, 0, 0);
+        }
+
+        var now = DateTime.UtcNow;
+        var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
+        var onlyMine = Settings.ConnectOnlyMine;
+        var working = 0;
+        var universal = 0;
+        var youtube = 0;
+        var telegram = 0;
+        var discord = 0;
+        foreach (var node in snapshot)
+        {
+            if (requireFresh
+                    ? !NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now)
+                    : node.Status != NodeStatus.Working ||
+                      !NodeAvailability.HasSuccess(node) ||
+                      (onlyMine && !node.IsMine))
             {
-                if (!NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now))
-                {
-                    continue;
-                }
-
-                working++;
-                if (NodeAvailability.OpenedFor(node, "universal"))
-                {
-                    universal++;
-                }
-
-                if (NodeAvailability.OpenedFor(node, "youtube"))
-                {
-                    youtube++;
-                }
-
-                if (NodeAvailability.OpenedFor(node, "telegram"))
-                {
-                    telegram++;
-                }
-
-                if (NodeAvailability.OpenedFor(node, "discord"))
-                {
-                    discord++;
-                }
+                continue;
             }
 
-            return (Nodes.Count, working, universal, youtube, telegram, discord);
+            working++;
+            if (NodeAvailability.OpenedFor(node, "universal"))
+            {
+                universal++;
+            }
+
+            if (NodeAvailability.OpenedFor(node, "youtube"))
+            {
+                youtube++;
+            }
+
+            if (NodeAvailability.OpenedFor(node, "telegram"))
+            {
+                telegram++;
+            }
+
+            if (NodeAvailability.OpenedFor(node, "discord"))
+            {
+                discord++;
+            }
         }
+
+        return (snapshot.Length, working, universal, youtube, telegram, discord);
     }
 
     /// <summary>Подробная сводка для экрана «Серверы» — один проход без копии списка.</summary>
@@ -160,69 +246,67 @@ internal static class NodeStore
 
     public static NodeSummary DetailedSummary()
     {
-        lock (Gate)
+        var snapshot = _snapshot;
+        var now = DateTime.UtcNow;
+        var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
+        var onlyMine = Settings.ConnectOnlyMine;
+        var working = 0;
+        var fresh = 0;
+        var universal = 0;
+        var youtube = 0;
+        var telegram = 0;
+        var discord = 0;
+        var mine = 0;
+        var bestDomains = 0;
+        DateTime? lastChecked = null;
+        foreach (var node in snapshot)
         {
-            var now = DateTime.UtcNow;
-            var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
-            var onlyMine = Settings.ConnectOnlyMine;
-            var working = 0;
-            var fresh = 0;
-            var universal = 0;
-            var youtube = 0;
-            var telegram = 0;
-            var discord = 0;
-            var mine = 0;
-            var bestDomains = 0;
-            DateTime? lastChecked = null;
-            foreach (var node in Nodes)
+            if (node.IsMine)
             {
-                if (node.IsMine)
-                {
-                    mine++;
-                }
-
-                if (node.CheckedAtUtc is { } checkedAt &&
-                    (lastChecked is null || checkedAt > lastChecked))
-                {
-                    lastChecked = checkedAt;
-                }
-
-                if (node.Status == NodeStatus.Working)
-                {
-                    working++;
-                }
-
-                if (!NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now))
-                {
-                    continue;
-                }
-
-                fresh++;
-                bestDomains = Math.Max(bestDomains, node.OpenDomains);
-                if (NodeAvailability.OpenedFor(node, "universal"))
-                {
-                    universal++;
-                }
-
-                if (NodeAvailability.OpenedFor(node, "youtube"))
-                {
-                    youtube++;
-                }
-
-                if (NodeAvailability.OpenedFor(node, "telegram"))
-                {
-                    telegram++;
-                }
-
-                if (NodeAvailability.OpenedFor(node, "discord"))
-                {
-                    discord++;
-                }
+                mine++;
             }
 
-            return new NodeSummary(Nodes.Count, working, fresh, universal, youtube, telegram, discord,
-                mine, bestDomains, lastChecked);
+            if (node.CheckedAtUtc is { } checkedAt &&
+                (lastChecked is null || checkedAt > lastChecked))
+            {
+                lastChecked = checkedAt;
+            }
+
+            if (node.Status == NodeStatus.Working)
+            {
+                working++;
+            }
+
+            if (!NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now))
+            {
+                continue;
+            }
+
+            fresh++;
+            bestDomains = Math.Max(bestDomains, node.OpenDomains);
+            if (NodeAvailability.OpenedFor(node, "universal"))
+            {
+                universal++;
+            }
+
+            if (NodeAvailability.OpenedFor(node, "youtube"))
+            {
+                youtube++;
+            }
+
+            if (NodeAvailability.OpenedFor(node, "telegram"))
+            {
+                telegram++;
+            }
+
+            if (NodeAvailability.OpenedFor(node, "discord"))
+            {
+                discord++;
+            }
         }
+
+        return new NodeSummary(snapshot.Length, working, fresh, universal, youtube, telegram, discord,
+            mine, bestDomains, lastChecked);
     }
 
     public static List<SourceDefinition> SnapshotSources()
@@ -237,25 +321,30 @@ internal static class NodeStore
     {
         get
         {
-            lock (Gate)
+            // Без блокировки: шапка спрашивает выбранный сервер на каждом такте,
+            // а разбор кэша и обновление источников идут в фоне.
+            if (!_loaded)
             {
-                if (_selectedId is null)
-                {
-                    return null;
-                }
+                return null;
+            }
 
-                // Ссылка на объект кэшируется: шапка спрашивает выбранный сервер каждые
-                // 3 секунды, а линейный поиск по 12 000 серверам на каждом такте не нужен.
-                if (_selected is not null &&
-                    _selected.Id.Equals(_selectedId, StringComparison.OrdinalIgnoreCase))
-                {
-                    return _selected;
-                }
+            var id = _selectedId;
+            if (id is null)
+            {
+                return null;
+            }
 
-                _selected = Nodes.FirstOrDefault(
-                    node => node.Id.Equals(_selectedId, StringComparison.OrdinalIgnoreCase));
+            // Ссылка на объект кэшируется: линейный поиск по тысячам серверов
+            // на каждом такте не нужен.
+            if (_selected is not null &&
+                _selected.Id.Equals(id, StringComparison.OrdinalIgnoreCase))
+            {
                 return _selected;
             }
+
+            _selected = _snapshot.FirstOrDefault(
+                node => node.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+            return _selected;
         }
     }
 
@@ -428,8 +517,9 @@ internal static class NodeStore
             NodeSourceService.SaveSources(Sources);
         }
 
-        var working = Nodes.Count(node => node.Status == NodeStatus.Working);
-        var summary = $"Источники: {collected.Nodes.Count} серверов, в списке {Nodes.Count}, рабочих {working}";
+        var snapshot = _snapshot;
+        var working = snapshot.Count(node => node.Status == NodeStatus.Working);
+        var summary = $"Источники: {collected.Nodes.Count} серверов, в списке {snapshot.Length}, рабочих {working}";
         AppLog.Write("sources", summary);
         progress?.Report(summary);
         return summary;
@@ -441,7 +531,6 @@ internal static class NodeStore
     /// </summary>
     private static void Merge(IReadOnlyCollection<ProxyNode> incoming)
     {
-        List<ProxyNode> snapshot;
         lock (Gate)
         {
             var now = DateTime.UtcNow;
@@ -489,12 +578,13 @@ internal static class NodeStore
             Nodes.Clear();
             Nodes.AddRange(trimmed);
             _selected = null;
-            snapshot = Nodes.ToList();
+            _snapshot = Nodes.ToArray();
+            MarkPoolDirty();
         }
 
         // Сериализация и запись кэша — вне блокировки: UI не должен ждать диск,
         // когда открывает шапку или экран «Серверы» сразу после фоновой работы.
-        NodeSourceService.SaveCache(snapshot);
+        SaveNodes(force: true);
     }
 
     /// <summary>
@@ -503,7 +593,6 @@ internal static class NodeStore
     /// </summary>
     public static int TrimToLimit()
     {
-        List<ProxyNode> snapshot;
         int removed;
         lock (Gate)
         {
@@ -518,11 +607,13 @@ internal static class NodeStore
             Nodes.Clear();
             Nodes.AddRange(trimmed);
             _selected = null;
-            snapshot = Nodes.ToList();
+            _snapshot = Nodes.ToArray();
+            MarkPoolDirty();
         }
 
-        NodeSourceService.SaveCache(snapshot);
-        AppLog.Write("nodes", $"Лимит списка: удалено {removed}, осталось {snapshot.Count}");
+        var left = _snapshot.Length;
+        SaveNodes(force: true);
+        AppLog.Write("nodes", $"Лимит списка: удалено {removed}, осталось {left}");
         return removed;
     }
 
@@ -535,11 +626,18 @@ internal static class NodeStore
             EnsureLoaded();
             removed = Nodes.Count;
             Nodes.Clear();
+            _snapshot = Array.Empty<ProxyNode>();
             _selectedId = null;
             _selected = null;
+            MarkPoolDirty();
             // Удаляем и сам кэш, и резервную копию: иначе следующее чтение
             // восстановило бы только что очищенные серверы из nodes.json.bak.
-            foreach (var path in new[] { SelectedPath, AppPaths.NodesPath, AppPaths.NodesPath + ".bak" })
+            foreach (var path in new[]
+                     {
+                         SelectedPath,
+                         AppPaths.NodesPath, AppPaths.NodesPath + ".bak",
+                         AppPaths.WorkingNodesPath, AppPaths.WorkingNodesPath + ".bak",
+                     })
             {
                 try
                 {
@@ -558,17 +656,50 @@ internal static class NodeStore
         return removed;
     }
 
-    /// <summary>Сохраняет результаты проверки в кэш (задержки и статусы не теряются между запусками).</summary>
-    public static void SaveNodes()
+    /// <summary>
+    /// Сохраняет серверы: рабочие — в отдельный маленький файл после каждой проверки,
+    /// кучу непроверенных — в общий кэш, но не чаще раза в несколько минут.
+    /// Так проверка не переписывает каждый раз тысячи записей.
+    /// </summary>
+    public static void SaveNodes(bool force = false)
     {
-        List<ProxyNode> snapshot;
+        // Блокировка на весь проход чтение+запись: автозапись списка рабочих (после проверки)
+        // и ручное добавление сервера (Merge → SaveNodes) иначе могли перезаписать друг друга —
+        // одна ветка читает снимок, пока другая уже обновила список, и пишет поверх более свежих
+        // данных. Тот же замок Gate, что защищает обновления _snapshot, даёт согласованный снимок.
         lock (Gate)
         {
-            snapshot = Nodes.ToList();
-        }
+            var snapshot = _snapshot;
+            var working = new List<ProxyNode>();
+            var pool = new List<ProxyNode>();
+            foreach (var node in snapshot)
+            {
+                if (node.Status == NodeStatus.Working)
+                {
+                    working.Add(node);
+                }
+                else
+                {
+                    pool.Add(node);
+                }
+            }
 
-        NodeSourceService.SaveCache(snapshot);
+            NodeSourceService.SaveCache(working, allowEmpty: true, AppPaths.WorkingNodesPath);
+
+            var now = DateTime.UtcNow;
+            var poolDue = now - _lastPoolSaveUtc >= PoolSaveInterval;
+            var dirtyDue = _poolDirty && now - _lastPoolSaveUtc >= PoolDirtyInterval;
+            if (force || poolDue || dirtyDue)
+            {
+                NodeSourceService.SaveCache(pool, allowEmpty: true);
+                _lastPoolSaveUtc = now;
+                _poolDirty = false;
+            }
+        }
     }
+
+    /// <summary>Куча непроверенных изменилась (пришли новые, удалили мёртвые) — надо записать.</summary>
+    private static void MarkPoolDirty() => _poolDirty = true;
 
     /// <summary>
     /// Добавляет источники и серверы, найденные автопоиском. Возвращает число новых источников.
@@ -634,6 +765,8 @@ internal static class NodeStore
             if (removed > 0)
             {
                 _selected = null;
+                _snapshot = Nodes.ToArray();
+                MarkPoolDirty();
             }
         }
 
@@ -665,7 +798,7 @@ internal static class NodeStore
     private static List<ProxyNode> RankedVerified()
     {
         var settings = Settings;
-        return Nodes
+        return _snapshot
             .Where(node => node.Status == NodeStatus.Working &&
                            NodeAvailability.HasSuccess(node) &&
                            !string.IsNullOrWhiteSpace(node.OutboundJson) &&
@@ -702,7 +835,7 @@ internal static class NodeStore
         if (preferService is { } wanted)
         {
             var preferred = NodeFailover.Rank(
-                    Nodes,
+                    _snapshot,
                     ServiceKey(wanted),
                     DateTime.UtcNow,
                     Settings.ConnectOnlyMine)
@@ -759,20 +892,17 @@ internal static class NodeStore
     /// </summary>
     public static ProxyNode? PickForService(QuickService service, string? avoidId = null)
     {
-        lock (Gate)
-        {
-            var now = DateTime.UtcNow;
-            var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
-            var onlyMine = Settings.ConnectOnlyMine;
-            return Nodes
-                .Where(node => (avoidId is null || !node.Id.Equals(avoidId, StringComparison.OrdinalIgnoreCase)) &&
-                               NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now) &&
-                               OpenedFor(node, service))
-                .OrderBy(node => node.DelayMs ?? int.MaxValue)
-                .ThenByDescending(node => node.OpenDomains)
-                .ThenByDescending(node => node.IsMine)
-                .FirstOrDefault();
-        }
+        var now = DateTime.UtcNow;
+        var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
+        var onlyMine = Settings.ConnectOnlyMine;
+        return _snapshot
+            .Where(node => (avoidId is null || !node.Id.Equals(avoidId, StringComparison.OrdinalIgnoreCase)) &&
+                           NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now) &&
+                           OpenedFor(node, service))
+            .OrderBy(node => node.DelayMs ?? int.MaxValue)
+            .ThenByDescending(node => node.OpenDomains)
+            .ThenByDescending(node => node.IsMine)
+            .FirstOrDefault();
     }
 
     /// <summary>Ключ сервиса для общего порядка переключения (см. <see cref="NodeFailover"/>).</summary>
@@ -810,45 +940,42 @@ internal static class NodeStore
         var unique = await Task.Run(() =>
         {
             var candidates = new List<ProxyNode>();
-            lock (Gate)
+            if (preferred is not null &&
+                !preferred.Id.Equals(avoidId ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
+                (!Settings.ConnectOnlyMine || preferred.IsMine))
             {
-                if (preferred is not null &&
-                    !preferred.Id.Equals(avoidId ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
-                    (!Settings.ConnectOnlyMine || preferred.IsMine))
-                {
-                    candidates.Add(preferred);
-                }
-
-                if (service is { } wanted)
-                {
-                    var picked = PickForService(wanted, avoidId);
-                    if (picked is not null)
-                    {
-                        candidates.Add(picked);
-                    }
-
-                    // Для конкретного сервиса не подставляем серверы без его доступа:
-                    // иначе кнопка Telegram подключила бы сервер, где Telegram не открывается.
-                    candidates.AddRange(RankedVerified()
-                        .Where(node => OpenedFor(node, wanted) &&
-                                       (avoidId is null ||
-                                        !node.Id.Equals(avoidId, StringComparison.OrdinalIgnoreCase)))
-                        .Take(8));
-                }
-                else
-                {
-                    candidates.AddRange(RankedVerified()
-                        .Where(node => avoidId is null ||
-                                       !node.Id.Equals(avoidId, StringComparison.OrdinalIgnoreCase))
-                        .Take(4));
-                }
-
-                return candidates
-                    .GroupBy(node => node.Id, StringComparer.OrdinalIgnoreCase)
-                    .Select(group => group.First())
-                    .Take(8)
-                    .ToList();
+                candidates.Add(preferred);
             }
+
+            if (service is { } wanted)
+            {
+                var picked = PickForService(wanted, avoidId);
+                if (picked is not null)
+                {
+                    candidates.Add(picked);
+                }
+
+                // Для конкретного сервиса не подставляем серверы без его доступа:
+                // иначе кнопка Telegram подключила бы сервер, где Telegram не открывается.
+                candidates.AddRange(RankedVerified()
+                    .Where(node => OpenedFor(node, wanted) &&
+                                   (avoidId is null ||
+                                    !node.Id.Equals(avoidId, StringComparison.OrdinalIgnoreCase)))
+                    .Take(8));
+            }
+            else
+            {
+                candidates.AddRange(RankedVerified()
+                    .Where(node => avoidId is null ||
+                                   !node.Id.Equals(avoidId, StringComparison.OrdinalIgnoreCase))
+                    .Take(4));
+            }
+
+            return candidates
+                .GroupBy(node => node.Id, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .Take(8)
+                .ToList();
         }, cancellationToken);
 
         if (unique.Count == 0)
@@ -933,7 +1060,7 @@ internal static class NodeStore
             }
         }
 
-        var ordered = OrderForConfig(Nodes);
+        var ordered = OrderForConfig(_snapshot);
         if (Settings.ConnectOnlyVerified)
         {
             ordered = ordered.Where(NodeAvailability.HasSuccess).ToList();

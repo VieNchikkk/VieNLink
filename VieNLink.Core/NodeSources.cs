@@ -21,6 +21,86 @@ internal sealed class CollectResult
 }
 
 /// <summary>
+/// Статистика источников по реальным результатам: сколько сейчас рабочих серверов
+/// пришло из каждого источника. Нужна, чтобы видеть бесполезные источники и удалять их.
+/// </summary>
+internal static class NodeSourceStats
+{
+    /// <summary>
+    /// Считает рабочие серверы по названиям источников. Сервер, найденный в нескольких
+    /// источниках, учитывается у каждого — видно, какой источник даёт живые серверы,
+    /// а какой только мусор. Названия склеены в <see cref="ProxyNode.SourceName"/> через «, ».
+    /// </summary>
+    public static Dictionary<string, int> WorkingBySource(IEnumerable<ProxyNode> nodes)
+    {
+        var counts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var node in nodes)
+        {
+            if (node.Status != NodeStatus.Working)
+            {
+                continue;
+            }
+
+            foreach (var source in NodeFailover.SplitSources(node.SourceName))
+            {
+                counts.TryGetValue(source, out var count);
+                counts[source] = count + 1;
+            }
+        }
+
+        return counts;
+    }
+
+    /// <summary>
+    /// Первичное заполнение «всего зарегистрировано» по уже загруженному кэшу:
+    /// без этого у старых источников счётчик начинался бы с нуля до следующего сбора.
+    /// Возвращает true, если что-то добавилось и источники стоит сохранить.
+    /// </summary>
+    public static bool SeedTotals(
+        IEnumerable<SourceDefinition> sources,
+        IEnumerable<ProxyNode> nodes)
+    {
+        var byName = new Dictionary<string, List<SourceDefinition>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var source in sources)
+        {
+            if (string.IsNullOrWhiteSpace(source.Name))
+            {
+                continue;
+            }
+
+            if (!byName.TryGetValue(source.Name, out var list))
+            {
+                list = new List<SourceDefinition>();
+                byName[source.Name] = list;
+            }
+
+            list.Add(source);
+        }
+
+        var changed = false;
+        foreach (var node in nodes)
+        {
+            foreach (var name in NodeFailover.SplitSources(node.SourceName))
+            {
+                if (!byName.TryGetValue(name, out var matches))
+                {
+                    continue;
+                }
+
+                foreach (var source in matches)
+                {
+                    var before = source.TotalNodeCount;
+                    source.RegisterId(node.Id);
+                    changed |= source.TotalNodeCount != before;
+                }
+            }
+        }
+
+        return changed;
+    }
+}
+
+/// <summary>
 /// Загрузка публичных списков серверов: raw-файлы GitHub, base64-подписки и публичные каналы Telegram.
 /// Сайты и каналы часто недоступны напрямую, поэтому ошибка источника не роняет остальные.
 /// </summary>
@@ -242,6 +322,7 @@ internal static class NodeSourceService
                 node.IsMine = source.IsMine;
             }
 
+            source.RegisterNodes(imported);
             return new FetchOutcome { Source = source, Nodes = imported };
         }
 
@@ -262,6 +343,9 @@ internal static class NodeSourceService
         {
             node.IsMine = source.IsMine;
         }
+
+        // «Всего зарегистрировано» — уникальные серверы за всё время, а не за этот сбор.
+        source.RegisterNodes(nodes);
 
         string? error = null;
         if (nodes.Count == 0 && parsed.Count > 0)
@@ -344,12 +428,13 @@ internal static class NodeSourceService
     /// следующее сохранение не должно стереть уже найденные серверы (это выглядело как
     /// «после обновления версии всё сбросилось»). Очистка — только явная.
     /// </summary>
-    public static void SaveCache(IEnumerable<ProxyNode> nodes, bool allowEmpty = false)
+    public static void SaveCache(IEnumerable<ProxyNode> nodes, bool allowEmpty = false, string? path = null)
     {
+        var target = path ?? AppPaths.NodesPath;
         var list = nodes as IList<ProxyNode> ?? nodes.ToList();
         if (list.Count == 0 && !allowEmpty)
         {
-            var existing = JsonFileStore.Read<NodeCache>(AppPaths.NodesPath);
+            var existing = JsonFileStore.Read<NodeCache>(target);
             if (existing is { Items.Count: > 0 })
             {
                 AppLog.Write("cache",
@@ -360,7 +445,7 @@ internal static class NodeSourceService
 
         // Даже если сервер пришёл из старого кэша без отметки, при сохранении она появится.
         var now = DateTime.UtcNow;
-        JsonFileStore.WriteCompact(AppPaths.NodesPath, new NodeCache
+        JsonFileStore.WriteCompact(target, new NodeCache
         {
             SchemaVersion = SchemaVersions.NodeCache,
             SavedAtUtc = now,
@@ -401,11 +486,12 @@ internal static class NodeSourceService
     /// Читает кэш и оставляет только свежие серверы: не встречавшиеся в источниках дольше
     /// <paramref name="freshAfterUtc"/> выбрасываются, повторы «один сервер:порт» склеиваются.
     /// </summary>
-    public static List<ProxyNode> LoadCache(out int dropped, out int duplicates, DateTime? freshAfterUtc = null)
+    public static List<ProxyNode> LoadCache(out int dropped, out int duplicates, DateTime? freshAfterUtc = null,
+        string? path = null)
     {
         dropped = 0;
         duplicates = 0;
-        var cache = JsonFileStore.Read<NodeCache>(AppPaths.NodesPath);
+        var cache = JsonFileStore.Read<NodeCache>(path ?? AppPaths.NodesPath);
         // Пустой или нечитаемый основной файл не должен означать «серверов нет»: рядом
         // лежит копия, которую JsonFileStore делает перед каждой перезаписью. Это
         // страховка от сброса списка после сбоя записи или обновления версии.
@@ -450,8 +536,14 @@ internal static class NodeSourceService
                 item.DelayMs is null && item.YoutubeOk != true && item.TelegramOk != true &&
                 item.UniversalOk != true && item.DiscordOk != true)
             {
-                dropped++;
-                continue;
+                // В текущей схеме это рабочий сервер, проваливший проверку: он остаётся
+                // в списке до RemoveAfterFailures провалов подряд (счётчик FailCount).
+                // Выбрасываем только записи старой схемы и записи без счётчика.
+                if (cache.SchemaVersion < SchemaVersions.NodeCache || item.FailCount <= 0)
+                {
+                    dropped++;
+                    continue;
+                }
             }
 
             // В старом кэше нет отметки LastSeen: возраст считаем от времени сохранения,

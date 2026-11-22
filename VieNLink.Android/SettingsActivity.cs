@@ -8,8 +8,8 @@ using Android.Widget;
 namespace VieNLink.Mobile;
 
 /// <summary>
-/// Настройки Android-версии: оформление (тема), памятка про плитку и служебные ссылки.
-/// Поведение приложения всегда автоматическое — значения по умолчанию задаёт SettingsStore.
+/// Настройки Android-версии: оформление (тема), обновления, автоматика, данные и VPN,
+/// служебные ссылки. Открываются четвёртой вкладкой нижнего меню.
 /// </summary>
 #if DEBUG
 [Activity(Label = "Настройки", Theme = "@style/Theme.VieNLink", Exported = true)]
@@ -107,6 +107,47 @@ public sealed class SettingsActivity : BaseActivity
             "обслуживание по будильнику и автообновления. Подключённый туннель и ручные кнопки продолжают работать.",
             P));
 
+        // ------------------------------------------------- автоматические работы
+        page.AddView(Ui.Section(this, "Автоматические работы", P));
+        page.AddView(Ui.Hint(this,
+            "Каждую работу можно выключить отдельно. Общий выключатель «Остановить все процессы» выше " +
+            "гасит их все сразу; туннель и ручные кнопки работают всегда.", P));
+
+        var settings = SettingsStore.Current;
+        var android = AndroidSettingsStore.Current;
+        AddAutomationToggle(page, "Автопоиск новых источников",
+            "Искать новые списки и подписки в GitHub и на публичных сайтах.",
+            settings.AutoDiscoverSources,
+            value => settings.AutoDiscoverSources = value);
+        AddAutomationToggle(page, "Авто-сбор серверов из источников",
+            "Периодически заново собирать серверы из включённых источников и подписок.",
+            settings.AutoCollectServers,
+            value =>
+            {
+                settings.AutoCollectServers = value;
+                settings.AutoUpdateSubscriptions = value;
+            });
+        AddAutomationToggle(page, "Автопроверка серверов",
+            "Проверять накопленные и рабочие серверы в фоне отдельным процессом :probe.",
+            settings.IdleTestEnabled,
+            value =>
+            {
+                settings.IdleTestEnabled = value;
+                android.AutoProbe = value;
+            });
+        AddAutomationToggle(page, "Автосбор и проверка MTProto",
+            "Читать каналы Telegram через RSS-зеркала и проверять MTProto-прокси.",
+            android.AutoMtProto,
+            value => android.AutoMtProto = value);
+        AddAutomationToggle(page, "Автопереключение при сбое сервера",
+            "Переключаться на запасной сервер, если текущий перестал открывать сайт.",
+            settings.AutoFailover,
+            value => settings.AutoFailover = value);
+        AddAutomationToggle(page, "Автопроверка обновлений приложения",
+            "Проверять новые версии VieNLink на GitHub. Кнопка «Проверить обновление» работает всегда.",
+            settings.AutoCheckAppUpdates,
+            value => settings.AutoCheckAppUpdates = value);
+
         // -------------------------------------------------------------- данные и VPN
         page.AddView(Ui.Section(this, "Данные и VPN", P));
         var clear = Ui.Pill(this, P, "Очистить кэш серверов", UiButtonKind.Danger, ConfirmClearNodes,
@@ -124,11 +165,28 @@ public sealed class SettingsActivity : BaseActivity
         var about = Ui.Pill(this, P, "О программе и лицензии", UiButtonKind.Secondary,
             () => StartActivity(new Intent(this, typeof(AboutActivity))), Resource.Drawable.ic_info);
         page.AddView(about);
-        var log = Ui.Pill(this, P, "Открыть журнал", UiButtonKind.Secondary,
-            () => StartActivity(new Intent(this, typeof(LogActivity))), Resource.Drawable.ic_tab_log);
-        Ui.Add(page, log, 8);
 
         SetPage(page);
+    }
+
+    /// <summary>Переключатель одной автоматической работы; сохраняет настройки сразу.</summary>
+    private void AddAutomationToggle(
+        LinearLayout page, string title, string hint, bool value, Action<bool> apply)
+    {
+        var box = new CheckBox(this) { Text = title, Checked = value };
+        box.SetTextColor(P.TextSoft());
+        box.CheckedChange += (_, args) =>
+        {
+            apply(args.IsChecked);
+            SettingsStore.Save();
+            AndroidSettingsStore.Save();
+            SetStatus((args.IsChecked ? "Включено: " : "Выключено: ") + title);
+        };
+        page.AddView(box);
+
+        var note = Ui.Hint(this, hint, P);
+        note.SetPadding(Ui.Dp(this, 28), 0, 0, Ui.Dp(this, 4));
+        page.AddView(note);
     }
 
     private void ToggleAutomation()

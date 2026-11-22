@@ -31,7 +31,9 @@ internal sealed class ClashApiClient : IDisposable
         _http = new HttpClient(handler)
         {
             BaseAddress = new Uri($"http://127.0.0.1:{port}/"),
-            Timeout = TimeSpan.FromSeconds(30),
+            // Локальный API отвечает мгновенно; 30 с держали очередь проверки,
+            // когда ядро зависало на одном сервере.
+            Timeout = TimeSpan.FromSeconds(10),
         };
         _http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", secret);
 
@@ -65,16 +67,20 @@ internal sealed class ClashApiClient : IDisposable
     public async Task<int?> TestDelayAsync(string tag, int timeoutMs, CancellationToken cancellationToken, string? testUrl = null)
     {
         var url = $"proxies/{Uri.EscapeDataString(tag)}/delay?timeout={timeoutMs}&url={Uri.EscapeDataString(testUrl ?? TestUrl)}";
+        // Свой предел на запрос: ядро обязано ответить за timeoutMs, иначе один
+        // зависший сервер держал бы слот партии и проверка «замирала» на счётчике.
+        using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        limit.CancelAfter(TimeSpan.FromMilliseconds(Math.Clamp(timeoutMs, 1000, 10000) + 2500));
         try
         {
-            using var response = await _http.GetAsync(url, cancellationToken);
+            using var response = await _http.GetAsync(url, limit.Token);
             if (!response.IsSuccessStatusCode)
             {
                 return null;
             }
 
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            await using var stream = await response.Content.ReadAsStreamAsync(limit.Token);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: limit.Token);
             if (document.RootElement.TryGetProperty("delay", out var delay) && delay.TryGetInt32(out var value) && value > 0)
             {
                 return value;

@@ -8,8 +8,8 @@ using Android.Widget;
 namespace VieNLink.Mobile;
 
 /// <summary>
-/// Главный экран Android-версии: шапка с состоянием, вкладки Windows-клиента
-/// (Подключение / Обход / Инструменты / Журнал / Общие) и быстрое подключение.
+/// Главный экран Android-версии: шапка с состоянием, четыре нижние вкладки
+/// (Подключение / Обход / Инструменты / Настройки) и быстрое подключение.
 /// Сервер всегда выбирается автоматически из уже проверенных.
 /// </summary>
 [Activity(Label = "VieNLink", MainLauncher = true, LaunchMode = Android.Content.PM.LaunchMode.SingleTop, Theme = "@style/Theme.VieNLink")]
@@ -30,6 +30,7 @@ public sealed partial class MainActivity : BaseActivity
     private readonly List<ImageView> _navIcons = new();
     private readonly List<TextView> _navLabels = new();
     private int _tab;
+    private bool _openingSettings;
 
     private TextView? _statusText;
     private TextView? _nodeText;
@@ -39,6 +40,15 @@ public sealed partial class MainActivity : BaseActivity
     private TextView? _stateDot;
     private TextView? _disconnect;
     private TextView? _youtubeCount;
+    private TextView? _workingCount;
+    private TextView? _workingDelta;
+
+    /// <summary>Сколько рабочих было перед текущим (или последним) прогоном.</summary>
+    private int _workingBaseline = -1;
+
+    /// <summary>Последнее изменение числа рабочих: одна цифра рядом со значком.</summary>
+    private int _workingChange;
+    private int _lastWorkingSeen = -1;
     private TextView? _discordCount;
     private TextView? _telegramCount;
     private TextView? _universalCount;
@@ -59,7 +69,7 @@ public sealed partial class MainActivity : BaseActivity
     private long _upBytes;
     private DateTime _lastTrafficUi = DateTime.MinValue;
 
-    private static readonly string[] TabTitles = { "Подключение", "Обход", "Инструменты", "Журнал" };
+    private static readonly string[] TabTitles = { "Подключение", "Обход", "Инструменты", "Настройки" };
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
@@ -143,6 +153,9 @@ public sealed partial class MainActivity : BaseActivity
     protected override void OnResume()
     {
         base.OnResume();
+        // Настройки открываются отдельным экраном с четвёртой вкладки; после возврата
+        // снимаем защиту, чтобы вкладка снова срабатывала, и показываем прежнюю.
+        _openingSettings = false;
         SelectTab(_tab);
         RefreshHeader();
         EnsureTrafficMonitor();
@@ -172,12 +185,18 @@ public sealed partial class MainActivity : BaseActivity
     {
         try
         {
-            if (SettingsStore.Current.AutomationPaused || ProbeClient.IsPaused || ProbeClient.IsRunning)
+            if (SettingsStore.Current.AutomationPaused || ProbeClient.IsPaused ||
+                ProbeClient.IsRunning || ProbeClient.IsManualRun)
             {
                 return;
             }
 
             await Task.Run(() => NodeStore.EnsureLoaded());
+
+            // Сначала стартовая перепроверка всех рабочих (если ещё не прошла): она и
+            // обновляет счётчики. Быстрый проход ниже — только если рабочие устарели уже после неё.
+            await ProbeScheduler.EnsureStartupRecheckAsync();
+
             if (NodeStore.Summary().Working >= NodeLimits.MinWorkingNodes)
             {
                 return;
@@ -199,6 +218,10 @@ public sealed partial class MainActivity : BaseActivity
     protected override void OnPause()
     {
         StopTrafficMonitor();
+
+        // Дописываем кэш при уходе из приложения: рабочий файл маленький,
+        // а куча непроверенных могла ждать своей очереди.
+        _ = Task.Run(() => NodeStore.SaveNodes(force: true));
 
         if (_handler is not null && _tick is not null)
         {
@@ -224,7 +247,7 @@ public sealed partial class MainActivity : BaseActivity
             Resource.Drawable.ic_tab_connection,
             Resource.Drawable.ic_tab_bypass,
             Resource.Drawable.ic_tab_tools,
-            Resource.Drawable.ic_tab_log,
+            Resource.Drawable.ic_settings,
         };
 
         for (var index = 0; index < TabTitles.Length; index++)
@@ -262,6 +285,28 @@ public sealed partial class MainActivity : BaseActivity
 
     private void SelectTab(int index)
     {
+        // Четвёртая вкладка — «Настройки»: отдельный экран, как и раньше,
+        // но теперь на месте журнала. Журнал переехал в «Инструменты».
+        if (index >= TabTitles.Length - 1)
+        {
+            // Настройки — отдельный экран. Возврат должен показывать прежнюю вкладку,
+            // а не открывать их снова; если пришли сразу на «Настройки» (intent tab=3),
+            // откатываемся на «Подключение».
+            if (_tab >= TabTitles.Length - 1)
+            {
+                _tab = 0;
+            }
+
+            if (_openingSettings)
+            {
+                return;
+            }
+
+            _openingSettings = true;
+            Open(typeof(SettingsActivity));
+            return;
+        }
+
         _tab = Math.Clamp(index, 0, TabTitles.Length - 1);
         if (_pageHost is null)
         {
@@ -276,8 +321,7 @@ public sealed partial class MainActivity : BaseActivity
         {
             0 => BuildConnectionPage(),
             1 => BuildBypassPage(),
-            2 => BuildToolsPage(),
-            _ => BuildLogPage(),
+            _ => BuildToolsPage(),
         };
         Ui.Add(_pageHost, page, 12);
         UpdateNavigation();
@@ -362,9 +406,24 @@ public sealed partial class MainActivity : BaseActivity
         _trafficText.SetPadding(0, Ui.Dp(this, 4), 0, 0);
         card.AddView(_trafficText);
 
+        // Общее число рабочих серверов — отдельной строкой, чтобы его не путали
+        // со счётчиками проверки по сервисам.
+        var workingRow = Ui.Row(this);
+        workingRow.SetPadding(0, Ui.Dp(this, 10), 0, 0);
+        var workingChip = ServiceCounter(Resource.Drawable.ic_nodes, P.Positive, out _workingCount);
+        workingRow.AddView(workingChip, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        // Сколько прибавилось и сколько убыло после проверок: «+3 −1».
+        _workingDelta = Ui.Text(this, string.Empty, 11.5f, P.Muted, bold: true);
+        _workingDelta.SetPadding(Ui.Dp(this, 8), 0, 0, 0);
+        _workingDelta.Visibility = ViewStates.Gone;
+        workingRow.AddView(_workingDelta, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        card.AddView(workingRow);
+
         // Мини-иконки сервисов с числом проверенных серверов, которые к ним подключаются.
         var counters = Ui.Row(this);
-        counters.SetPadding(0, Ui.Dp(this, 10), 0, 0);
+        counters.SetPadding(0, Ui.Dp(this, 6), 0, 0);
         counters.AddView(ServiceCounter(Resource.Drawable.ic_service_youtube_brand, P.YouTube, out _youtubeCount,
                 tintIcon: false),
             new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
@@ -506,8 +565,31 @@ public sealed partial class MainActivity : BaseActivity
 
     /// <summary>Счётчики сервисов: рабочие серверы с подтверждённым доступом.</summary>
     private void UpdateServiceCounters(
-        (int Total, int Working, int Universal, int Youtube, int Telegram, int Discord) summary)
+        (int Total, int Working, int Universal, int Youtube, int Telegram, int Discord) summary,
+        int workingServers)
     {
+        if (_workingCount is not null)
+        {
+            // Общее число рабочих серверов — из списка рабочих, отдельно от значков сервисов.
+            _workingCount.Text = workingServers.ToString();
+        }
+
+        if (_workingDelta is not null)
+        {
+            // Одна цифра у значка — последнее изменение: «+2» или «−1». Держим её,
+            // пока число рабочих снова не изменится; при нуле не показываем.
+            if (_workingChange == 0)
+            {
+                _workingDelta.Visibility = ViewStates.Gone;
+            }
+            else
+            {
+                _workingDelta.Text = _workingChange > 0 ? $"+{_workingChange}" : $"−{-_workingChange}";
+                _workingDelta.SetTextColor(_workingChange > 0 ? P.Positive : P.Warning);
+                _workingDelta.Visibility = ViewStates.Visible;
+            }
+        }
+
         if (_youtubeCount is not null)
         {
             _youtubeCount.Text = summary.Youtube.ToString();
@@ -617,7 +699,7 @@ public sealed partial class MainActivity : BaseActivity
             }
             else
             {
-                var name = string.IsNullOrWhiteSpace(selected.Name) ? selected.Server : selected.Name;
+                var name = NodeDisplay.Name(selected);
                 if (name.Length > 42)
                 {
                     name = name[..41] + "…";
@@ -625,9 +707,13 @@ public sealed partial class MainActivity : BaseActivity
 
                 var endpoint = string.IsNullOrWhiteSpace(selected.Server)
                     ? string.Empty
-                    : $" · {selected.Server}:{selected.Port}";
+                    : $"{selected.Server}:{selected.Port}";
+                var endpointPart = string.IsNullOrWhiteSpace(endpoint) ||
+                                   name.Contains(endpoint, StringComparison.OrdinalIgnoreCase)
+                    ? string.Empty
+                    : " · " + endpoint;
                 var speed = selected.SpeedMbps is { } mbps ? $" · {mbps:0.#} Мбит/с" : string.Empty;
-                _nodeText.Text = $"{name}{endpoint} · {selected.DisplayDelay}{speed} · {new string('★', rating)}{new string('☆', 5 - rating)}";
+                _nodeText.Text = $"{name}{endpointPart} · {selected.DisplayDelay}{speed} · {new string('★', rating)}{new string('☆', 5 - rating)}";
             }
         }
 
@@ -670,6 +756,14 @@ public sealed partial class MainActivity : BaseActivity
                                          (_finding || DateTime.UtcNow < _headerDetailUntil)
                     ? _headerDetail
                     : "Загружаю серверы…";
+                // Одна загрузка на всё время чтения кэша: раньше каждый такт шапки
+                // запускал ещё одну задачу, и они толпились на одном замке.
+                if (_loadingRequested)
+                {
+                    return;
+                }
+
+                _loadingRequested = true;
                 _ = Task.Run(() =>
                 {
                     try
@@ -679,6 +773,7 @@ public sealed partial class MainActivity : BaseActivity
                     }
                     catch (Exception exception)
                     {
+                        _loadingRequested = false;
                         AppLog.Write("android", "Не удалось прочитать серверы", exception);
                         RunOnUiThread(() => _connectionStatus!.Text = "Серверы не прочитаны: " + exception.Message);
                     }
@@ -688,13 +783,27 @@ public sealed partial class MainActivity : BaseActivity
 
             try
             {
-                var summary = NodeStore.Summary();
-                UpdateServiceCounters(summary);
+                var summary = NodeStore.Summary(requireFresh: false);
+                // Значок «рабочих» — серверы из рабочего списка, которые реально что-то
+                // открывают (объединение значков сервисов). Один сервер может открывать
+                // несколько сервисов, поэтому сумма значков больше общего числа.
+                var workingServers = summary.Working;
+                // Последнее изменение числа рабочих фиксируем и держим, пока оно не сменится.
+                if (_lastWorkingSeen < 0)
+                {
+                    _lastWorkingSeen = workingServers;
+                }
+                else if (workingServers != _lastWorkingSeen)
+                {
+                    _workingChange = workingServers - _lastWorkingSeen;
+                    _lastWorkingSeen = workingServers;
+                }
 
-                // «Рабочих» и «универсальных» отдельно не пишем: это уже видно по иконкам сервисов.
+                UpdateServiceCounters(summary, workingServers);
+
                 // Во время подключения показываем ход поиска сервера, а не сводку.
                 // Фоновая проверка тоже видна: без этого казалось, что приложение молчит.
-                var countText = $"В списке {summary.Total} серверов";
+                var countText = $"В списке {summary.Total} серверов · рабочих {workingServers}";
                 var probeActivity = ProbeClient.ActivityText;
                 _connectionStatus.Text = _connecting && _connectText is not null
                     ? _connectText
@@ -703,9 +812,9 @@ public sealed partial class MainActivity : BaseActivity
                         : probeActivity ?? countText;
                 if (_findButton is not null && !_connecting)
                 {
-                    _findButton.Text = _finding || (ProbeClient.IsRunning && !ProbeClient.IsPaused)
-                        ? "Остановить поиск"
-                        : "Проверить серверы";
+                    // «Остановить поиск» — только для ручного прогона: фоновая проверка
+                    // не должна выглядеть так, будто пользователь её запустил.
+                    _findButton.Text = _finding ? "Остановить поиск" : "Проверить серверы";
                 }
             }
             catch (Exception exception)
@@ -889,14 +998,27 @@ public sealed partial class MainActivity : BaseActivity
 
     /// <summary>
     /// Кнопка шапки «Проверить серверы»: проверяет ещё не проверенные серверы в процессе :probe
-    /// и показывает ход прямо в шапке, не уводя на другие вкладки. Повторное нажатие
-    /// во время поиска останавливает и текущую партию, и фоновый поиск.
+    /// и показывает ход прямо в шапке, не уводя на другие вкладки. Одно нажатие прогоняет
+    /// несколько партий подряд (по 200 серверов), повторное нажатие останавливает поиск
+    /// и текущую партию, и очередь следующих.
     /// </summary>
     private async Task FindNodesAsync()
     {
-        if (_finding || ProbeClient.IsRunning)
+        if (_finding)
         {
+            try
+            {
+                _findCts?.Cancel();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Прогон уже закончился.
+            }
+
             ProbeClient.Cancel();
+            // Кнопка обязана отвечать сразу: если прошлая партия ещё доигрывает отмену,
+            // её завершение не должно съедать следующее нажатие.
+            _finding = false;
             _headerDetail = "Поиск серверов остановлен";
             _headerDetailUntil = DateTime.UtcNow.AddSeconds(15);
             UpdateFindButton("Проверить серверы");
@@ -904,32 +1026,104 @@ public sealed partial class MainActivity : BaseActivity
             return;
         }
 
+        // Идёт фоновая партия: она уступает место ручному прогону, иначе нажатие
+        // «Проверить серверы» просто отменяло бы её и ничего не запускало.
+        if (ProbeClient.IsRunning)
+        {
+            ProbeClient.Cancel();
+            await Task.Delay(800);
+        }
+
         // Явное действие пользователя снимает прежнюю остановку.
         ProbeClient.Resume();
         _finding = true;
-        _headerDetail = "Проверяю серверы: готовлю проверку…";
+        // Запоминаем, сколько рабочих было до прогона: в итоговой строке покажем
+        // суммарное изменение за прогон.
+        _workingBaseline = NodeStore.Summary(requireFresh: false).Working;
+        var cts = new CancellationTokenSource();
+        _findCts = cts;
+        var first = $"Проверяю серверы: партия 1 из {ProbeClient.ManualBatches}…";
+        _headerDetail = first;
         UpdateFindButton("Остановить поиск");
         RefreshHeader();
 
         try
         {
-            await Task.Run(() => NodeStore.EnsureLoaded());
-            var progress = new Progress<ProbeProgress>(state => RunOnUiThread(() =>
+            await Task.Run(() => NodeStore.EnsureLoaded(), cts.Token);
+
+            // Поиск новых серверов и перепроверка рабочих — разные проходы.
+            // Рабочие не занимают места в партиях поиска: иначе одна и та же десятка
+            // живых серверов проверялась бы в каждой партии.
+            var (summary, batches) = await ProbeClient.RunBatchesAsync(
+                ProbeClient.ManualBatches,
+                NodeTester.MaxBatch,
+                cts.Token,
+                recheckWorking: false,
+                batchStarted: (batch, total) => RunOnUiThread(() =>
+                {
+                    _headerDetail = $"Проверяю серверы: партия {batch} из {total}…";
+                    RefreshHeader();
+                }),
+                progress: (batch, state) => RunOnUiThread(() =>
+                {
+                    // «Нашёл» — сколько НОВЫХ серверов открылось в этой партии,
+                    // а не число повторно подтверждённых рабочих.
+                    _headerDetail = state.Total > 0
+                        ? $"Партия {batch} из {ProbeClient.ManualBatches}: " +
+                          $"{state.Tested} из {state.Total} · нашёл {state.Working}"
+                        : $"Проверяю серверы: партия {batch} из {ProbeClient.ManualBatches}…";
+                    RefreshHeader();
+                }),
+                batchFinished: (batch, totalBatches, result) => RunOnUiThread(() =>
+                {
+                    // Итог партии: сколько проверено и сколько НОВЫХ в ней нашлось.
+                    // Общее число и прибавка видны на значке под шапкой.
+                    _headerDetail = result.Tested > 0
+                        ? $"Партия {batch} из {totalBatches}: проверено {result.Tested}, " +
+                          $"новых {result.NewWorking}"
+                        : $"Партия {batch} из {totalBatches}: проверять нечего";
+                    RefreshHeader();
+                }));
+
+            // Отдельный проход по уже рабочим серверам: их немного, и они важнее
+            // найденных только что. Показываем его другой строкой.
+            var recheckedWorking = 0;
+            if (!cts.IsCancellationRequested && NodeStore.WorkingCount > 0)
             {
-                _headerDetail = state.Total > 0
-                    ? $"Проверяю серверы: {state.Tested} из {state.Total} · рабочих {state.Working}"
-                    : "Проверяю серверы…";
-                RefreshHeader();
-            }));
+                RunOnUiThread(() =>
+                {
+                    _headerDetail = "Проверяю рабочие серверы…";
+                    RefreshHeader();
+                });
+                var workingProgress = new Progress<ProbeProgress>(state => RunOnUiThread(() =>
+                {
+                    _headerDetail = state.Total > 0
+                        ? $"Проверяю рабочие: {state.Tested} из {state.Total} · живых {state.Working}"
+                        : "Проверяю рабочие серверы…";
+                    RefreshHeader();
+                }));
+                var recheck = await ProbeClient.RunBatchAsync(
+                    NodeTester.MaxBatch, cts.Token, workingProgress, workingOnly: true, manual: true);
+                recheckedWorking = recheck.Tested;
+            }
 
-            // recheckWorking: false — ищем именно непроверенные серверы, не тратя трафик
-            // на только что проверенные рабочие.
-            var summary = await ProbeClient.RunBatchAsync(
-                NodeTester.MaxBatch, CancellationToken.None, progress, recheckWorking: false);
-
-            _headerDetail = summary.Error is not null
-                ? summary.Error
-                : $"Проверено {summary.Tested}: рабочих {summary.Working}";
+            var live = NodeStore.Summary(requireFresh: false).Working;
+            var change = live - _workingBaseline;
+            var changeText = change == 0
+                ? string.Empty
+                : change > 0 ? $" (+{change})" : $" (−{-change})";
+            _headerDetail = cts.IsCancellationRequested
+                ? "Поиск серверов остановлен"
+                : summary.Tested == 0
+                    ? summary.Error ?? "Проверять нечего: все серверы проверены недавно"
+                    : $"Проверено {summary.Tested} серверов за {batches} " +
+                      $"{(batches == 1 ? "партию" : batches < 5 ? "партии" : "партий")}" +
+                      (recheckedWorking > 0 ? $", рабочих {recheckedWorking}" : string.Empty) +
+                      $": рабочих {live}{changeText}";
+        }
+        catch (System.OperationCanceledException)
+        {
+            _headerDetail = "Поиск серверов остановлен";
         }
         catch (Exception exception)
         {
@@ -938,8 +1132,16 @@ public sealed partial class MainActivity : BaseActivity
         }
         finally
         {
+            if (ReferenceEquals(_findCts, cts))
+            {
+                _findCts = null;
+            }
+
+            cts.Dispose();
             _finding = false;
             _headerDetailUntil = DateTime.UtcNow.AddSeconds(20);
+            // Итог прогона — в кэш сразу, не дожидаясь пятиминутной очереди.
+            _ = Task.Run(() => NodeStore.SaveNodes(force: true));
             UpdateFindButton("Проверить серверы");
             RefreshHeader();
         }
@@ -978,6 +1180,8 @@ public sealed partial class MainActivity : BaseActivity
     }
 
     private bool _finding;
+    private CancellationTokenSource? _findCts;
+    private bool _loadingRequested;
     private bool _switchingNode;
     private string? _headerDetail;
     private DateTime _headerDetailUntil = DateTime.MinValue;
@@ -1397,7 +1601,7 @@ public sealed partial class MainActivity : BaseActivity
                     return;
                 }
 
-                NodeStore.AddManual(node);
+                await Task.Run(() => NodeStore.AddManual(node));
                 candidates = new List<ProxyNode> { node };
             }
             else

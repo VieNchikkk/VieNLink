@@ -1,4 +1,5 @@
 using Libbox;
+using Android.Net;
 
 namespace VieNLink.Mobile;
 
@@ -12,6 +13,9 @@ namespace VieNLink.Mobile;
 internal sealed class LibBoxPlatform : Java.Lang.Object, IPlatformInterface
 {
     private LocalDnsTransport? _dns;
+    private ConnectivityManager? _connectivity;
+    private DefaultNetworkCallback? _networkCallback;
+    private IInterfaceUpdateListener? _interfaceListener;
 
     /// <summary>
     /// Платформа одна на процесс. TUN и protect берутся у текущей службы
@@ -101,10 +105,98 @@ internal sealed class LibBoxPlatform : Java.Lang.Object, IPlatformInterface
     }
 
     public void StartDefaultInterfaceMonitor(IInterfaceUpdateListener? listener)
-        => TunnelService.Active?.StartDefaultInterfaceMonitor(listener);
+    {
+        if (TunnelService.Active is not null)
+        {
+            TunnelService.Active.StartDefaultInterfaceMonitor(listener);
+            return;
+        }
+
+        // Процесс :probe: VPN-службы нет, поэтому определяем интерфейс по умолчанию сами.
+        // Иначе ядро пишет «missing default interface» и не может проверить серверы.
+        if (listener is null)
+        {
+            return;
+        }
+
+        _interfaceListener = listener;
+        _connectivity ??= (ConnectivityManager?)Android.App.Application.Context
+            .GetSystemService(Android.Content.Context.ConnectivityService);
+        if (_networkCallback is null && _connectivity is not null)
+        {
+            _networkCallback = new DefaultNetworkCallback(RefreshDefaultInterface);
+            _connectivity.RegisterDefaultNetworkCallback(_networkCallback);
+        }
+
+        RefreshDefaultInterface();
+    }
 
     public void CloseDefaultInterfaceMonitor(IInterfaceUpdateListener? listener)
-        => TunnelService.Active?.CloseDefaultInterfaceMonitor(listener);
+    {
+        if (_networkCallback is not null && _connectivity is not null)
+        {
+            try
+            {
+                _connectivity.UnregisterNetworkCallback(_networkCallback);
+            }
+            catch (Exception)
+            {
+                // Колбэк мог быть уже снят системой.
+            }
+        }
+
+        _networkCallback = null;
+        _interfaceListener = null;
+    }
+
+    /// <summary>Находит физический интерфейс с интернетом (не VPN) и отдаёт его ядру :probe.</summary>
+    private void RefreshDefaultInterface()
+    {
+        if (_interfaceListener is null || _connectivity is null)
+        {
+            return;
+        }
+
+        try
+        {
+            foreach (var network in _connectivity.GetAllNetworks())
+            {
+                var capabilities = _connectivity.GetNetworkCapabilities(network);
+                if (capabilities is null ||
+                    !capabilities.HasCapability(NetCapability.Internet) ||
+                    capabilities.HasTransport(TransportType.Vpn))
+                {
+                    continue;
+                }
+
+                var link = _connectivity.GetLinkProperties(network);
+                var name = link?.InterfaceName;
+                if (string.IsNullOrEmpty(name))
+                {
+                    continue;
+                }
+
+                var index = 0;
+                try
+                {
+                    index = Java.Net.NetworkInterface.GetByName(name)?.Index ?? 0;
+                }
+                catch (Exception)
+                {
+                    // Индекс не критичен: ядро умеет работать и без него.
+                }
+
+                var metered = !capabilities.HasCapability(NetCapability.NotMetered);
+                _interfaceListener.UpdateDefaultInterface(name, index, metered, false);
+                Android.Util.Log.Info("VieNLink", $"интерфейс по умолчанию (probe): {name} ({index}), metered={metered}");
+                return;
+            }
+        }
+        catch (Exception exception)
+        {
+            Android.Util.Log.Warn("VieNLink", "не удалось определить интерфейс (probe): " + exception.Message);
+        }
+    }
 
     public void StartNeighborMonitor(INeighborUpdateListener? listener)
     {

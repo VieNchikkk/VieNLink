@@ -137,11 +137,11 @@ public partial class MainWindow
             return;
         }
 
-        var name = string.IsNullOrWhiteSpace(node.Name) ? node.Server : node.Name;
+        var name = NodeDisplay.Name(node);
         var endpoint = string.IsNullOrWhiteSpace(node.Server)
             ? name
             : $"{node.Server}:{node.Port}";
-        var (flag, countryCode) = ExtractCountryFlag(node.Name);
+        var (flag, countryCode) = ExtractCountryFlag(name);
         var country = CountryNames.FromCode(countryCode);
         var location = flag.Length == 0
             ? string.Empty
@@ -780,7 +780,7 @@ public partial class MainWindow
                     : $"Скорость «{node.Name}»: {mbps:0.0} Мбит/с");
             }
 
-            NodeSourceService.SaveCache(AllRows.Select(r => r.Node).ToList());
+            NodeCacheWriter.Save(AllRows.Select(r => r.Node).ToList());
             SetStatus("Замер скорости завершён", $"Замерено серверов: {targets.Count}");
         }
         catch (OperationCanceledException)
@@ -872,6 +872,13 @@ public partial class MainWindow
     private async Task AutoUpdateCoreOnStartupAsync()
     {
         if (_closing || _settings.AutomationPaused)
+        {
+            return;
+        }
+
+        // Обновление можно выключить, но отсутствующее ядро ставим всегда:
+        // без него не работает подключение, а ручной установки в интерфейсе нет.
+        if (!_settings.AutoUpdateCore && SingBoxCore.IsInstalled)
         {
             return;
         }

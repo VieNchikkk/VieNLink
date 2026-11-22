@@ -315,10 +315,17 @@ public sealed class NodesActivity : BaseActivity
 
         try
         {
-            var progress = new Progress<ProbeProgress>(ShowTestProgress);
+            // Несколько партий подряд по одному нажатию: 5 × 200 = до 1000 серверов.
             // Ручная проверка перепроверяет и рабочие серверы, иначе счётчики не менялись бы.
-            var summary = await ProbeClient.RunBatchAsync(
-                NodeTester.MaxBatch, _work.Token, progress, recheckWorking: true);
+            var (summary, _) = await ProbeClient.RunBatchesAsync(
+                ProbeClient.ManualBatches,
+                NodeTester.MaxBatch,
+                _work.Token,
+                recheckWorking: true,
+                batchStarted: (batch, total) =>
+                    ShowTestProgress(new ProbeProgress($"Партия {batch} из {total}", 0, 0, 0)),
+                progress: (batch, state) => ShowTestProgress(
+                    state with { Stage = $"Партия {batch} из {ProbeClient.ManualBatches}" }));
             SetProgress(MainActivity.DescribeTestResult(summary));
         }
         catch (Exception exception)

@@ -174,6 +174,40 @@ internal sealed class SourceRow : INotifyPropertyChanged
 
     public string CountLabel => Source.LastNodeCount > 0 ? Source.LastNodeCount.ToString() : "—";
 
+    /// <summary>Всего уникальных серверов, когда-либо собранных из источника.</summary>
+    public string TotalLabel => Source.TotalNodeCount > 0
+        ? Source.TotalNodeCount.ToString()
+        : CountLabel;
+
+    private int _workingCount;
+    private bool _workingCountSet;
+
+    /// <summary>
+    /// Сколько рабочих серверов сейчас числится за источником. Считается по текущему
+    /// списку рабочих серверов, а не по числу найденных ссылок: источник с сотнями
+    /// мёртвых ссылок и нулём рабочих — кандидат на удаление.
+    /// </summary>
+    public int WorkingCount
+    {
+        get => _workingCount;
+        set
+        {
+            _workingCountSet = true;
+            if (_workingCount == value)
+            {
+                return;
+            }
+
+            _workingCount = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(WorkingLabel));
+        }
+    }
+
+    public string WorkingLabel => SourceKinds.IsProxy(Source)
+        ? "—"
+        : !_workingCountSet ? "—" : _workingCount.ToString();
+
     public string TrafficLabel => Source.SubscriptionInfo ?? "—";
 
     public string StatusLabel => Source.LastError is not null

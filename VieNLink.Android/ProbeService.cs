@@ -28,6 +28,9 @@ public sealed class ProbeService : Service
     private int _progressWorking;
     private int _progressTotal;
 
+    /// <summary>1 — проверка в этом процессе уже идёт: второй запуск писал бы те же файлы.</summary>
+    private int _running;
+
     public override void OnCreate()
     {
         base.OnCreate();
@@ -47,6 +50,14 @@ public sealed class ProbeService : Service
         }
 
         var requestPath = intent?.GetStringExtra(ProbeProtocol.ExtraRequest);
+        // Две проверки в одном процессе писали бы один и тот же файл прогресса и мешали
+        // друг другу. Если прошлая партия ещё идёт — новая команда пропускается.
+        if (Interlocked.CompareExchange(ref _running, 1, 0) != 0)
+        {
+            AppLog.Write(Tag, "Проверка уже идёт: повторный запуск процесса пропущен");
+            return StartCommandResult.NotSticky;
+        }
+
         StartWatchdog();
         _ = Task.Run(() => RunAsync(requestPath));
         return StartCommandResult.NotSticky;
@@ -240,6 +251,20 @@ public sealed class ProbeService : Service
                            ?? SubscriptionParser.Parse(item.RawLink, "probe").FirstOrDefault();
                 if (node is not null)
                 {
+                    // Прежний статус, счётчик провалов и результат последней удачной проверки:
+                    // без них рабочий сервер удалялся бы после первого же провала (правило
+                    // «5 провалов подряд» не работало), а при мягком провале терял бы
+                    // «подтверждённый доступ» — RegisterFailure сохраняет флаги, но сохранять
+                    // было бы нечего, и основной процесс затирал бы реальные отметки.
+                    node.Status = item.Status;
+                    node.FailCount = item.FailCount;
+                    node.DelayMs = item.DelayMs;
+                    node.CheckedAtUtc = item.CheckedAtUtc;
+                    node.YoutubeOk = item.YoutubeOk;
+                    node.TelegramOk = item.TelegramOk;
+                    node.UniversalOk = item.UniversalOk;
+                    node.DiscordOk = item.DiscordOk;
+                    node.OpenDomains = item.OpenDomains;
                     parsed.Add((item.Id, node));
                 }
             }
@@ -252,6 +277,9 @@ public sealed class ProbeService : Service
 
             _progressTotal = parsed.Count;
             WriteProgress("Готовлю пробное ядро…", 0, _progressTotal, 0, force: true);
+            AppLog.Write(Tag,
+                $"Получено серверов {parsed.Count}, из них рабочих " +
+                $"{parsed.Count(pair => pair.Node.Status == NodeStatus.Working)}");
 
             // Лимит конфига: не тащим в пробное ядро больше 200 серверов.
             var nodes = parsed.Select(pair => pair.Node).Take(200).ToList();
@@ -309,10 +337,10 @@ public sealed class ProbeService : Service
                 api,
                 accepted.Select(pair => pair.Node).ToList(),
                 progress: null,
-                onTested: node =>
+                onTested: (node, isNew) =>
                 {
                     var tested = Interlocked.Increment(ref _progressTested);
-                    if (node.Status == NodeStatus.Working)
+                    if (isNew)
                     {
                         Interlocked.Increment(ref _progressWorking);
                     }
@@ -404,6 +432,7 @@ public sealed class ProbeService : Service
 
             // Процесс :probe нужен только на время проверки: после записи результата
             // завершаем его, чтобы Go-куча не висела в памяти телефона.
+            Interlocked.Exchange(ref _running, 0);
             _ = Task.Run(async () =>
             {
                 await Task.Delay(500);

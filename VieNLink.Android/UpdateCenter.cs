@@ -31,7 +31,8 @@ internal static class UpdateCenter
             return;
         }
 
-        if (!force && SettingsStore.Current.AutomationPaused)
+        if (!force && (SettingsStore.Current.AutomationPaused ||
+                       !SettingsStore.Current.AutoCheckAppUpdates))
         {
             return;
         }
@@ -103,7 +104,8 @@ internal static class UpdateCenter
     /// <summary>Фоновая проверка из обслуживания: без загрузки, только уведомление.</summary>
     public static async Task CheckInBackgroundAsync(Context context)
     {
-        if (StoreBuildInfo.IsStoreBuild || SettingsStore.Current.AutomationPaused)
+        if (StoreBuildInfo.IsStoreBuild || SettingsStore.Current.AutomationPaused ||
+            !SettingsStore.Current.AutoCheckAppUpdates)
         {
             return;
         }

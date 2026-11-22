@@ -18,6 +18,28 @@ internal sealed class ProbeRequestNode
 {
     public string Id { get; set; } = string.Empty;
     public string RawLink { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Прежний статус сервера: процесс :probe разбирает ссылку в новый объект, и без этого
+    /// он считал бы любой сервер непроверенным, удаляя рабочий после первого же провала.
+    /// </summary>
+    public NodeStatus Status { get; set; }
+
+    /// <summary>Счётчик провалов подряд: рабочий сервер удаляется только после 5-го.</summary>
+    public int FailCount { get; set; }
+
+    /// <summary>
+    /// Результат последней удачной проверки: его тоже пересылаем в :probe, иначе при
+    /// мягком провале рабочего сервера сохранять было бы нечего — :probe разбирает ссылку
+    /// заново, и флаги оказались бы пустыми, а основной процесс затирал бы реальные отметки.
+    /// </summary>
+    public int? DelayMs { get; set; }
+    public DateTime? CheckedAtUtc { get; set; }
+    public bool? YoutubeOk { get; set; }
+    public bool? TelegramOk { get; set; }
+    public bool? UniversalOk { get; set; }
+    public bool? DiscordOk { get; set; }
+    public int OpenDomains { get; set; }
 }
 
 /// <summary>Результаты проверки: основной процесс применяет их к своему NodeStore.</summary>

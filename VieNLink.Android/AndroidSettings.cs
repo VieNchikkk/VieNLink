@@ -73,12 +73,9 @@ internal static class AndroidSettingsStore
                     loaded.AppRouteMode = AppRouteMode.OnlyListed;
                 }
 
-                // Автоматика убрана из «Настроек»: значения всегда по умолчанию.
-                // Автоподключение после загрузки не нужно, фоновая проверка и MTProto — нужны.
-                if (!loaded.AutoProbe || !loaded.AutoMtProto || loaded.AutoConnectOnBoot)
+                // Автоподключение после загрузки не нужно и переключателя в интерфейсе нет.
+                if (loaded.AutoConnectOnBoot)
                 {
-                    loaded.AutoProbe = true;
-                    loaded.AutoMtProto = true;
                     loaded.AutoConnectOnBoot = false;
                     JsonFileStore.Write(Path, loaded);
                 }

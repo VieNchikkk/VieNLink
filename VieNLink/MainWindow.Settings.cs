@@ -54,8 +54,13 @@ public partial class MainWindow
         _settings.AutoUpdateHours = ParseInt(AutoUpdateHoursBox, _settings.AutoUpdateHours, 1, 168);
         _settings.KeepUnseenNodeDays = ParseInt(KeepUnseenDaysBox, _settings.KeepUnseenNodeDays, 1, 365);
         _settings.AutoRefreshMinutes = ParseInt(AutoRefreshBox, _settings.AutoRefreshMinutes, 0, 1440);
+        _settings.AutoCollectServers = AutoCollectServersCheck.IsChecked == true &&
+                                      _settings.AutoRefreshMinutes > 0;
         _settings.AutoDiscoverSources = AutoDiscoverCheck.IsChecked == true;
         _settings.AutoDiscoverHours = ParseInt(AutoDiscoverHoursBox, _settings.AutoDiscoverHours, 1, 168);
+        _settings.AutoMtProto = AutoMtProtoCheck.IsChecked == true;
+        _settings.AutoUpdateCore = AutoCoreUpdateCheck.IsChecked == true;
+        _settings.AutoCheckAppUpdates = AutoCheckAppUpdatesCheck.IsChecked == true;
         ApplyRoutingSettingsFromUi();
 
         LoadSettingsToUi();
@@ -69,7 +74,7 @@ public partial class MainWindow
         {
             ReplaceNodes(AllRows.Select(r => r.Node).ToList());
             var kept = AllRows.Select(r => r.Node).ToList();
-            await Task.Run(() => NodeSourceService.SaveCache(kept));
+            await Task.Run(() => NodeCacheWriter.Save(kept, force: true));
             SetStatus("Лимит серверов уменьшен", $"В списке {kept.Count} из {_settings.MaxTotalNodes}");
         }
 

@@ -10,7 +10,8 @@ internal sealed record NodeTestSummary(
     int Youtube = 0,
     int Telegram = 0,
     int Discord = 0,
-    int BestDomains = 0);
+    int BestDomains = 0,
+    int NewWorking = 0);
 
 /// <summary>
 /// Проверка задержки серверов через Clash API внутри libbox (127.0.0.1:20801).
@@ -21,10 +22,10 @@ internal static class NodeTester
 {
     /// <summary>
     /// За один прогон проверяем не весь список: мобильный канал слабее, а каждый запрос
-    /// идёт через сервер и тратит его трафик. 100 — компромисс: партия успевает
-    /// завершиться и не зависает на одном проблемном конфиге.
+    /// идёт через сервер и тратит его трафик. 200 — крупнее партия, значит меньше
+    /// холодных запусков процесса :probe и меньше нагрузки на телефон.
     /// </summary>
-    public const int MaxBatch = 100;
+    public const int MaxBatch = 200;
 
     public const int Concurrency = 12;
     public const int TimeoutMs = 4000;
@@ -78,7 +79,7 @@ internal static class NodeTester
         {
             NodeStore.EnsureLoaded();
 
-            var ordered = NodeStore.OrderForConfig(NodeStore.Nodes);
+            var ordered = NodeStore.OrderForConfig(NodeStore.Snapshot());
             if (ordered.Count == 0)
             {
                 return new NodeTestSummary(0, 0, 0, "Список серверов пуст: обновите источники");
@@ -321,7 +322,7 @@ internal static class NodeTester
         ClashApiClient api,
         IReadOnlyList<ProxyNode> candidates,
         IProgress<string>? progress,
-        Action<ProxyNode>? onTested,
+        Action<ProxyNode, bool>? onTested,
         CancellationToken cancellationToken,
         int concurrency = 12,
         int timeoutMs = TimeoutMs,
@@ -339,6 +340,7 @@ internal static class NodeTester
                      node.OpenDomains, node.FailCount));
 
         var working = 0;
+        var newWorking = 0;
         var universal = 0;
         var youtube = 0;
         var telegram = 0;
@@ -351,41 +353,71 @@ internal static class NodeTester
             await limiter.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                var results = await Task.WhenAll(ProbeUrls.Select(async probe =>
-                {
-                    var delay = await api.TestDelayAsync(node.Tag, timeoutMs, cancellationToken, probe.Url)
-                        .ConfigureAwait(false);
-                    return (probe.Service, delay);
-                })).ConfigureAwait(false);
+                // Жёсткий предел на один сервер: зависший запрос не должен держать
+                // слот партии и останавливать счётчик прогресса.
+                using var nodeLimit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                nodeLimit.CancelAfter(TimeSpan.FromSeconds(20));
+                var nodeToken = nodeLimit.Token;
+
+                // Статус до проверки: рабочему серверу даём вторую попытку, чтобы
+                // разовая ошибка сети или занятость сервера не убирали его из счётчиков.
+                var wasWorking = node.Status == NodeStatus.Working;
+
+                async Task<(string Service, int? delay)[]> ProbeOnceAsync() =>
+                    await Task.WhenAll(ProbeUrls.Select(async probe =>
+                    {
+                        var delay = await api.TestDelayAsync(node.Tag, timeoutMs, nodeToken, probe.Url)
+                            .ConfigureAwait(false);
+                        return (probe.Service, delay);
+                    })).ConfigureAwait(false);
+
+                var results = await ProbeOnceAsync().ConfigureAwait(false);
 
                 var anyOpened = results.Any(result => result.delay is not null);
                 var universalDelay = results
                     .FirstOrDefault(result => result.Service == "Cloudflare").delay;
 
-                node.CheckedAtUtc = DateTime.UtcNow;
-                node.TriedAtUtc = DateTime.UtcNow;
-                node.DelayMs = universalDelay;
-                node.UniversalOk = universalDelay is not null;
-                node.YoutubeOk = Opened(results, "YouTube");
-                node.TelegramOk = Opened(results, "Telegram");
-                node.DiscordOk = Opened(results, "Discord");
-                if (fullDomains)
+                if (!anyOpened && wasWorking && !nodeToken.IsCancellationRequested)
                 {
-                    node.OpenDomains = anyOpened
-                        ? await CountOpenDomainsAsync(api, node.Tag, cancellationToken, timeoutMs)
-                            .ConfigureAwait(false)
-                        : 0;
-                }
-                else if (!anyOpened)
-                {
-                    // Быстрая перепроверка не меряет домены, но мёртвый сервер их теряет.
-                    node.OpenDomains = 0;
+                    try
+                    {
+                        await Task.Delay(600, nodeToken).ConfigureAwait(false);
+                    }
+                    catch (System.OperationCanceledException)
+                    {
+                        // Предел партии: вторую попытку не делаем.
+                    }
+
+                    if (!nodeToken.IsCancellationRequested)
+                    {
+                        results = await ProbeOnceAsync().ConfigureAwait(false);
+                        anyOpened = results.Any(result => result.delay is not null);
+                        universalDelay = results
+                            .FirstOrDefault(result => result.Service == "Cloudflare").delay;
+                    }
                 }
 
+                node.TriedAtUtc = DateTime.UtcNow;
                 if (anyOpened)
                 {
+                    node.CheckedAtUtc = DateTime.UtcNow;
+                    node.DelayMs = universalDelay;
+                    node.UniversalOk = universalDelay is not null;
+                    node.YoutubeOk = Opened(results, "YouTube");
+                    node.TelegramOk = Opened(results, "Telegram");
+                    node.DiscordOk = Opened(results, "Discord");
+                    if (fullDomains)
+                    {
+                        node.OpenDomains = await CountOpenDomainsAsync(api, node.Tag, nodeToken, timeoutMs)
+                            .ConfigureAwait(false);
+                    }
+
                     NodeHealth.RegisterSuccess(node);
                     Interlocked.Increment(ref working);
+                    if (!wasWorking)
+                    {
+                        Interlocked.Increment(ref newWorking);
+                    }
                     if (universalDelay is not null)
                     {
                         Interlocked.Increment(ref universal);
@@ -406,12 +438,31 @@ internal static class NodeTester
                         Interlocked.Increment(ref discord);
                     }
                 }
+                else if (wasWorking)
+                {
+                    // Рабочий сервер провалил проверку: результат последней удачной
+                    // проверки оставляем, время успеха не обновляем. Сервер сам выпадет
+                    // из «свежих» для выбора, но из рабочего списка не исчезнет.
+                    NodeHealth.RegisterFailure(node);
+                }
                 else
                 {
+                    // Непроверенный: данных нет, отметку проверки и провал фиксируем.
+                    node.CheckedAtUtc = DateTime.UtcNow;
+                    node.DelayMs = null;
+                    node.UniversalOk = false;
+                    node.YoutubeOk = false;
+                    node.TelegramOk = false;
+                    node.DiscordOk = false;
+                    if (fullDomains || anyOpened)
+                    {
+                        node.OpenDomains = 0;
+                    }
+
                     NodeHealth.RegisterFailure(node);
                 }
 
-                onTested?.Invoke(node);
+                onTested?.Invoke(node, !wasWorking && anyOpened);
             }
             finally
             {
@@ -467,7 +518,7 @@ internal static class NodeTester
         progress?.Report($"Готово: рабочих {working} из {candidates.Count} ({services}), " +
                          $"лучший открывает доменов {bestDomains}");
         return new NodeTestSummary(candidates.Count, working, 0, null,
-            universal, youtube, telegram, discord, bestDomains);
+            universal, youtube, telegram, discord, bestDomains, newWorking);
     }
 
     /// <summary>Открылся ли хотя бы один адрес указанного сервиса.</summary>

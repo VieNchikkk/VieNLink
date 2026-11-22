@@ -135,8 +135,9 @@ Shadowsocks / Hysteria2 из открытых списков и подписок
 
 Android-клиент (`VieNLink.Android`, `com.vienlink.app`) повторяет основные возможности
 Windows-версии без MAUI: VPN-туннель через `VpnService` и `libbox` (sing-box), проверка узлов
-в отдельном процессе `:probe`, экраны «Подключение / Обход / Инструменты / Журнал / Общие»,
-виджет и плитка, split-tunnel по приложениям, MTProto для Telegram и TUN-обход (бета).
+в отдельном процессе `:probe`, экраны «Подключение / Обход / Инструменты / Настройки»
+(журнал открывается из «Инструментов»), виджет и плитка, split-tunnel по приложениям,
+MTProto для Telegram и TUN-обход (бета).
 
 1. Скачайте [VieNLink-1.3.0-android.apk](https://github.com/VieNchikkk/VieNLink/releases/download/v1.3.0-android/VieNLink-1.3.0-android.apk)
    и откройте файл на телефоне. Android-версия публикуется отдельным релизом

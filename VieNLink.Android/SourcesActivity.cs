@@ -22,6 +22,7 @@ public sealed class SourcesActivity : BaseActivity
     private TextView? _summary;
     private TextView? _progress;
     private bool _busy;
+    private bool _loaded;
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
@@ -102,6 +103,7 @@ public sealed class SourcesActivity : BaseActivity
 
         _list.RemoveAllViews();
         var sources = NodeStore.SnapshotSources();
+        var workingBySource = NodeStore.WorkingBySource();
         var nodeSources = sources
             .Where(source => !SourceKinds.IsProxy(source))
             .OrderByDescending(source => source.IsMine)
@@ -125,7 +127,7 @@ public sealed class SourcesActivity : BaseActivity
         {
             foreach (var source in nodeSources)
             {
-                AddSourceCard(source);
+                AddSourceCard(source, workingBySource);
             }
         }
 
@@ -140,13 +142,25 @@ public sealed class SourcesActivity : BaseActivity
         {
             foreach (var source in telegramSources)
             {
-                AddSourceCard(source);
+                AddSourceCard(source, workingBySource);
             }
+        }
+
+        _loaded = true;
+    }
+
+    protected override void OnResume()
+    {
+        base.OnResume();
+        // Вернулись на экран после проверки серверов — числа рабочих могли измениться.
+        if (_loaded)
+        {
+            Reload();
         }
     }
 
     /// <summary>Карточка одного источника: общая для серверов и каналов Telegram.</summary>
-    private void AddSourceCard(SourceDefinition source)
+    private void AddSourceCard(SourceDefinition source, IReadOnlyDictionary<string, int> workingBySource)
     {
         if (_list is null)
         {
@@ -181,9 +195,22 @@ public sealed class SourcesActivity : BaseActivity
         card.AddView(url);
 
         var unit = isProxySource ? "прокси" : "серверов";
-        var count = source.LastNodeCount > 0
-            ? source.LastNodeCount + " " + unit
-            : (isProxySource ? "прокси пока нет" : "серверов пока нет");
+        string count;
+        if (isProxySource)
+        {
+            var total = source.TotalNodeCount > 0 ? source.TotalNodeCount : source.LastNodeCount;
+            count = total > 0 ? total + " " + unit : "прокси пока нет";
+        }
+        else if (source.TotalNodeCount > 0 || source.LastNodeCount > 0)
+        {
+            var working = workingBySource.TryGetValue(source.Name, out var found) ? found : 0;
+            var total = source.TotalNodeCount > 0 ? source.TotalNodeCount : source.LastNodeCount;
+            count = "всего: " + total + " · рабочих: " + working;
+        }
+        else
+        {
+            count = "серверов пока нет";
+        }
         var status = source.LastError is not null
             ? "ошибка: " + source.LastError
             : source.LastCheckedUtc is null
@@ -445,7 +472,7 @@ public sealed class SourcesActivity : BaseActivity
             var progress = new Progress<string>(SetProgress);
             var result = await SourceDiscoveryService.DiscoverAsync(
                 NodeStore.SnapshotSources(), progress, CancellationToken.None);
-            var added = NodeStore.AddDiscovered(result);
+            var added = await Task.Run(() => NodeStore.AddDiscovered(result));
             var mtproto = MtProtoStore.AddDiscovered(result.MtProto);
             SetProgress($"Новых источников {added}, серверов {result.Nodes.Count}, MTProto {mtproto}." +
                         (result.Error is null ? string.Empty : " Ошибка: " + result.Error));

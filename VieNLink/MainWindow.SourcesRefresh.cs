@@ -117,7 +117,7 @@ public partial class MainWindow
         // пишется в фоне: окно не должно ждать ни диск, ни сборку мусора.
         await Task.Run(() =>
         {
-            NodeSourceService.SaveCache(kept);
+            NodeCacheWriter.Save(kept, force: true);
             GC.Collect(GC.MaxGeneration, GCCollectionMode.Forced, blocking: false, compacting: true);
         });
 

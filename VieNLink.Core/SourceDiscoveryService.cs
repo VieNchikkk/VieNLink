@@ -199,6 +199,7 @@ internal static class SourceDiscoveryService
                     LastCheckedUtc = DateTime.UtcNow,
                     LastNodeCount = nodes.Count,
                 };
+                source.RegisterNodes(nodes);
 
                 result.Sources.Add(source);
                 result.Nodes.AddRange(nodes);
@@ -290,6 +291,7 @@ internal static class SourceDiscoveryService
                         LastCheckedUtc = DateTime.UtcNow,
                         LastNodeCount = nodes.Count,
                     };
+                    source.RegisterNodes(nodes);
 
                     result.Sources.Add(source);
                     result.Nodes.AddRange(nodes);

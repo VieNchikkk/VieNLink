@@ -423,7 +423,8 @@ public partial class MainWindow
                         _ = RefreshExitInfoAsync();
 
                         // t.me напрямую недоступен, но теперь канал можно прочитать через прокси.
-                        if (_sources.Any(s => s.Enabled && SourceKinds.IsProxy(s)))
+                        if (_settings.AutoMtProto &&
+                            _sources.Any(s => s.Enabled && SourceKinds.IsProxy(s)))
                         {
                             try
                             {
@@ -854,7 +855,7 @@ public partial class MainWindow
         ApplyTestedNode(node);
         // Кэш пишется в фоне: список может быть десятки тысяч серверов, не тормозим UI.
         var snapshot = AllRows.Select(r => r.Node).ToList();
-        _ = Task.Run(() => NodeSourceService.SaveCache(snapshot));
+        _ = Task.Run(() => NodeCacheWriter.Save(snapshot));
         AppendLog(removed
             ? $"Сервер удалён после {node.FailCount} провалов — {reason}"
             : $"Сервер не отвечает ({node.FailCount} из {NodeLimits.RemoveAfterFailures}) — {reason}");

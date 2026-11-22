@@ -20,7 +20,8 @@ public partial class MainWindow
     /// </summary>
     private async Task AutoCollectMtProtoAsync(bool force = false)
     {
-        if (_closing || _mtprotoCollecting || _busy || _settings.AutomationPaused)
+        if (_closing || _mtprotoCollecting || _busy || _settings.AutomationPaused ||
+            !_settings.AutoMtProto)
         {
             return;
         }
@@ -93,7 +94,8 @@ public partial class MainWindow
     {
         // Проверка идёт настоящим рукопожатием с Telegram, но партии небольшие,
         // чтобы не отнимать канал у видео.
-        if (_closing || _mtprotoChecking || _settings.AutomationPaused)
+        if (_closing || _mtprotoChecking || _settings.AutomationPaused ||
+            !_settings.AutoMtProto)
         {
             return;
         }

@@ -95,6 +95,14 @@ internal sealed class HiddenProbeService : IAsyncDisposable
                         alive.Select(node => node.Id), StringComparer.OrdinalIgnoreCase);
                     foreach (var node in ordered.Where(node => !aliveIds.Contains(node.Id)))
                     {
+                        // Грубый TCP-опрос не должен наказывать уже проверенный сервер:
+                        // мобильная/домашняя сеть может не дать соединения просто так.
+                        if (node.Status == NodeStatus.Working)
+                        {
+                            node.TriedAtUtc = DateTime.UtcNow;
+                            continue;
+                        }
+
                         NodeHealth.RegisterFailure(node);
                         onNodeTested?.Invoke(node);
                     }

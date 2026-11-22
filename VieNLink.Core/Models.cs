@@ -321,33 +321,54 @@ internal static class NodeDedup
 /// </summary>
 internal static class NodeHealth
 {
+    /// <summary>
+    /// Сколько первых провалов рабочего сервера не стирают его результат: разовая ошибка
+    /// сети или занятость бесплатного сервера не должна сразу убирать его из счётчиков.
+    /// </summary>
+    public const int GraceFailures = 2;
+
+    /// <summary>
+    /// Сколько провалов переживает непроверенный сервер. Раньше он удалялся с первого,
+    /// и одна сетевая ошибка вычищала целую партию найденных серверов.
+    /// </summary>
+    public const int UnverifiedFailures = 2;
+
     /// <summary>Отмечает неудачную проверку. true — сервер пора удалить.</summary>
     public static bool RegisterFailure(ProxyNode node)
     {
-        node.CheckedAtUtc = DateTime.UtcNow;
-        node.DelayMs = null;
-        node.YoutubeOk = false;
-        node.TelegramOk = false;
-        node.UniversalOk = false;
-        node.DiscordOk = false;
-        node.OpenDomains = 0;
+        var wasWorking = node.Status == NodeStatus.Working;
+        node.FailCount = Math.Max(1, node.FailCount + 1);
 
-        // Сервер ещё ни разу не открывал сайты — не храним его вовсе.
-        if (node.Status != NodeStatus.Working)
+        if (!wasWorking)
         {
-            node.FailCount = Math.Max(1, node.FailCount + 1);
-            node.Status = NodeStatus.Dead;
-            return true;
+            // Непроверенный: данные чистить нечего, второй провал подряд — не случайность.
+            node.CheckedAtUtc = DateTime.UtcNow;
+            node.DelayMs = null;
+            node.YoutubeOk = false;
+            node.TelegramOk = false;
+            node.UniversalOk = false;
+            node.DiscordOk = false;
+            node.OpenDomains = 0;
+            if (node.FailCount == UnverifiedFailures || node.FailCount >= NodeLimits.RemoveAfterFailures)
+            {
+                node.Status = NodeStatus.Dead;
+                return true;
+            }
+
+            node.TriedAtUtc = DateTime.UtcNow;
+            return false;
         }
 
-        node.FailCount = Math.Max(1, node.FailCount + 1);
+        // Рабочий сервер: результат последней удачной проверки сохраняем целиком.
+        // Счётчик провалов только растёт; удаляем после RemoveAfterFailures провалов подряд.
+        // Свежесть проверки (CheckedAtUtc) не обновляем — сервер сам выпадет из «свежих»,
+        // и кнопки сервисов перестанут его предлагать, но из рабочего списка он не исчезнет.
         if (node.FailCount >= NodeLimits.RemoveAfterFailures)
         {
             node.Status = NodeStatus.Dead;
             return true;
         }
 
-        // Остаётся в «Рабочих» без задержки: при следующей проверке попробуем снова.
         node.Status = NodeStatus.Working;
         return false;
     }
@@ -367,7 +388,7 @@ internal static class NodeHealth
 /// </summary>
 internal static class NodeLimits
 {
-    public const int DefaultMaxTotal = 12000;
+    public const int DefaultMaxTotal = 5000;
 
     /// <summary>
     /// Сколько вариантов одного сервера:порта оставлять. У бесплатных CDN под одним
@@ -388,8 +409,8 @@ internal static class NodeLimits
     public const int MinWorkingNodes = 10;
 
     /// <summary>Сколько рабочих серверов нужно на каждый сервис: YouTube, Telegram, Discord
-    /// и универсальный доступ.</summary>
-    public const int MinWorkingPerService = 2;
+    /// и универсальный доступ. Пока сервис ниже этого порога, автопоиск ищет под него.</summary>
+    public const int MinWorkingPerService = 5;
 
     /// <summary>
     /// Как часто перепроверять сервер, который уже считается рабочим. Бесплатные серверы живут
@@ -489,6 +510,43 @@ internal sealed class SourceDefinition
     public bool Enabled { get; set; } = true;
     public SourceKind Kind { get; set; } = SourceKind.Auto;
     public int LastNodeCount { get; set; }
+
+    /// <summary>
+    /// Сколько уникальных серверов когда-либо пришло из источника. Считается по
+    /// <see cref="RegisteredNodeIds"/>, поэтому повторные сборы не раздувают число.
+    /// </summary>
+    public int TotalNodeCount { get; set; }
+
+    /// <summary>
+    /// Id уже засчитанных серверов: нужен, чтобы «всего зарегистрировано» не росло
+    /// при каждом обновлении одного и того же списка. Файл источников шифруется.
+    /// </summary>
+    public HashSet<string> RegisteredNodeIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Учитывает серверы источника в общем счётчике (повторы не считаются).</summary>
+    public void RegisterNodes(IEnumerable<ProxyNode> nodes)
+    {
+        foreach (var node in nodes)
+        {
+            RegisterId(node.Id);
+        }
+    }
+
+    /// <summary>Учитывает один сервер по стабильному Id.</summary>
+    public void RegisterId(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return;
+        }
+
+        RegisteredNodeIds ??= new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (RegisteredNodeIds.Add(id))
+        {
+            TotalNodeCount++;
+        }
+    }
+
     public DateTime? LastCheckedUtc { get; set; }
     public string? LastError { get; set; }
 
@@ -540,8 +598,9 @@ internal static class SchemaVersions
     /// <summary>
     /// 2 — партия проверки в простое 40 → 200.
     /// 3 — разово включить все источники, которые раньше были выключены по умолчанию.
+    /// 4 — список серверов ограничен 5000: 12 000 тяжело для памяти и старта.
     /// </summary>
-    public const int Settings = 3;
+    public const int Settings = 4;
 
     /// <summary>
     /// 2 — добавлены необязательные отметки UniversalOk/DiscordOk; старый кэш читается как есть.
@@ -676,6 +735,18 @@ internal sealed class AppSettings
 
     /// <summary>Проверять накопившиеся серверы в простое, когда компьютер не используется.</summary>
     public bool IdleTestEnabled { get; set; } = true;
+
+    /// <summary>Периодически собирать серверы из источников (интервал — <see cref="AutoRefreshMinutes"/>).</summary>
+    public bool AutoCollectServers { get; set; } = true;
+
+    /// <summary>Автоматически собирать и проверять MTProto-прокси из каналов Telegram.</summary>
+    public bool AutoMtProto { get; set; } = true;
+
+    /// <summary>Автоматически обновлять ядро sing-box при запуске.</summary>
+    public bool AutoUpdateCore { get; set; } = true;
+
+    /// <summary>Автоматически проверять обновления самого приложения на GitHub.</summary>
+    public bool AutoCheckAppUpdates { get; set; } = true;
 
     /// <summary>
     /// Вся фоновая автоматика выключена пользователем: проверка серверов, MTProto,

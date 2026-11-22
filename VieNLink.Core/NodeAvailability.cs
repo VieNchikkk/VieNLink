@@ -56,11 +56,25 @@ internal static class NodeAvailability
     /// <c>youtube</c>, <c>telegram</c>, <c>discord</c>, всё остальное — универсальный доступ
     /// (проверочный адрес Cloudflare), а не «хоть что-нибудь открылось».
     /// </summary>
-    public static bool OpenedFor(ProxyNode node, string service) => service.ToLowerInvariant() switch
+    public static bool OpenedFor(ProxyNode node, string service)
     {
-        "youtube" => node.YoutubeOk == true,
-        "telegram" => node.TelegramOk == true,
-        "discord" => node.DiscordOk == true,
-        _ => node.UniversalOk == true,
-    };
+        // Сравнение без ToLowerInvariant: счётчики в шапке перебирают тысячи серверов
+        // несколько раз в секунду, и новые строки на каждый вызов сильно грузили GC.
+        if (string.Equals(service, "youtube", StringComparison.OrdinalIgnoreCase))
+        {
+            return node.YoutubeOk == true;
+        }
+
+        if (string.Equals(service, "telegram", StringComparison.OrdinalIgnoreCase))
+        {
+            return node.TelegramOk == true;
+        }
+
+        if (string.Equals(service, "discord", StringComparison.OrdinalIgnoreCase))
+        {
+            return node.DiscordOk == true;
+        }
+
+        return node.UniversalOk == true;
+    }
 }

@@ -26,6 +26,11 @@ public sealed class VieNLinkApp : Application
         RedirectStandardError();
         RegisterSecretProtector();
         WarmNetworkAssemblies();
+
+        // Журнал приложения дублируем в logcat: файл журнала на телефоне приватный,
+        // и без этого зависания проверки нельзя разобрать через adb.
+        AppLog.LineWritten += line => Android.Util.Log.Info("VieNLinkLog", line);
+
         ProbeScheduler.Start(this);
         MtProtoScheduler.Start(this);
         if (!ProbeScheduler.IsProbeProcess())

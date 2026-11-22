@@ -131,7 +131,7 @@ internal static class Maintenance
                 sourceInterval = TimeSpan.FromMinutes(30);
             }
 
-            if (settings.AutoUpdateSubscriptions &&
+            if (settings.AutoCollectServers &&
                 (emptyList || now - android.LastSourceRefreshUtc >= sourceInterval))
             {
                 try
@@ -149,7 +149,8 @@ internal static class Maintenance
             // Первый запуск (или список вычистили): не ждём двухминутного тика,
             // сразу проверяем партии, пока не наберём минимум рабочих серверов.
             if (emptyList && settings.IdleTestEnabled && android.AutoProbe &&
-                !TunnelService.IsBypassMode && NodeStore.Nodes.Count > 0)
+                !TunnelService.IsBypassMode && NodeStore.Nodes.Count > 0 &&
+                !ProbeClient.IsManualRun && !ProbeClient.IsPaused)
             {
                 try
                 {
@@ -233,10 +234,14 @@ internal static class Maintenance
             MtProtoStore.Prune();
 
             if (android.AutoProbe && settings.IdleTestEnabled && !TunnelService.IsBypassMode &&
-                !ProbeClient.IsPaused)
+                !ProbeClient.IsPaused && !ProbeClient.IsManualRun)
             {
                 try
                 {
+                    // Сначала стартовая перепроверка рабочих: поиск не должен её вытеснять,
+                    // иначе счётчики долго висят с устаревшими данными.
+                    await ProbeScheduler.EnsureStartupRecheckAsync(cancellationToken).ConfigureAwait(false);
+
                     // Минимум десять рабочих серверов: пока их меньше, проверяем партии подряд.
                     var working = await ProbeClient
                         .EnsureWorkingQuotaAsync(3, NodeTester.MaxBatch, cancellationToken)

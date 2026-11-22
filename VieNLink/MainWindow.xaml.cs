@@ -287,6 +287,7 @@ public partial class MainWindow : Window
             if (!_closing)
             {
                 UpdateSummary();
+                UpdateSourceWorkingStats();
             }
         };
         _counterTimer.Start();
@@ -309,15 +310,17 @@ public partial class MainWindow : Window
                        (FreshWorkingCount() < NodeLimits.MinWorkingNodes ||
                         MissingServiceQuota().Count > 0);
 
-        var refreshDue = _settings.AutoRefreshMinutes > 0 &&
+        var refreshDue = _settings.AutoCollectServers && _settings.AutoRefreshMinutes > 0 &&
                          now - _settings.LastAutoRefreshUtc >= TimeSpan.FromMinutes(_settings.AutoRefreshMinutes);
-        if (!refreshDue && poorList && _settings.AutoRefreshMinutes > 0 &&
+        if (!refreshDue && poorList && _settings.AutoCollectServers &&
+            _settings.AutoRefreshMinutes > 0 &&
             now - _settings.LastAutoRefreshUtc >= TimeSpan.FromMinutes(30))
         {
             refreshDue = true;
         }
 
-        if (!refreshDue && emptyList && _settings.AutoRefreshMinutes > 0 &&
+        if (!refreshDue && emptyList && _settings.AutoCollectServers &&
+            _settings.AutoRefreshMinutes > 0 &&
             now - _settings.LastAutoRefreshUtc >= TimeSpan.FromMinutes(15))
         {
             // Пустой список — повторяем чаще: источник мог быть временно недоступен.
@@ -515,7 +518,8 @@ public partial class MainWindow : Window
     /// <summary>При запуске подтягиваем устаревшие подписки, чтобы список не был «вчерашним».</summary>
     private async Task AutoRefreshIfStaleAsync()
     {
-        if (_busy || _sources.Count == 0 || _settings.AutomationPaused)
+        if (_busy || _sources.Count == 0 || _settings.AutomationPaused ||
+            !_settings.AutoCollectServers)
         {
             return;
         }
@@ -548,7 +552,7 @@ public partial class MainWindow : Window
             _settings.LastAutoRefreshUtc = DateTime.UtcNow;
             SaveSettings();
 
-            if (empty && NodeCount > 0)
+            if (empty && NodeCount > 0 && _settings.IdleTestEnabled)
             {
                 // Сразу проверяем партию скрытым ядром: без этого «Рабочие» остаются
                 // пустыми до первого пятиминутного тика.

@@ -1661,6 +1661,11 @@ internal static class Program
         Check(vless?.Name == "Тест", "vless: имя из фрагмента");
         Check(LinkParser.NormalizeName("GB \\U0001F1EC\\U0001F1E7 Test").Contains("🇬🇧", StringComparison.Ordinal),
             "vless: \\U-флаг в имени декодируется");
+        Check(NodeDisplay.CleanName("GB 🇬🇧 | @NamiraConfigs | …") == "GB 🇬🇧",
+            "имя: Telegram-канал убран из отображения");
+        Check(NodeDisplay.Name(new ProxyNode { Name = "@NamiraConfigs", Server = "1.2.3.4", Port = 443 })
+              == "1.2.3.4:443",
+            "имя: если остался только канал — показываем IP:порт");
         Check(vless?.OutboundJson.Contains("\"ws\"", StringComparison.Ordinal) == true, "vless: websocket");
 
         var reality = LinkParser.Parse(
@@ -1950,6 +1955,11 @@ internal static class Program
         Check(SettingsUpgrade.Apply(upgraded) && upgraded.SchemaVersion == SchemaVersions.Settings,
             "настройки: старая схема мигрирует к текущей");
         Check(!SettingsUpgrade.Apply(upgraded), "настройки: повторная миграция не требуется");
+
+        var capped = new AppSettings { SchemaVersion = 3, MaxTotalNodes = 12000 };
+        SettingsUpgrade.Apply(capped);
+        Check(capped.MaxTotalNodes == NodeLimits.DefaultMaxTotal && capped.SchemaVersion == SchemaVersions.Settings,
+            "настройки: список ограничен 5000");
 
         Console.WriteLine("MTProto:");
 
@@ -2274,6 +2284,40 @@ internal static class Program
         var settings = new AppSettings { MaxNodesInConfig = 10 };
         await using var manager = new ProxyManager(settings);
 
+        // Статистика источников: рабочие серверы считаются по каждой отметке источника.
+        var sourceNodes = new[]
+        {
+            new ProxyNode { Status = NodeStatus.Working, SourceName = "A" },
+            new ProxyNode { Status = NodeStatus.Working, SourceName = "A, B" },
+            new ProxyNode { Status = NodeStatus.Dead, SourceName = "A" },
+            new ProxyNode { Status = NodeStatus.Unknown, SourceName = "C" },
+        };
+        var bySource = NodeSourceStats.WorkingBySource(sourceNodes);
+        Check(bySource.TryGetValue("A", out var countA) && countA == 2,
+            "источники: рабочие серверы считаются по источнику");
+        Check(bySource.TryGetValue("B", out var countB) && countB == 1,
+            "источники: сервер из двух источников учтён у обоих");
+        Check(!bySource.ContainsKey("C"),
+            "источники: непроверенные и мёртвые не считаются рабочими");
+
+        // «Всего зарегистрировано»: уникальные серверы, повторный сбор не раздувает счётчик.
+        var totalSource = new SourceDefinition { Name = "T" };
+        totalSource.RegisterNodes(new[]
+        {
+            new ProxyNode { Identity = "total-1" },
+            new ProxyNode { Identity = "total-2" },
+        });
+        totalSource.RegisterNodes(new[] { new ProxyNode { Identity = "total-2" } });
+        Check(totalSource.TotalNodeCount == 2,
+            "источники: повторный сбор не увеличивает «всего зарегистрировано»");
+
+        var seeded = new SourceDefinition { Name = "S" };
+        var seededChanged = NodeSourceStats.SeedTotals(
+            new[] { seeded },
+            new[] { new ProxyNode { Identity = "seed-1", Status = NodeStatus.Working, SourceName = "S" } });
+        Check(seededChanged && seeded.TotalNodeCount == 1,
+            "источники: старый кэш заполняет «всего зарегистрировано»");
+
         // 1. Оба проверочных адреса доступны → узел рабочий, отметки стоят.
         var working = DirectNode("direct-a");
         var summary = await manager.TestNodesAsync(
@@ -2300,8 +2344,10 @@ internal static class Program
             timeoutMs: 3000,
             youtubeUrl: "https://www.youtube.com/",
             telegramUrl: "https://t.me/");
-        Check(dead.Status == NodeStatus.Dead, "непроверенный узел удаляется с первого провала");
-        Check(dead.FailCount == 1, "счётчик провалов выставлен");
+        Check(dead.Status == NodeStatus.Unknown && dead.FailCount == 1,
+            "непроверенный: после первого провала остаётся для повторной попытки");
+        NodeHealth.RegisterFailure(dead);
+        Check(dead.Status == NodeStatus.Dead, "непроверенный удаляется после второго провала");
         Check(dead.YoutubeOk == false && dead.TelegramOk == false, "обе отметки — отказ");
 
         // 3. Узел, который уже был рабочим, получает несколько попыток, затем удаляется.
@@ -2318,7 +2364,8 @@ internal static class Program
 
             if (attempt < NodeLimits.RemoveAfterFailures)
             {
-                Check(retried.Status == NodeStatus.Working, $"провал {attempt}: узел ещё в «Рабочих»");
+                Check(retried.Status == NodeStatus.Working,
+                    $"провал {attempt}: узел остаётся в «Рабочих» до 5-го провала");
             }
         }
 
@@ -2447,6 +2494,78 @@ internal static class Program
         Check(!NodeSourceService.IsExpiredBySourceAge(
                 NodeStatus.Unknown, cacheCutoff.AddDays(1), cacheCutoff),
             "кэш: свежий непроверенный сервер остаётся");
+
+        // 8. Провал проверки: рабочий сервер не удаляется с первого раза, непроверенный — сразу.
+        var failing = new ProxyNode
+        {
+            Status = NodeStatus.Working,
+            DelayMs = 100,
+            UniversalOk = true,
+            CheckedAtUtc = DateTime.UtcNow,
+        };
+        NodeHealth.RegisterFailure(failing);
+        Check(failing.Status == NodeStatus.Working && failing.FailCount == 1 &&
+              failing.DelayMs == 100 && failing.UniversalOk == true,
+            "провал: первый провал рабочего сервера не стирает его результат");
+        NodeHealth.RegisterFailure(failing);
+        Check(failing.FailCount == NodeHealth.GraceFailures && failing.DelayMs == 100,
+            "провал: второй провал тоже в мягком режиме");
+        NodeHealth.RegisterFailure(failing);
+        Check(failing.Status == NodeStatus.Working && failing.FailCount == 3 &&
+              failing.DelayMs == 100 && failing.UniversalOk == true,
+            "провал: результат рабочего сервера сохраняется все 5 попыток");
+        for (var i = 3; i < NodeLimits.RemoveAfterFailures; i++)
+        {
+            NodeHealth.RegisterFailure(failing);
+        }
+
+        Check(failing.Status == NodeStatus.Dead && failing.FailCount == NodeLimits.RemoveAfterFailures,
+            "провал: после 5 провалов подряд сервер помечается мёртвым");
+        var unproven = new ProxyNode { Status = NodeStatus.Unknown };
+        NodeHealth.RegisterFailure(unproven);
+        Check(unproven.Status == NodeStatus.Unknown,
+            "провал: первый провал непроверенного сервер не удаляет");
+        NodeHealth.RegisterFailure(unproven);
+        Check(unproven.Status == NodeStatus.Dead,
+            "провал: второй провал непроверенного сервер удаляет");
+
+        // 9. Кэш можно писать и читать по отдельному пути: так рабочие серверы
+        // живут в своём маленьком файле, отдельно от кучи непроверенных.
+        var cachePath = Path.Combine(Path.GetTempPath(), "vienlink-cache-check.json");
+        try
+        {
+            var sample = new ProxyNode
+            {
+                RawLink = "vless://00000000-0000-0000-0000-000000000000@example.com:443",
+                Protocol = "vless",
+                Name = "cache-check",
+                Server = "example.com",
+                Port = 443,
+                Tag = "cache-check",
+                Identity = "00000000-0000-0000-0000-000000000000",
+                OutboundJson = "{}",
+                Status = NodeStatus.Working,
+                DelayMs = 42,
+                CheckedAtUtc = DateTime.UtcNow,
+                UniversalOk = true,
+            };
+            NodeSourceService.SaveCache(new[] { sample }, allowEmpty: true, cachePath);
+            var back = NodeSourceService.LoadCache(out _, out _, null, cachePath);
+            Check(back.Count == 1 && back[0].Tag == "cache-check",
+                "кэш: запись и чтение по указанному пути");
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(cachePath);
+                File.Delete(cachePath + ".bak");
+            }
+            catch (Exception)
+            {
+                // Временный файл удалится позже.
+            }
+        }
 
         var now = DateTime.UtcNow;
 

@@ -42,9 +42,15 @@ internal static class ProbeClient
             // Проверка уже завершилась.
         }
 
-        StopProbeProcess();
+        // Не блокируем UI: если :probe завис в native-коде, ожидание системного
+        // сервиса или остановки процесса может занять секунды. Журнал тоже пишем в фоне:
+        // запись файла на UI-потоке — лишняя задержка нажатия.
+        _ = Task.Run(() =>
+        {
+            StopProbeProcess();
+            AppLog.Write("probe", "Поиск серверов остановлен пользователем");
+        });
         ReportActivity("Поиск серверов остановлен", 15);
-        AppLog.Write("probe", "Поиск серверов остановлен пользователем");
     }
 
     /// <summary>Снова разрешает поиск: пользователь нажал «Проверить» или кнопку сервиса.</summary>
@@ -60,6 +66,11 @@ internal static class ProbeClient
     /// <summary>Гасит отдельный процесс проверки: после отмены ему нечего делать.</summary>
     private static void StopProbeProcess()
     {
+        if (TryKillProbeProcess())
+        {
+            return;
+        }
+
         try
         {
             var context = Android.App.Application.Context;
@@ -71,6 +82,34 @@ internal static class ProbeClient
         {
             AppLog.Write("probe", "Не удалось остановить процесс проверки", exception);
         }
+    }
+
+    /// <summary>
+    /// Завершает живой :probe по PID (тот же UID). Так новый запуск гарантированно
+    /// получает чистый процесс, даже если прошлая партия не ответила и осталась висеть.
+    /// </summary>
+    private static bool TryKillProbeProcess()
+    {
+        try
+        {
+            var context = Android.App.Application.Context;
+            if (context.GetSystemService(Android.Content.Context.ActivityService)
+                    is Android.App.ActivityManager manager &&
+                manager.RunningAppProcesses?.FirstOrDefault(process =>
+                    string.Equals(process.ProcessName, context.PackageName + ":probe",
+                        StringComparison.Ordinal)) is { } probe)
+            {
+                Android.OS.Process.KillProcess(probe.Pid);
+                AppLog.Write("probe", "Процесс :probe завершён принудительно");
+                return true;
+            }
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("probe", "Не удалось принудительно завершить :probe", exception);
+        }
+
+        return false;
     }
 
     private static string? _activity;
@@ -100,11 +139,20 @@ internal static class ProbeClient
         IProgress<ProbeProgress>? progress = null,
         bool recheckWorking = false,
         Func<ProxyNode, int>? sourceScore = null,
-        bool workingOnly = false)
+        bool workingOnly = false,
+        bool manual = false,
+        bool allWorking = false)
     {
         if (ProbeScheduler.IsProbeProcess())
         {
             return new NodeTestSummary(0, 0, 0, null);
+        }
+
+        // Пока идёт ручной прогон, фоновые партии не запускаются: иначе они отбирают
+        // :probe в промежутках между партиями и ручная проверка стоит на месте.
+        if (_manualRun && !manual)
+        {
+            return new NodeTestSummary(0, 0, 0, BusyError);
         }
 
         await Task.Run(() => NodeStore.EnsureLoaded(), cancellationToken).ConfigureAwait(false);
@@ -132,7 +180,7 @@ internal static class ProbeClient
                 .DistinctBy(node => node.Tag, StringComparer.OrdinalIgnoreCase)
                 .Where(node => workingOnly
                     ? node.Status == NodeStatus.Working &&
-                      node.CheckedAtUtc is not null && node.CheckedAtUtc < workingCutoff
+                      (allWorking || (node.CheckedAtUtc is not null && node.CheckedAtUtc < workingCutoff))
                     : node.Status == NodeStatus.Unknown ||
                       (node.Status == NodeStatus.Working &&
                        (recheckWorking || node.CheckedAtUtc is null ||
@@ -168,6 +216,110 @@ internal static class ProbeClient
 
         return await RunAsync(candidates, cancellationToken, progress, fullDomains: !workingOnly)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Сколько партий проверяет одно нажатие «Проверить серверы»: 5 × 200 = 1000 серверов
+    /// за один запуск. Так партии идут подряд в одном процессе :probe, а не по одной.
+    /// </summary>
+    public const int ManualBatches = 5;
+
+    /// <summary>
+    /// Идёт ручной прогон «Проверить серверы» (несколько партий подряд): фоновая
+    /// проверка в это время не запускает свои партии, иначе они отбирают :probe
+    /// друг у друга и ручной прогон застревает между партиями.
+    /// </summary>
+    public static bool IsManualRun => _manualRun;
+
+    private static volatile bool _manualRun;
+
+    /// <summary>
+    /// Guard для <see cref="ApplyPendingResults"/>: его запускают два места при старте
+    /// (планировщик и Maintenance), и без флага одни и те же результаты применялись бы
+    /// дважды — два SaveNodes и два выбора сервера на одних данных.
+    /// </summary>
+    private static int _applyingPending;
+
+    /// <summary>
+    /// Проверяет несколько партий подряд. Останавливается, когда партии кончились,
+    /// проверять нечего или пользователь нажал «Остановить поиск». Возвращает суммарную
+    /// сводку (Tested — всего за все партии) и число выполненных партий.
+    /// </summary>
+    public static async Task<(NodeTestSummary Summary, int Batches)> RunBatchesAsync(
+        int batches,
+        int batchSize,
+        CancellationToken cancellationToken,
+        bool recheckWorking = false,
+        Action<int, int>? batchStarted = null,
+        Action<int, ProbeProgress>? progress = null,
+        Action<int, int, NodeTestSummary>? batchFinished = null)
+    {
+        var limit = Math.Max(1, batches);
+        var totalTested = 0;
+        var done = 0;
+        var last = new NodeTestSummary(0, 0, 0, null);
+        _manualRun = true;
+        try
+        {
+            for (var batch = 1; batch <= limit; batch++)
+            {
+                if (cancellationToken.IsCancellationRequested || _paused)
+                {
+                    break;
+                }
+
+                var index = batch;
+                batchStarted?.Invoke(index, limit);
+                var reporter = progress is null
+                    ? null
+                    : new Progress<ProbeProgress>(state => progress(index, state));
+
+                NodeTestSummary summary;
+                for (var attempt = 0; ; attempt++)
+                {
+                    // Рабочие серверы перепроверяем только в первой партии: они стоят первыми,
+                    // а дальше они уже свежие. Иначе одна и та же десятка рабочих проверялась бы
+                    // в каждой из пяти партий и съедала место у непроверенных.
+                    summary = await RunBatchAsync(
+                            batchSize,
+                            cancellationToken,
+                            reporter,
+                            recheckWorking && batch == 1,
+                            workingOnly: false,
+                            manual: true)
+                        .ConfigureAwait(false);
+                    if (summary.Error != BusyError || attempt >= 8 ||
+                        cancellationToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+
+                    // Прошлая партия ещё отпускает :probe — ждём её и пробуем снова,
+                    // иначе нажатие выглядело бы как «ничего не произошло».
+                    batchStarted?.Invoke(index, limit);
+                    await Task.Delay(600, cancellationToken).ConfigureAwait(false);
+                }
+
+                last = summary;
+                if (cancellationToken.IsCancellationRequested || summary.Tested == 0)
+                {
+                    break;
+                }
+
+                totalTested += summary.Tested;
+                done = batch;
+
+                // Партия применилась: рабочие уже в списке, следующая строка прогресса
+                // покажет выросший общий счётчик.
+                batchFinished?.Invoke(index, limit, summary);
+            }
+
+            return (last with { Tested = totalTested }, done);
+        }
+        finally
+        {
+            _manualRun = false;
+        }
     }
 
     /// <summary>
@@ -338,6 +490,11 @@ internal static class ProbeClient
             return 0;
         }
 
+        if (Interlocked.CompareExchange(ref _applyingPending, 1, 0) != 0)
+        {
+            return 0;
+        }
+
         try
         {
             if (!File.Exists(ProbeProtocol.ResultPath))
@@ -365,6 +522,10 @@ internal static class ProbeClient
         {
             AppLog.Write("probe", "Не удалось применить оставшиеся результаты проверки", exception);
             return 0;
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _applyingPending, 0);
         }
     }
 
@@ -430,6 +591,15 @@ internal static class ProbeClient
                         .ToHashSet(StringComparer.OrdinalIgnoreCase);
                     foreach (var node in nodes.Where(node => !aliveIds.Contains(node.Id)))
                     {
+                        // TCP-опрос — грубая проверка: мобильная сеть может не дать
+                        // соединения просто так. Рабочему серверу это не засчитываем
+                        // как провал — его судьбу решает проверка через прокси.
+                        if (node.Status == NodeStatus.Working)
+                        {
+                            node.TriedAtUtc = DateTime.UtcNow;
+                            continue;
+                        }
+
                         NodeHealth.RegisterFailure(node);
                         dropped++;
                     }
@@ -450,10 +620,30 @@ internal static class ProbeClient
             {
                 FullDomains = fullDomains,
                 Nodes = toTest
-                    .Select(node => new ProbeRequestNode { Id = node.Id, RawLink = node.RawLink })
+                    .Select(node => new ProbeRequestNode
+                    {
+                        Id = node.Id,
+                        RawLink = node.RawLink,
+                        // История провалов и результат последней удачной проверки едут вместе
+                        // с сервером: :probe работает в другом процессе и должен применять те же
+                        // правила, что и ПК. Без флагов мягкий провал рабочего стирал бы его
+                        // «подтверждённый доступ», и сервер выпадал бы из счётчиков.
+                        Status = node.Status,
+                        FailCount = node.FailCount,
+                        DelayMs = node.DelayMs,
+                        CheckedAtUtc = node.CheckedAtUtc,
+                        YoutubeOk = node.YoutubeOk,
+                        TelegramOk = node.TelegramOk,
+                        UniversalOk = node.UniversalOk,
+                        DiscordOk = node.DiscordOk,
+                        OpenDomains = node.OpenDomains,
+                    })
                     .ToList(),
             };
             Directory.CreateDirectory(AppPaths.DataDirectory);
+            AppLog.Write("probe",
+                $"Партия: серверов {toTest.Count}, из них рабочих " +
+                $"{toTest.Count(node => node.Status == NodeStatus.Working)}");
             await File.WriteAllTextAsync(
                 ProbeProtocol.RequestPath,
                 JsonSerializer.Serialize(request, ProbeProtocol.Json),
@@ -476,6 +666,10 @@ internal static class ProbeClient
             {
                 // Прошлый ход проверки перезапишется.
             }
+
+            // Прошлый :probe мог остаться жить после таймаута — иначе он писал бы
+            // прогресс и результат параллельно с новой партией.
+            TryKillProbeProcess();
 
             var context = (Android.Content.Context?)TunnelService.Active
                           ?? Android.App.Application.Context;
@@ -530,12 +724,14 @@ internal static class ProbeClient
                 var state = TryReadProgress();
                 if (state is not null)
                 {
-                    lastProgressAt = DateTime.UtcNow;
                     if (lastProgress is null ||
                         lastProgress.Tested != state.Tested ||
                         lastProgress.Working != state.Working ||
                         !string.Equals(lastProgress.Stage, state.Stage, StringComparison.Ordinal))
                     {
+                        // «Прогресс» — это изменение счётчиков, а не сам файл: зависший
+                        // :probe оставляет его на диске, и раньше ожидание длилось все 10 минут.
+                        lastProgressAt = DateTime.UtcNow;
                         lastProgress = state;
                         var line = state.Total > 0
                             ? $"Проверяю серверы: {state.Tested} из {state.Total} · рабочих {state.Working}"
@@ -552,11 +748,14 @@ internal static class ProbeClient
                     return new NodeTestSummary(0, 0, 0,
                         "Отдельный процесс проверки не запустился — нажмите «Проверить» ещё раз");
                 }
-                else if (lastProgressAt != DateTime.MinValue &&
-                         DateTime.UtcNow - lastProgressAt > TimeSpan.FromSeconds(90))
+
+                if (lastProgress is not null &&
+                    DateTime.UtcNow - lastProgressAt > TimeSpan.FromSeconds(100))
                 {
+                    MarkTried(nodes);
+                    ReportActivity("Проверка не отвечает: процесс проверки остановлен", 15);
                     return new NodeTestSummary(0, 0, 0,
-                        "Проверка не отвечает: процесс проверки остановлен системой");
+                        "Проверка не отвечает: процесс проверки остановлен");
                 }
 
                 await Task.Delay(500, token).ConfigureAwait(false);
@@ -658,6 +857,8 @@ internal static class ProbeClient
         var telegram = 0;
         var discord = 0;
         var bestDomains = 0;
+        var failedWorking = 0;
+        var newWorking = 0;
 
         foreach (var item in result.Nodes)
         {
@@ -666,6 +867,7 @@ internal static class ProbeClient
                 continue;
             }
 
+            var wasWorking = node.Status == NodeStatus.Working;
             node.Status = item.Status;
             node.DelayMs = item.DelayMs;
             node.CheckedAtUtc = item.CheckedAtUtc;
@@ -680,6 +882,11 @@ internal static class ProbeClient
             if (node.Status == NodeStatus.Working)
             {
                 working++;
+                if (!wasWorking)
+                {
+                    newWorking++;
+                }
+
                 if (node.UniversalOk == true)
                 {
                     universal++;
@@ -702,6 +909,12 @@ internal static class ProbeClient
 
                 bestDomains = Math.Max(bestDomains, node.OpenDomains);
             }
+            else if (wasWorking)
+            {
+                // Рабочий сервер провалил одну проверку: остаётся в списке до 5-го провала
+                // подряд (счётчик приехал из :probe вместе с сервером).
+                failedWorking++;
+            }
         }
 
         var removed = NodeStore.DropDeadNodes(result.Nodes
@@ -718,7 +931,8 @@ internal static class ProbeClient
             ? NodeStore.Selected
             : NodeStore.SelectBestWorking();
         AppLog.Write("probe",
-            $"Результаты :probe: рабочих {working} из {result.Nodes.Count}, удалено {removed}" +
+            $"Результаты :probe: рабочих {working} из {result.Nodes.Count}, удалено {removed}, " +
+            $"рабочих с провалом (остаются до 5-го): {failedWorking}" +
             (best is null ? ", живых нет" : ", выбран " + best.Name));
 
         // Если работаем на запасном сервере, а проверка нашла сервер выбранного
@@ -726,6 +940,6 @@ internal static class ProbeClient
         TunnelService.MaybeReturnToActiveService();
 
         return new NodeTestSummary(result.Nodes.Count, working, removed, result.Error,
-            universal, youtube, telegram, discord, bestDomains);
+            universal, youtube, telegram, discord, bestDomains, newWorking);
     }
 }

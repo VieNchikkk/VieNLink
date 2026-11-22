@@ -251,6 +251,21 @@ internal static class MtProtoService
         CancellationToken cancellationToken,
         bool forceRss = false)
     {
+        var proxies = await FetchCoreAsync(source, cancellationToken, forceRss).ConfigureAwait(false);
+        // «Всего зарегистрировано» для каналов и сайтов с MTProto — по уникальным прокси.
+        foreach (var proxy in proxies)
+        {
+            source.RegisterId(proxy.Id);
+        }
+
+        return proxies;
+    }
+
+    private static async Task<List<MtProtoProxy>> FetchCoreAsync(
+        SourceDefinition source,
+        CancellationToken cancellationToken,
+        bool forceRss = false)
+    {
         if (source.Kind == SourceKind.Telegram)
         {
             // 1. Обычная веб-версия канала (если t.me доступен).

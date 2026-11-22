@@ -434,12 +434,7 @@ public sealed class TunnelService : VpnService
 
     internal static string ShortServerName(ProxyNode node)
     {
-        var name = string.IsNullOrWhiteSpace(node.Name) ? node.Server : node.Name;
-        if (string.IsNullOrWhiteSpace(name))
-        {
-            return "Сервер";
-        }
-
+        var name = NodeDisplay.Name(node);
         return name.Length > 42 ? name[..41] + "…" : name;
     }
 
@@ -1149,7 +1144,7 @@ public sealed class TunnelService : VpnService
 
         if (_networkCallback is null && _connectivity is not null)
         {
-            _networkCallback = new DefaultNetworkCallback(this);
+            _networkCallback = new DefaultNetworkCallback(() => RefreshDefaultInterface());
             _connectivity.RegisterDefaultNetworkCallback(_networkCallback);
         }
 

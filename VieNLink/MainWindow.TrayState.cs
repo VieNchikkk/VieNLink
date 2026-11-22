@@ -78,6 +78,7 @@ public partial class MainWindow
         _operation = null;
         SetBusy(false);
         _operationLabel = "текущее действие";
+        UpdateSourceWorkingStats();
 
         // Сбой сервера, замеченный во время проверки или другой операции, обрабатываем сейчас.
         if (_pendingFailoverNode is { } pending)

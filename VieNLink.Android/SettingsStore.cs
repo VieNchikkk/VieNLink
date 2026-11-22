@@ -58,14 +58,10 @@ internal static class SettingsStore
             JsonFileStore.Write(AppPaths.SettingsPath, settings);
         }
 
-        // Переключатели убраны из «Настроек»: работают значения по умолчанию.
-        // Фоновая проверка, автообновление, автопоиск, проверка после обновления,
-        // показ трафика и выхода — включены.
+        // Фоновая проверка и автосбор включаются переключателями в «Настройках»;
+        // проверка задержек после обновления списков и показ трафика — по умолчанию.
         var changed = false;
-        if (!settings.AutoUpdateSubscriptions) { settings.AutoUpdateSubscriptions = true; changed = true; }
         if (!settings.TestAfterRefresh) { settings.TestAfterRefresh = true; changed = true; }
-        if (!settings.AutoDiscoverSources) { settings.AutoDiscoverSources = true; changed = true; }
-        if (!settings.IdleTestEnabled) { settings.IdleTestEnabled = true; changed = true; }
         if (!settings.ShowTraffic) { settings.ShowTraffic = true; changed = true; }
         if (!settings.ShowExitInfo) { settings.ShowExitInfo = true; changed = true; }
 
@@ -97,7 +93,6 @@ internal static class SettingsStore
         Use(() => settings.ConnectOnlyVerified, value => settings.ConnectOnlyVerified = value,
             defaults.ConnectOnlyVerified);
         Use(() => settings.ConnectOnlyMine, value => settings.ConnectOnlyMine = value, defaults.ConnectOnlyMine);
-        Use(() => settings.AutoFailover, value => settings.AutoFailover = value, defaults.AutoFailover);
         Use(() => settings.TlsFragment, value => settings.TlsFragment = value, defaults.TlsFragment);
         Use(() => settings.TlsRecordFragment, value => settings.TlsRecordFragment = value,
             defaults.TlsRecordFragment);

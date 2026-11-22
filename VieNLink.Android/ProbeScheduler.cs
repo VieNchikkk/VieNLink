@@ -23,6 +23,15 @@ internal static class ProbeScheduler
     private static DateTime _lastSearchUtc = DateTime.MinValue;
     private static int _busy;
 
+    /// <summary>
+    /// Первый такт после запуска: сначала перепроверяем рабочие серверы из их файла,
+    /// чтобы счётчики показывали текущее состояние, и только потом ищем новые.
+    /// </summary>
+    private static int _startupRecheckDone;
+
+    /// <summary>Один проход стартовой перепроверки: параллельные вызовы ждут первого.</summary>
+    private static readonly SemaphoreSlim StartupRecheckGate = new(1, 1);
+
     public static void Start(Android.Content.Context context)
     {
         if (_timer is not null || IsProbeProcess() || SettingsStore.Current.AutomationPaused)
@@ -45,6 +54,53 @@ internal static class ProbeScheduler
     {
         _timer?.Dispose();
         _timer = null;
+    }
+
+    /// <summary>
+    /// Один раз при запуске перепроверяет ВСЕХ рабочих из их файла и ждёт конца. Поиск новых
+    /// (Maintenance, квоты) должен дождаться её — иначе он занимает :probe первым, и рабочие
+    /// долго висят с устаревшими счётчиками. Идемпотентна и потокобезопасна: параллельные
+    /// вызовы (планировщик, Maintenance, быстрые счётчики) ждут первого, а не запускают своё.
+    /// </summary>
+    public static async Task EnsureStartupRecheckAsync(CancellationToken token = default)
+    {
+        if (Volatile.Read(ref _startupRecheckDone) != 0)
+        {
+            return;
+        }
+
+        await StartupRecheckGate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            if (Volatile.Read(ref _startupRecheckDone) != 0)
+            {
+                return;
+            }
+
+            // Если :probe вдруг занят чужой партией, ждём и пробуем снова: иначе речек был бы
+            // помечен сделанным, хотя ничего не проверил.
+            NodeTestSummary startup;
+            for (var attempt = 0; ; attempt++)
+            {
+                startup = await ProbeClient
+                    .RunBatchAsync(NodeTester.MaxBatch, token, workingOnly: true, allWorking: true)
+                    .ConfigureAwait(false);
+                if (startup.Error != ProbeClient.BusyError || attempt >= 10 || token.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                await Task.Delay(600, token).ConfigureAwait(false);
+            }
+
+            AppLog.Write("probe",
+                $"Старт: рабочие перепроверены — {startup.Tested}, живых {startup.Working}");
+            Volatile.Write(ref _startupRecheckDone, 1);
+        }
+        finally
+        {
+            StartupRecheckGate.Release();
+        }
     }
 
     /// <summary>Определяем процесс по cmdline: ApplicationInfo.ProcessName на Android ненадёжен.</summary>
@@ -73,7 +129,7 @@ internal static class ProbeScheduler
         try
         {
             if (IsProbeProcess() || ProbeClient.IsRunning || TunnelService.IsBypassMode ||
-                ProbeClient.IsPaused || SettingsStore.Current.AutomationPaused)
+                ProbeClient.IsPaused || ProbeClient.IsManualRun || SettingsStore.Current.AutomationPaused)
             {
                 return;
             }
@@ -83,6 +139,14 @@ internal static class ProbeScheduler
                 !AndroidSettingsStore.Current.AutoProbe ||
                 NodeStore.Nodes.Count == 0)
             {
+                return;
+            }
+
+            // Порядок на запуске: сначала рабочие из своего файла — живы ли они сейчас.
+            // Только после этого имеет смысл искать новые и считать квоты.
+            if (Volatile.Read(ref _startupRecheckDone) == 0)
+            {
+                await EnsureStartupRecheckAsync().ConfigureAwait(false);
                 return;
             }
 

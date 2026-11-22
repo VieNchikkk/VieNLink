@@ -33,8 +33,12 @@ public partial class MainWindow
             AutoUpdateHoursBox.Text = _settings.AutoUpdateHours.ToString();
             KeepUnseenDaysBox.Text = _settings.KeepUnseenNodeDays.ToString();
             AutoRefreshBox.Text = _settings.AutoRefreshMinutes.ToString();
+            AutoCollectServersCheck.IsChecked = _settings.AutoCollectServers && _settings.AutoRefreshMinutes > 0;
             AutoDiscoverCheck.IsChecked = _settings.AutoDiscoverSources;
             AutoDiscoverHoursBox.Text = _settings.AutoDiscoverHours.ToString();
+            AutoMtProtoCheck.IsChecked = _settings.AutoMtProto;
+            AutoCoreUpdateCheck.IsChecked = _settings.AutoUpdateCore;
+            AutoCheckAppUpdatesCheck.IsChecked = _settings.AutoCheckAppUpdates;
             ApplyProxyCheck.IsChecked = _settings.ApplySystemProxy;
             AutoBestCheck.IsChecked = _settings.AutoSelectBest;
             AutoFailoverCheck.IsChecked = _settings.AutoFailover;
@@ -263,6 +267,13 @@ public partial class MainWindow
             _sourceRows.Add(new SourceRow(source));
         }
 
+        // «Всего зарегистрировано» для старых источников считаем по уже собранному кэшу:
+        // иначе колонка была бы пустой до следующего обновления.
+        if (NodeSourceStats.SeedTotals(_sources, snapshot.Nodes))
+        {
+            NodeSourceService.SaveSources(_sources);
+        }
+
         ReplaceNodes(snapshot.Nodes);
 
         if (snapshot.DroppedNodes > 0)
@@ -319,7 +330,8 @@ public partial class MainWindow
     {
         var sources = NodeSourceService.LoadSources();
         var freshAfter = DateTime.UtcNow.AddDays(-Math.Clamp(settings.KeepUnseenNodeDays, 1, 365));
-        var nodes = NodeSourceService.LoadCache(out var droppedNodes, out var duplicateNodes, freshAfter);
+        // Рабочие лежат отдельным файлом: он маленький и всегда свежий.
+        var nodes = NodeCacheWriter.Load(freshAfter, out var droppedNodes, out var duplicateNodes, out _);
 
         // Кэш мог вырасти до десятков тысяч: жёстко ограничиваем список и оставляем
         // личные и проверенные серверы, а не первые попавшиеся.
@@ -328,7 +340,7 @@ public partial class MainWindow
         if (droppedNodes > 0 || duplicateNodes > 0 || trimmedNodes > 0)
         {
             // «Мусор», устаревшие серверы, повторы и лишнее сверх лимита сразу убираем из кэша.
-            NodeSourceService.SaveCache(nodes);
+            NodeCacheWriter.Save(nodes, force: true);
         }
 
         var mtproto = MtProtoService.LoadCache();
@@ -422,7 +434,7 @@ public partial class MainWindow
         // Список в таблице уже без повторов — именно его и сохраняем.
         var unique = AllRows.Select(r => r.Node).ToList();
         // Кэш на 20 МБ пишется в фоне: после каждой партии проверки UI не должен ждать диск.
-        await Task.Run(() => NodeSourceService.SaveCache(unique));
+        await Task.Run(() => NodeCacheWriter.Save(unique));
     }
 
     /// <summary>

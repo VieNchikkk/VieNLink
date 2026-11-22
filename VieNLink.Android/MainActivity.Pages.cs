@@ -8,7 +8,6 @@ namespace VieNLink.Mobile;
 
 public sealed partial class MainActivity
 {
-    private bool _logCore;
     private StreamFragmentMode? _pendingBypass;
 
     // -------------------------------------------------------------- подключение
@@ -194,9 +193,9 @@ public sealed partial class MainActivity
         AddTile(page, Resource.Drawable.ic_service_telegram, "Telegram MTProtoProxies",
             $"{MtProtoStore.WorkingCount} рабочих прокси · каналы через RSS",
             () => Open(typeof(TelegramActivity)), P.Telegram);
-        AddTile(page, Resource.Drawable.ic_settings, "Настройки",
-            "Тема, обновления, данные и VPN, автоматика",
-            () => Open(typeof(SettingsActivity)), P.MutedStrong);
+        AddTile(page, Resource.Drawable.ic_tab_log, "Журнал",
+            "События приложения и лог ядра sing-box",
+            () => Open(typeof(LogActivity)), P.Warning);
         AddTile(page, Resource.Drawable.ic_info, "О программе и лицензии",
             "Версия, GPL-3.0, сторонние компоненты",
             () => Open(typeof(AboutActivity)), P.Accent);
@@ -246,7 +245,7 @@ public sealed partial class MainActivity
         {
             var result = await SourceDiscoveryService.DiscoverAsync(
                 NodeStore.SnapshotSources(), null, CancellationToken.None);
-            var added = NodeStore.AddDiscovered(result);
+            var added = await Task.Run(() => NodeStore.AddDiscovered(result));
             var mtproto = MtProtoStore.AddDiscovered(result.MtProto);
             var message = $"Новых источников {added}, серверов {result.Nodes.Count}, MTProto {mtproto}" +
                           (result.Error is null ? string.Empty : ". Ошибка: " + result.Error);
@@ -302,92 +301,6 @@ public sealed partial class MainActivity
         catch (Exception exception)
         {
             Ui.Toast(this, "Не удалось поделиться: " + exception.Message);
-        }
-    }
-
-    // ------------------------------------------------------------------ журнал
-
-    private View BuildLogPage()
-    {
-        var page = ColumnPage();
-        page.AddView(Ui.Section(this, "Журнал", P));
-
-        var info = Ui.Hint(this, "Читаю…", P);
-        var view = new TextView(this)
-        {
-            Typeface = Typeface.Monospace,
-            TextSize = 10.5f,
-        };
-        view.SetTextColor(P.MutedStrong);
-        view.SetTextIsSelectable(true);
-        view.SetBackgroundColor(P.Inner);
-        view.SetPadding(Ui.Dp(this, 10), Ui.Dp(this, 10), Ui.Dp(this, 10), Ui.Dp(this, 10));
-
-        var actions = Ui.Row(this);
-        var refresh = Ui.Pill(this, P, "Обновить", UiButtonKind.Accent,
-            () => _ = LoadLogAsync(view, info), Resource.Drawable.ic_refresh);
-        var share = Ui.Pill(this, P, "Поделиться", UiButtonKind.Secondary,
-            () => ShareText(view.Text ?? string.Empty, "VieNLink — журнал"), Resource.Drawable.ic_export);
-        actions.AddView(refresh, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        actions.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 8), 1));
-        actions.AddView(share, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        page.AddView(actions);
-
-        var core = new CheckBox(this)
-        {
-            Text = "Лог ядра (stderr)",
-            Checked = _logCore,
-        };
-        core.SetTextColor(P.TextSoft());
-        core.CheckedChange += (_, args) =>
-        {
-            _logCore = args.IsChecked;
-            _ = LoadLogAsync(view, info);
-        };
-        Ui.Add(page, core, 8);
-
-        var clear = Ui.Pill(this, P, "Очистить сегодняшний журнал", UiButtonKind.Ghost, () =>
-        {
-            if (LogReader.Clear())
-            {
-                Ui.Toast(this, "Журнал очищен");
-                _ = LoadLogAsync(view, info);
-            }
-        }, Resource.Drawable.ic_delete);
-        Ui.Add(page, clear, 8);
-
-        page.AddView(info);
-        var viewLayout = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
-        viewLayout.TopMargin = Ui.Dp(this, 8);
-        page.AddView(view, viewLayout);
-
-        var hint = Ui.Hint(this, "Показываются последние 200 строк. Журналы хранятся 14 дней, старые удаляются автоматически.", P);
-        Ui.Add(page, hint, 8);
-
-        _ = LoadLogAsync(view, info);
-        return page;
-    }
-
-    private async Task LoadLogAsync(TextView view, TextView info)
-    {
-        try
-        {
-            var core = _logCore;
-            var (text, source) = await Task.Run(() => LogReader.Read(core, 200));
-            RunOnUiThread(() =>
-            {
-                view.Text = text;
-                info.Text = source;
-            });
-        }
-        catch (Exception exception)
-        {
-            RunOnUiThread(() =>
-            {
-                view.Text = "Не удалось прочитать журнал: " + exception.Message;
-                info.Text = "Ошибка";
-            });
         }
     }
 
