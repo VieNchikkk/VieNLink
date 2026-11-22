@@ -50,6 +50,7 @@ public sealed partial class MainActivity : BaseActivity
     private Handler? _handler;
     private Action? _tick;
     private DateTime _lastExitAttempt = DateTime.MinValue;
+    private bool _exitFailed;
     private bool _exitBusy;
     private bool _speedMeasured;
     private string? _pendingConfig;
@@ -616,8 +617,17 @@ public sealed partial class MainActivity : BaseActivity
             }
             else
             {
+                var name = string.IsNullOrWhiteSpace(selected.Name) ? selected.Server : selected.Name;
+                if (name.Length > 42)
+                {
+                    name = name[..41] + "…";
+                }
+
+                var endpoint = string.IsNullOrWhiteSpace(selected.Server)
+                    ? string.Empty
+                    : $" · {selected.Server}:{selected.Port}";
                 var speed = selected.SpeedMbps is { } mbps ? $" · {mbps:0.#} Мбит/с" : string.Empty;
-                _nodeText.Text = $"Проверенный сервер · {selected.DisplayDelay}{speed} · {new string('★', rating)}{new string('☆', 5 - rating)}";
+                _nodeText.Text = $"{name}{endpoint} · {selected.DisplayDelay}{speed} · {new string('★', rating)}{new string('☆', 5 - rating)}";
             }
         }
 
@@ -626,7 +636,13 @@ public sealed partial class MainActivity : BaseActivity
             var show = NodeStore.Settings.ShowExitInfo;
             _exitText.Visibility = show ? ViewStates.Visible : ViewStates.Gone;
             var exit = NetworkProbe.CachedExit;
-            _exitText.Text = !running || exit is null ? "Выход: —" : "Выход: " + exit.Short;
+            _exitText.Text = !running
+                ? "Выход: —"
+                : exit is not null
+                    ? "Выход: " + exit.Short
+                    : _exitFailed
+                        ? "Выход: не определён"
+                        : "Выход: определяется…";
         }
 
         if (_speedText is not null)
@@ -815,9 +831,11 @@ public sealed partial class MainActivity : BaseActivity
             if (showExit)
             {
                 var info = await NetworkProbe.LookupExitAsync(CancellationToken.None);
+                _exitFailed = info is null;
                 if (info is not null)
                 {
                     RunOnUiThread(RefreshHeader);
+                    TunnelService.RefreshServerInfo();
                 }
             }
 
@@ -1316,6 +1334,7 @@ public sealed partial class MainActivity : BaseActivity
     private void ScheduleExitProbe()
     {
         _lastExitAttempt = DateTime.MinValue;
+        _exitFailed = false;
         _ = Task.Run(async () =>
         {
             await Task.Delay(4000);

@@ -58,10 +58,16 @@ public sealed class TunnelWidget : AppWidgetProvider
         var running = state == TunnelState.Running;
         var bypass = TunnelService.IsBypassMode;
 
+        var selected = NodeStore.Selected;
+        var exit = NetworkProbe.CachedExit;
+        var server = selected is null
+            ? "—"
+            : TunnelService.ShortServerName(selected) + " · " + selected.DisplayDelay +
+              (exit is null ? string.Empty : " · " + exit.Flag + " " + exit.Country);
         var status = bypass
             ? running ? "TUN-обход (бета)" : "Запускаю TUN-обход (бета)…"
             : running
-                ? "Подключено · " + (NodeStore.Selected?.DisplayDelay ?? "—")
+                ? "Подключено · " + server
                 : state == TunnelState.Starting
                     ? "Подключаюсь…"
                     : "VPN выключен";

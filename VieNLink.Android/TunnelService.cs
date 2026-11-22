@@ -348,8 +348,14 @@ public sealed class TunnelService : VpnService
             ? new Notification.Builder(this, ChannelId)
             : new Notification.Builder(this);
 
+        var selected = NodeStore.Selected;
+        var exit = NetworkProbe.CachedExit;
+        var server = selected is null
+            ? _nodeLabel
+            : ShortServerName(selected) + " · " + selected.DisplayDelay +
+              (exit is null ? string.Empty : " · " + exit.Flag + " " + exit.Country);
         var text = State == TunnelState.Running
-            ? _nodeLabel is null ? "Туннель работает" : "Подключено · " + _nodeLabel
+            ? server ?? "Туннель работает"
             : "Подключаюсь…";
 
         builder
@@ -414,6 +420,27 @@ public sealed class TunnelService : VpnService
         NetworkProbe.Invalidate();
         Active?.RefreshNotification();
         TunnelWidget.Update(Android.App.Application.Context);
+    }
+
+    /// <summary>
+    /// Обновляет уведомление и виджет, когда стал известен выходной IP/страна.
+    /// Не сбрасывает NetworkProbe, в отличие от <see cref="UpdateNodeLabel"/>.
+    /// </summary>
+    internal static void RefreshServerInfo()
+    {
+        Active?.RefreshNotification();
+        TunnelWidget.Update(Android.App.Application.Context);
+    }
+
+    internal static string ShortServerName(ProxyNode node)
+    {
+        var name = string.IsNullOrWhiteSpace(node.Name) ? node.Server : node.Name;
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return "Сервер";
+        }
+
+        return name.Length > 42 ? name[..41] + "…" : name;
     }
 
     /// <summary>Действие «Лучший» в уведомлении: проверенный сервер с максимальным доступом.</summary>

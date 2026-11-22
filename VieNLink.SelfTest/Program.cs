@@ -1659,6 +1659,8 @@ internal static class Program
             "test");
         Check(vless is { Protocol: "vless", Port: 443, Server: "example.com" }, "vless: сервер и порт");
         Check(vless?.Name == "Тест", "vless: имя из фрагмента");
+        Check(LinkParser.NormalizeName("GB \\U0001F1EC\\U0001F1E7 Test").Contains("🇬🇧", StringComparison.Ordinal),
+            "vless: \\U-флаг в имени декодируется");
         Check(vless?.OutboundJson.Contains("\"ws\"", StringComparison.Ordinal) == true, "vless: websocket");
 
         var reality = LinkParser.Parse(

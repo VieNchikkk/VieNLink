@@ -218,7 +218,8 @@ internal static class SubscriptionParser
                     return null;
                 }
 
-                var name = clone["tag"]?.ToString() ?? serverText + ":" + port;
+                var name = LinkParser.NormalizeName(
+                    clone["tag"]?.ToString() ?? serverText + ":" + port);
                 // Идентичность не должна зависеть от поля tag (оно пересоздаётся иначе сервер «меняет» Id).
                 clone.Remove("tag");
                 var identity = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(clone.ToJsonString())))[..20];

@@ -577,11 +577,12 @@ internal static class LinkParser
         var tag = "n" + identity[..10];
         outbound["tag"] = tag;
 
+        var displayName = NormalizeName(name);
         return new ProxyNode
         {
             RawLink = raw,
             Protocol = protocol,
-            Name = string.IsNullOrWhiteSpace(name) ? server : name,
+            Name = string.IsNullOrWhiteSpace(displayName) ? server : displayName,
             Server = server,
             Port = port,
             Tag = tag,
@@ -699,19 +700,65 @@ internal static class LinkParser
 
     private static string SafeUnescape(string value)
     {
-        if (string.IsNullOrEmpty(value) || !value.Contains('%'))
+        if (string.IsNullOrEmpty(value))
         {
             return value;
         }
 
-        try
+        var result = value;
+        if (result.Contains('%'))
         {
-            return Uri.UnescapeDataString(value);
+            try
+            {
+                result = Uri.UnescapeDataString(result);
+            }
+            catch (UriFormatException)
+            {
+                // Оставляем исходную строку.
+            }
         }
-        catch (UriFormatException)
+
+        return DecodeUnicodeEscapes(result);
+    }
+
+    /// <summary>
+    /// Имя сервера из источника может содержать литеральные \uXXXX / \UXXXXXXXX
+    /// (например, флаги стран). Для отображения превращаем их в настоящие символы.
+    /// </summary>
+    internal static string NormalizeName(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? string.Empty : SafeUnescape(value).Trim();
+
+    private static string DecodeUnicodeEscapes(string value)
+    {
+        if (!value.Contains("\\u", StringComparison.Ordinal) &&
+            !value.Contains("\\U", StringComparison.Ordinal))
         {
             return value;
         }
+
+        var result = new StringBuilder(value.Length);
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (value[index] == '\\' && index + 1 < value.Length &&
+                (value[index + 1] == 'u' || value[index + 1] == 'U'))
+            {
+                var digits = value[index + 1] == 'u' ? 4 : 8;
+                if (index + 2 + digits <= value.Length &&
+                    int.TryParse(value.AsSpan(index + 2, digits), NumberStyles.HexNumber,
+                        CultureInfo.InvariantCulture, out var code) &&
+                    code is > 0 and <= 0x10FFFF &&
+                    (code < 0xD800 || code > 0xDFFF))
+                {
+                    result.Append(char.ConvertFromUtf32(code));
+                    index += 1 + digits;
+                    continue;
+                }
+            }
+
+            result.Append(value[index]);
+        }
+
+        return result.ToString();
     }
 
     private static string? Str(JsonElement root, string name) =>

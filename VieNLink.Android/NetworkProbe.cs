@@ -92,6 +92,7 @@ internal static class NetworkProbe
 
         foreach (var url in new[]
                  {
+                     "https://cp.cloudflare.com/cdn-cgi/trace",
                      "https://www.cloudflare.com/cdn-cgi/trace",
                      "https://ipinfo.io/json",
                      "https://api.myip.com",
