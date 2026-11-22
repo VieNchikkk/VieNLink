@@ -46,7 +46,7 @@ internal sealed class ZapretHistoryEntry
 
 /// <summary>
 /// Обход DPI через zapret (winws + WinDivert). Работает на уровне пакетов Windows и не требует
-/// прокси-узла: разрезает/подменяет TLS ClientHello так, чтобы ТСПУ не увидел SNI, а сервер собрал поток.
+/// прокси-сервера: разрезает/подменяет TLS ClientHello так, чтобы ТСПУ не увидел SNI, а сервер собрал поток.
 /// Нужны права администратора и установленный драйвер WinDivert.
 /// </summary>
 internal sealed class ZapretService : IDisposable
@@ -566,7 +566,7 @@ internal sealed class ZapretService : IDisposable
 
     /// <summary>
     /// Список целевых доменов для zapret. Ограничиваем десинк ими, чтобы служебный
-    /// трафик — в том числе скрытая проверка узлов — шёл напрямую и не искажался.
+    /// трафик — в том числе скрытая проверка серверов — шёл напрямую и не искажался.
     /// </summary>
     public static string EnsureTargetHostlist()
     {
@@ -592,7 +592,7 @@ internal sealed class ZapretService : IDisposable
         Stop();
 
         // Всегда ограничиваем десинк целевыми доменами: так он не трогает соединения
-        // к серверам узлов, и фоновая проверка может работать при включённом zapret.
+        // к серверам серверов, и фоновая проверка может работать при включённом zapret.
         var effectiveHostlist = hostlistPath ?? EnsureTargetHostlist();
 
         if (blockQuic && !SetQuicBlock(true))

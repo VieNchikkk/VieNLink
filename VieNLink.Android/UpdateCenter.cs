@@ -25,6 +25,17 @@ internal static class UpdateCenter
     /// <summary>Проверка при открытии главного экрана. force — из уведомления или adb.</summary>
     public static void StartLaunchCheck(Activity activity, bool force = false)
     {
+        if (StoreBuildInfo.IsStoreBuild)
+        {
+            // Магазинная сборка: обновления ставит Google Play/RuStore.
+            return;
+        }
+
+        if (!force && SettingsStore.Current.AutomationPaused)
+        {
+            return;
+        }
+
         if (!force && Interlocked.CompareExchange(ref _launchCheckStarted, 1, 0) != 0)
         {
             return;
@@ -58,6 +69,12 @@ internal static class UpdateCenter
     /// <summary>Ручная проверка из «Общих» и «О программе»: проверяет, скачивает и предлагает установку.</summary>
     public static async Task CheckInteractiveAsync(Activity activity, Action<string> status)
     {
+        if (StoreBuildInfo.IsStoreBuild)
+        {
+            status($"Версия {CurrentVersion(activity)} · обновления устанавливаются через магазин приложений");
+            return;
+        }
+
         try
         {
             var release = await CheckAsync(activity, force: true, status).ConfigureAwait(false);
@@ -86,6 +103,11 @@ internal static class UpdateCenter
     /// <summary>Фоновая проверка из обслуживания: без загрузки, только уведомление.</summary>
     public static async Task CheckInBackgroundAsync(Context context)
     {
+        if (StoreBuildInfo.IsStoreBuild || SettingsStore.Current.AutomationPaused)
+        {
+            return;
+        }
+
         try
         {
             var preferences = Preferences(context);
@@ -95,10 +117,17 @@ internal static class UpdateCenter
                 return;
             }
 
-            WriteTime(preferences, KeyLastCheck, DateTime.UtcNow);
             var release = await AndroidUpdate.FindLatestAsync(CancellationToken.None).ConfigureAwait(false);
-            if (release is null ||
-                !AndroidUpdate.IsNewer(CurrentVersion(context), release.Tag) ||
+            if (release is null)
+            {
+                // Не отмечаем проверку: при следующем запуске или такте обслуживания
+                // попробуем снова, иначе неудачная попытка «замораживала» обновление
+                // на 6 часов и новая версия так и не предлагалась.
+                return;
+            }
+
+            WriteTime(preferences, KeyLastCheck, DateTime.UtcNow);
+            if (!AndroidUpdate.IsNewer(CurrentVersion(context), release.Tag) ||
                 WasSkipped(context, release.Tag))
             {
                 return;
@@ -131,17 +160,20 @@ internal static class UpdateCenter
                 return null;
             }
 
-            WriteTime(preferences, KeyLastCheck, now);
             Report(context, status, "Проверяю GitHub…");
 
             var release = await AndroidUpdate.FindLatestAsync(CancellationToken.None).ConfigureAwait(false);
             if (release is null)
             {
+                // Проверку не отмечаем: следующий запуск снова попробует, а не будет
+                // ждать 6 часов после одной неудачной попытки (частая причина
+                // «новая версия есть, но не скачивается»).
                 Report(context, status,
-                    "Не удалось проверить: нет сети или GitHub недоступен (попробуйте через узел).");
+                    "Не удалось проверить: нет сети или GitHub недоступен (попробуйте через сервер).");
                 return null;
             }
 
+            WriteTime(preferences, KeyLastCheck, now);
             var current = CurrentVersion(context);
             if (!AndroidUpdate.IsNewer(current, release.Tag))
             {
@@ -213,7 +245,7 @@ internal static class UpdateCenter
             .SetTitle("Обновление VieNLink")
             .SetMessage(
                 $"Скачана версия {release.Tag} ({sizeMb:0.0} МБ).\n\n" +
-                "Установить поверх текущей? Настройки, источники и кэш узлов сохранятся.")
+                "Установить поверх текущей? Настройки, источники и кэш серверов сохранятся.")
             .SetPositiveButton("Установить", (_, _) => TryInstall(activity, path))
             .SetNeutralButton("Открыть релиз", (_, _) => OpenUrl(activity, release.PageUrl))
             .SetNegativeButton("Позже", (_, _) => MarkSkipped(activity, release.Tag))

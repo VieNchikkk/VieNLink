@@ -13,7 +13,7 @@ internal static class MtProtoScheduler
 
     public static void Start(Android.Content.Context context)
     {
-        if (_timer is not null || ProbeScheduler.IsProbeProcess())
+        if (_timer is not null || ProbeScheduler.IsProbeProcess() || SettingsStore.Current.AutomationPaused)
         {
             return;
         }
@@ -21,6 +21,13 @@ internal static class MtProtoScheduler
         _timer = new Timer(_ => _ = TickAsync(context), null,
             TimeSpan.FromSeconds(90), TickInterval);
         AppLog.Write("mtproto", "Автономный сбор MTProto запущен (проверка каждые 2 минуты)");
+    }
+
+    /// <summary>Останавливает фоновое обслуживание MTProto.</summary>
+    public static void Stop()
+    {
+        _timer?.Dispose();
+        _timer = null;
     }
 
     private static async Task TickAsync(Android.Content.Context context)
@@ -32,7 +39,8 @@ internal static class MtProtoScheduler
 
         try
         {
-            if (ProbeScheduler.IsProbeProcess() || MtProtoStore.IsCollecting)
+            if (ProbeScheduler.IsProbeProcess() || MtProtoStore.IsCollecting ||
+                SettingsStore.Current.AutomationPaused)
             {
                 return;
             }
@@ -44,7 +52,10 @@ internal static class MtProtoScheduler
             }
 
             var now = DateTime.UtcNow;
-            if (now - android.LastMtProtoCollectUtc >= TimeSpan.FromMinutes(MtProtoSchedule.CollectMinutes))
+            var collectMinutes = MtProtoStore.WorkingCount < MtProtoSchedule.MinWorking
+                ? MtProtoSchedule.CollectMinutesWhenFew
+                : MtProtoSchedule.CollectMinutes;
+            if (now - android.LastMtProtoCollectUtc >= TimeSpan.FromMinutes(collectMinutes))
             {
                 await MtProtoStore.CollectAsync(null, CancellationToken.None).ConfigureAwait(false);
             }

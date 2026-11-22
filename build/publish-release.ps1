@@ -27,9 +27,14 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'version.ps1')
 $project = Join-Path $root 'VieNLink\VieNLink.csproj'
 $runtime = 'win-x64'
 
+$shared = Get-VieNLinkVersion -Root $root
+if (-not $Version -and $shared) {
+    $Version = $shared.Version
+}
 if (-not $Version) {
     [xml]$projectXml = Get-Content -LiteralPath $project -Encoding UTF8
     $Version = @($projectXml.Project.PropertyGroup | ForEach-Object { $_.Version } | Where-Object { $_ })[0]

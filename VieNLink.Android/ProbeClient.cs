@@ -21,7 +21,7 @@ internal static class ProbeClient
 
     /// <summary>
     /// Поиск остановлен пользователем: фоновые партии не запускаются, пока он сам
-    /// не нажмёт «Проверить узлы» или кнопку сервиса.
+    /// не нажмёт «Проверить серверы» или кнопку сервиса.
     /// </summary>
     public static bool IsPaused => _paused;
 
@@ -43,8 +43,8 @@ internal static class ProbeClient
         }
 
         StopProbeProcess();
-        ReportActivity("Поиск узлов остановлен", 15);
-        AppLog.Write("probe", "Поиск узлов остановлен пользователем");
+        ReportActivity("Поиск серверов остановлен", 15);
+        AppLog.Write("probe", "Поиск серверов остановлен пользователем");
     }
 
     /// <summary>Снова разрешает поиск: пользователь нажал «Проверить» или кнопку сервиса.</summary>
@@ -53,7 +53,7 @@ internal static class ProbeClient
         if (_paused)
         {
             _paused = false;
-            AppLog.Write("probe", "Поиск узлов возобновлён");
+            AppLog.Write("probe", "Поиск серверов возобновлён");
         }
     }
 
@@ -77,7 +77,7 @@ internal static class ProbeClient
     private static DateTime _activityUntilUtc;
 
     /// <summary>
-    /// Что сейчас делает проверка (включая фоновую): строка для шапки и экрана «Узлы».
+    /// Что сейчас делает проверка (включая фоновую): строка для шапки и экрана «Серверы».
     /// Погасает сама, чтобы не застрять на экране после завершения.
     /// </summary>
     public static string? ActivityText =>
@@ -90,71 +90,80 @@ internal static class ProbeClient
     }
 
     /// <summary>
-    /// Проверяет накопившиеся/давно проверенные узлы небольшой партией.
+    /// Проверяет накопившиеся/давно проверенные серверы небольшой партией.
     /// <paramref name="recheckWorking"/> — ручная проверка: перепроверяются и рабочие
-    /// узлы, иначе после первого прохода кнопка «Проверить» ничего бы не делала.
+    /// серверы, иначе после первого прохода кнопка «Проверить» ничего бы не делала.
     /// </summary>
     public static async Task<NodeTestSummary> RunBatchAsync(
         int max,
         CancellationToken cancellationToken,
         IProgress<ProbeProgress>? progress = null,
         bool recheckWorking = false,
-        Func<ProxyNode, int>? sourceScore = null)
+        Func<ProxyNode, int>? sourceScore = null,
+        bool workingOnly = false)
     {
         if (ProbeScheduler.IsProbeProcess())
         {
             return new NodeTestSummary(0, 0, 0, null);
         }
 
-        NodeStore.EnsureLoaded();
+        await Task.Run(() => NodeStore.EnsureLoaded(), cancellationToken).ConfigureAwait(false);
         if (TunnelService.IsBypassMode)
         {
             return new NodeTestSummary(0, 0, 0,
-                "В TUN-обходе проверка узлов недоступна: он перехватывает весь трафик.");
+                "В TUN-обходе проверка серверов недоступна: он перехватывает весь трафик.");
         }
 
         if (_paused)
         {
-            return new NodeTestSummary(0, 0, 0, "Поиск узлов остановлен");
+            return new NodeTestSummary(0, 0, 0, "Поиск серверов остановлен");
         }
 
-        // Рабочие узлы перепроверяем чаще, чем раз в IdleRecheckHours — по
-        // NodeLimits.WorkingRecheckMinutes (15 мин): бесплатный узел живёт минуты,
-        // и «рабочий» из кэша без перепроверки обещает кнопке узел, которого уже нет.
-        var workingCutoff = DateTime.UtcNow.AddMinutes(-NodeLimits.WorkingRecheckMinutes);
-        var candidates = NodeStore.OrderForConfig(NodeStore.Snapshot())
-            // Один узел — одна проверка: одинаковые outbound'ы не попадают в партию дважды.
-            .DistinctBy(node => node.Tag, StringComparer.OrdinalIgnoreCase)
-            .Where(node => node.Status == NodeStatus.Unknown ||
-                           (node.Status == NodeStatus.Working &&
-                            (recheckWorking || node.CheckedAtUtc is null ||
-                             node.CheckedAtUtc < workingCutoff)))
-            // Сначала непроверенные и самые свежие из источников: бесплатные узлы живут
-            // недолго, и проверять вчерашний список полезнее, чем недельный. Затем — узлы
-            // из источников, которые уже давали живые узлы (sourceScore).
-            // Но первыми идут рабочие с устаревшей проверкой: именно они показаны
-            // в счётчиках, и их смерть важнее поиска среди непроверенных.
-            .OrderBy(node => node.Status == NodeStatus.Working ? 0 : 1)
-            .ThenBy(node => node.TriedAtUtc is null ? 0 : 1)
-            .ThenByDescending(node => node.LastSeenUtc)
-            .ThenByDescending(node => sourceScore?.Invoke(node) ?? 0)
-            .Take(Math.Clamp(max, 1, 200))
-            .ToList();
+        // Рабочие серверы перепроверяем чаще окна свежести — по
+        // NodeLimits.WorkingRecheckMinutes (5 мин), начиная за минуту до истечения.
+        // Бесплатный сервер живёт минуты, и «рабочий» из кэша без перепроверки
+        // обещает кнопке сервер, которого уже нет.
+        var workingCutoff = NodeAvailability.RecheckCutoffUtc(DateTime.UtcNow);
+        // Снимок и сортировка тысяч серверов — в фоне: на UI-потоке это давало ANR
+        // при нажатии кнопок сервисов и «Универсальный».
+        var candidates = await Task.Run(() =>
+            NodeStore.OrderForConfig(NodeStore.Snapshot())
+                // Один сервер — одна проверка: одинаковые outbound'ы не попадают в партию дважды.
+                .DistinctBy(node => node.Tag, StringComparer.OrdinalIgnoreCase)
+                .Where(node => workingOnly
+                    ? node.Status == NodeStatus.Working &&
+                      node.CheckedAtUtc is not null && node.CheckedAtUtc < workingCutoff
+                    : node.Status == NodeStatus.Unknown ||
+                      (node.Status == NodeStatus.Working &&
+                       (recheckWorking || node.CheckedAtUtc is null ||
+                        node.CheckedAtUtc < workingCutoff)))
+                // Сначала непроверенные и самые свежие из источников: бесплатные серверы живут
+                // недолго, и проверять вчерашний список полезнее, чем недельный. Затем — серверы
+                // из источников, которые уже давали живые серверы (sourceScore).
+                // Но первыми идут рабочие с устаревшей проверкой: именно они показаны
+                // в счётчиках, и их смерть важнее поиска среди непроверенных.
+                .OrderBy(node => node.Status == NodeStatus.Working ? 0 : 1)
+                .ThenBy(node => node.TriedAtUtc is null ? 0 : 1)
+                .ThenByDescending(node => node.LastSeenUtc)
+                .ThenByDescending(node => sourceScore?.Invoke(node) ?? 0)
+                .Take(Math.Clamp(max, 1, 200))
+                .ToList(), cancellationToken).ConfigureAwait(false);
 
         if (candidates.Count == 0)
         {
             return new NodeTestSummary(0, 0, 0, NodeStore.Nodes.Count == 0
-                ? "Список узлов пуст: сначала обновите источники"
-                : "Проверять нечего: все узлы проверены недавно");
+                ? "Список серверов пуст: сначала обновите источники"
+                : "Проверять нечего: все серверы проверены недавно");
         }
 
-        return await RunAsync(candidates, cancellationToken, progress).ConfigureAwait(false);
+        return await RunAsync(candidates, cancellationToken, progress, fullDomains: !workingOnly)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
-    /// Держит минимум рабочих узлов: проверяет партии, пока рабочих не станет
+    /// Держит минимум рабочих серверов: проверяет партии, пока рабочих не станет
     /// не меньше <see cref="NodeLimits.MinWorkingNodes"/> или партии не кончатся.
-    /// Возвращает итоговое число рабочих узлов.
+    /// Возвращает итоговое число рабочих серверов.
     /// </summary>
     public static async Task<int> EnsureWorkingQuotaAsync(
         int maxBatches,
@@ -192,10 +201,10 @@ internal static class ProbeClient
     }
 
     /// <summary>
-    /// Заботится о сервисе: если рабочего узла с доступом к нему нет, проверяет партии
-    /// непроверенных узлов, пока такой не появится. Сначала берутся узлы из источников,
+    /// Заботится о сервисе: если рабочего сервера с доступом к нему нет, проверяет партии
+    /// непроверенных серверов, пока такой не появится. Сначала берутся серверы из источников,
     /// которые уже давали рабочий доступ к этому сервису. Нужно для гарантии
-    /// «у кнопки YouTube всегда есть живой узел».
+    /// «у кнопки YouTube всегда есть живой сервер».
     /// </summary>
     public static async Task<ProxyNode?> EnsureServiceNodeAsync(
         NodeStore.QuickService service,
@@ -222,7 +231,7 @@ internal static class ProbeClient
             }
 
             // После каждой партии пересчитываем: источники, которые уже дали доступ
-            // к сервису, проверяются первыми — так нужный узел находится быстрее.
+            // к сервису, проверяются первыми — так нужный сервер находится быстрее.
             var scores = BuildSourceScores(NodeStore.Snapshot(), node => Reached(node, service));
             var batchStarted = DateTime.UtcNow;
             var summary = await RunBatchAsync(
@@ -240,19 +249,19 @@ internal static class ProbeClient
             var found = PickFreshForService(service, batchStarted);
             if (found is not null)
             {
-                AppLog.Write("probe", $"{service}: рабочий узел найден автоматически, партий {batch}");
+                AppLog.Write("probe", $"{service}: рабочий сервер найден автоматически, партий {batch}");
                 return found;
             }
 
-            AppLog.Write("probe", $"{service}: в партии {batch} подходящих узлов нет");
+            AppLog.Write("probe", $"{service}: в партии {batch} подходящих серверов нет");
         }
 
         return null;
     }
 
     /// <summary>
-    /// Узел с доступом к сервису, проверенный после указанного момента. Именно он годится
-    /// для подключения: старый «рабочий» узел мог уже умереть, а откат партии его не обновляет.
+    /// Сервер с доступом к сервису, проверенный после указанного момента. Именно он годится
+    /// для подключения: старый «рабочий» сервер мог уже умереть, а откат партии его не обновляет.
     /// </summary>
     public static ProxyNode? PickFreshForService(NodeStore.QuickService service, DateTime sinceUtc)
     {
@@ -265,7 +274,7 @@ internal static class ProbeClient
             .FirstOrDefault();
     }
 
-    /// <summary>Доля узлов источника, у которых есть доступ к сервису (0–1000).</summary>
+    /// <summary>Доля серверов источника, у которых есть доступ к сервису (0–1000).</summary>
     private static Dictionary<string, int> BuildSourceScores(
         IReadOnlyList<ProxyNode> snapshot,
         Func<ProxyNode, bool> reached)
@@ -285,7 +294,7 @@ internal static class ProbeClient
     private static int SourceScoreOf(Dictionary<string, int> scores, string? sourceName) =>
         sourceName is not null && scores.TryGetValue(sourceName, out var score) ? score : 0;
 
-    /// <summary>Есть ли у узла подтверждённый доступ к сервису.</summary>
+    /// <summary>Есть ли у сервера подтверждённый доступ к сервису.</summary>
     private static bool Reached(ProxyNode node, NodeStore.QuickService service) =>
         NodeAvailability.OpenedFor(node, service switch
         {
@@ -295,11 +304,54 @@ internal static class ProbeClient
             _ => "universal",
         });
 
+    /// <summary>
+    /// Применяет результаты, оставшиеся от прошлой проверки: если основной процесс
+    /// убили в фоне до чтения файла, работа :probe не должна пропасть.
+    /// Возвращает число применённых серверов.
+    /// </summary>
+    public static int ApplyPendingResults()
+    {
+        if (ProbeScheduler.IsProbeProcess() || IsRunning)
+        {
+            return 0;
+        }
+
+        try
+        {
+            if (!File.Exists(ProbeProtocol.ResultPath))
+            {
+                return 0;
+            }
+
+            var result = JsonSerializer.Deserialize<ProbeResultFile>(
+                File.ReadAllText(ProbeProtocol.ResultPath), ProbeProtocol.Json);
+            if (result is null || result.Nodes.Count == 0)
+            {
+                File.Delete(ProbeProtocol.ResultPath);
+                return 0;
+            }
+
+            NodeStore.EnsureLoaded();
+            Apply(result, Array.Empty<ProxyNode>());
+            File.Delete(ProbeProtocol.ResultPath);
+            AppLog.Write("probe",
+                $"Применены результаты фоновой проверки, оставшиеся с прошлого запуска: {result.Nodes.Count}");
+            return result.Nodes.Count;
+        }
+        catch (Exception exception) when (exception is IOException or JsonException
+                                             or UnauthorizedAccessException)
+        {
+            AppLog.Write("probe", "Не удалось применить оставшиеся результаты проверки", exception);
+            return 0;
+        }
+    }
+
     /// <summary>Запускает :probe и ждёт файл результатов. null — занято или не удалось.</summary>
     public static async Task<NodeTestSummary> RunAsync(
         IReadOnlyList<ProxyNode> nodes,
         CancellationToken cancellationToken,
-        IProgress<ProbeProgress>? progress = null)
+        IProgress<ProbeProgress>? progress = null,
+        bool fullDomains = true)
     {
         if (nodes.Count == 0)
         {
@@ -308,7 +360,7 @@ internal static class ProbeClient
 
         if (_paused)
         {
-            return new NodeTestSummary(0, 0, 0, "Поиск узлов остановлен");
+            return new NodeTestSummary(0, 0, 0, "Поиск серверов остановлен");
         }
 
         if (!await Gate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
@@ -325,9 +377,10 @@ internal static class ProbeClient
         try
         {
             progress?.Report(new ProbeProgress("Готовлю проверку…", 0, nodes.Count, 0));
-            ReportActivity("Проверяю узлы: готовлю проверку…", 30);
+            ReportActivity("Проверяю серверы: готовлю проверку…", 30);
             var request = new ProbeRequest
             {
+                FullDomains = fullDomains,
                 Nodes = nodes
                     .Select(node => new ProbeRequestNode { Id = node.Id, RawLink = node.RawLink })
                     .ToList(),
@@ -356,7 +409,8 @@ internal static class ProbeClient
                 // Прошлый ход проверки перезапишется.
             }
 
-            var context = Android.App.Application.Context;
+            var context = (Android.Content.Context?)TunnelService.Active
+                          ?? Android.App.Application.Context;
             var intent = new Android.Content.Intent(context, typeof(ProbeService))
                 .PutExtra(ProbeProtocol.ExtraRequest, ProbeProtocol.RequestPath);
             try
@@ -386,7 +440,7 @@ internal static class ProbeClient
             {
                 if (token.IsCancellationRequested)
                 {
-                    return new NodeTestSummary(0, 0, 0, "Поиск узлов остановлен");
+                    return new NodeTestSummary(0, 0, 0, "Поиск серверов остановлен");
                 }
 
                 if (File.Exists(ProbeProtocol.ResultPath))
@@ -416,12 +470,12 @@ internal static class ProbeClient
                     {
                         lastProgress = state;
                         var line = state.Total > 0
-                            ? $"Проверяю узлы: {state.Tested} из {state.Total} · рабочих {state.Working}"
-                            : "Проверяю узлы…";
+                            ? $"Проверяю серверы: {state.Tested} из {state.Total} · рабочих {state.Working}"
+                            : "Проверяю серверы…";
                         progress?.Report(new ProbeProgress(
                             state.Stage, state.Tested, state.Total, state.Working));
                         // Фоновая проверка идёт без подписчика прогресса — строку для шапки
-                        // пишем здесь, иначе снаружи не видно, что узлы проверяются.
+                        // пишем здесь, иначе снаружи не видно, что серверы проверяются.
                         ReportActivity(line);
                     }
                 }
@@ -460,8 +514,8 @@ internal static class ProbeClient
         }
         catch (OperationCanceledException)
         {
-            ReportActivity("Поиск узлов остановлен", 15);
-            return new NodeTestSummary(0, 0, 0, "Поиск узлов остановлен");
+            ReportActivity("Поиск серверов остановлен", 15);
+            return new NodeTestSummary(0, 0, 0, "Поиск серверов остановлен");
         }
         catch (Exception exception)
         {
@@ -562,7 +616,13 @@ internal static class ProbeClient
             .Select(node => node!)
             .ToList());
         NodeStore.SaveNodes();
-        var best = NodeStore.SelectBestWorking();
+        // При работающем туннеле выбор сервера принадлежит службе: она переключает
+        // selector и следит за живостью. Фоновая проверка не должна менять выбор —
+        // иначе health-check проверяет тег, которого нет в конфиге, и «переключение
+        // сервера в фоне» не срабатывает.
+        var best = TunnelService.State == TunnelState.Running
+            ? NodeStore.Selected
+            : NodeStore.SelectBestWorking();
         AppLog.Write("probe",
             $"Результаты :probe: рабочих {working} из {result.Nodes.Count}, удалено {removed}" +
             (best is null ? ", живых нет" : ", выбран " + best.Name));

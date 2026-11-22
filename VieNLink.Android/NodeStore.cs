@@ -1,24 +1,25 @@
 namespace VieNLink.Mobile;
 
-/// <summary>Выбранный узел переживает перезапуск приложения.</summary>
+/// <summary>Выбранный сервер переживает перезапуск приложения.</summary>
 internal sealed class SelectedNodeState
 {
     public string? Id { get; set; }
 }
 
 /// <summary>
-/// Узлы и источники Android-версии. Логика сбора, склейки повторов и лимитов живёт
+/// Серверы и источники Android-версии. Логика сбора, склейки повторов и лимитов живёт
 /// в общем ядре (<c>NodeSourceService</c>, <c>NodeDedup</c>, <c>NodeLimits</c>),
-/// здесь только хранение в памяти, сохранение кэша и выделение узла для подключения.
+/// здесь только хранение в памяти, сохранение кэша и выделение сервера для подключения.
 /// </summary>
 internal static class NodeStore
 {
-    /// <summary>Сколько узлов максимум кладём в конфиг телефона: больше — дольше старт и больше памяти.</summary>
+    /// <summary>Сколько серверов максимум кладём в конфиг телефона: больше — дольше старт и больше памяти.</summary>
     public const int MobileMaxNodesInConfig = 200;
 
     private static readonly object Gate = new();
     private static bool _loaded;
     private static string? _selectedId;
+    private static ProxyNode? _selected;
 
     public static List<SourceDefinition> Sources { get; } = new();
     public static List<ProxyNode> Nodes { get; } = new();
@@ -39,7 +40,14 @@ internal static class NodeStore
         }
     }
 
-    /// <summary>Читает источники, кэш узлов и выбранный узел. Тяжёлая операция — вызывать из фона.</summary>
+    /// <summary>Добавляет сервер, введённый вручную, и возвращает его Id.</summary>
+    public static string? AddManual(ProxyNode node)
+    {
+        Merge(new[] { node });
+        return node.Id;
+    }
+
+    /// <summary>Читает источники, кэш серверов и выбранный сервер. Тяжёлая операция — вызывать из фона.</summary>
     public static void EnsureLoaded()
     {
         lock (Gate)
@@ -52,21 +60,25 @@ internal static class NodeStore
             AppPaths.EnsureDirectories();
             AppLog.Initialize();
 
+            // Настройки читаются до источников: миграция схемы включает все источники
+            // (`EnableAllSourcesOnce`), и LoadSources должен увидеть этот флаг.
+            var settings = Settings;
+
             var sources = NodeSourceService.LoadSources();
             Sources.Clear();
             Sources.AddRange(sources);
 
-            var settings = Settings;
             var freshAfter = DateTime.UtcNow.AddDays(-Math.Max(1, settings.KeepUnseenNodeDays));
             var cached = NodeSourceService.LoadCache(out var dropped, out var duplicates, freshAfter);
             Nodes.Clear();
             Nodes.AddRange(cached);
 
             _selectedId = JsonFileStore.Read<SelectedNodeState>(SelectedPath)?.Id;
+            _selected = null;
             _loaded = true;
 
             Android.Util.Log.Info("VieNLink",
-                $"узлы: {Nodes.Count} из кэша, источников: {Sources.Count}, отброшено: {dropped}, дублей: {duplicates}");
+                $"серверы: {Nodes.Count} из кэша, источников: {Sources.Count}, отброшено: {dropped}, дублей: {duplicates}");
         }
     }
 
@@ -80,13 +92,13 @@ internal static class NodeStore
     }
 
     /// <summary>
-    /// Счётчики для шапки и экрана «Узлы» без копирования всего списка: шапка обновляется
-    /// каждые несколько секунд, и полный Snapshot из 12 000 узлов на каждый тик давал бы
+    /// Счётчики для шапки и экрана «Серверы» без копирования всего списка: шапка обновляется
+    /// каждые несколько секунд, и полный Snapshot из 12 000 серверов на каждый тик давал бы
     /// лишние аллокации и давление на сборщик мусора.
     /// </summary>
     /// <remarks>
-    /// Считаются только свежие проверки: узел, проверенный много часов назад, мог уже
-    /// умереть. Иначе значок обещает узел, которого кнопка сервиса не найдёт.
+    /// Считаются только свежие проверки: сервер, проверенный много часов назад, мог уже
+    /// умереть. Иначе значок обещает сервер, которого кнопка сервиса не найдёт.
     /// </remarks>
     public static (int Total, int Working, int Universal, int Youtube, int Telegram, int Discord) Summary()
     {
@@ -133,6 +145,86 @@ internal static class NodeStore
         }
     }
 
+    /// <summary>Подробная сводка для экрана «Серверы» — один проход без копии списка.</summary>
+    public readonly record struct NodeSummary(
+        int Total,
+        int Working,
+        int Fresh,
+        int Universal,
+        int Youtube,
+        int Telegram,
+        int Discord,
+        int Mine,
+        int BestDomains,
+        DateTime? LastChecked);
+
+    public static NodeSummary DetailedSummary()
+    {
+        lock (Gate)
+        {
+            var now = DateTime.UtcNow;
+            var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
+            var onlyMine = Settings.ConnectOnlyMine;
+            var working = 0;
+            var fresh = 0;
+            var universal = 0;
+            var youtube = 0;
+            var telegram = 0;
+            var discord = 0;
+            var mine = 0;
+            var bestDomains = 0;
+            DateTime? lastChecked = null;
+            foreach (var node in Nodes)
+            {
+                if (node.IsMine)
+                {
+                    mine++;
+                }
+
+                if (node.CheckedAtUtc is { } checkedAt &&
+                    (lastChecked is null || checkedAt > lastChecked))
+                {
+                    lastChecked = checkedAt;
+                }
+
+                if (node.Status == NodeStatus.Working)
+                {
+                    working++;
+                }
+
+                if (!NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now))
+                {
+                    continue;
+                }
+
+                fresh++;
+                bestDomains = Math.Max(bestDomains, node.OpenDomains);
+                if (NodeAvailability.OpenedFor(node, "universal"))
+                {
+                    universal++;
+                }
+
+                if (NodeAvailability.OpenedFor(node, "youtube"))
+                {
+                    youtube++;
+                }
+
+                if (NodeAvailability.OpenedFor(node, "telegram"))
+                {
+                    telegram++;
+                }
+
+                if (NodeAvailability.OpenedFor(node, "discord"))
+                {
+                    discord++;
+                }
+            }
+
+            return new NodeSummary(Nodes.Count, working, fresh, universal, youtube, telegram, discord,
+                mine, bestDomains, lastChecked);
+        }
+    }
+
     public static List<SourceDefinition> SnapshotSources()
     {
         lock (Gate)
@@ -147,9 +239,22 @@ internal static class NodeStore
         {
             lock (Gate)
             {
-                return _selectedId is null
-                    ? null
-                    : Nodes.FirstOrDefault(node => node.Id.Equals(_selectedId, StringComparison.OrdinalIgnoreCase));
+                if (_selectedId is null)
+                {
+                    return null;
+                }
+
+                // Ссылка на объект кэшируется: шапка спрашивает выбранный сервер каждые
+                // 3 секунды, а линейный поиск по 12 000 серверам на каждом такте не нужен.
+                if (_selected is not null &&
+                    _selected.Id.Equals(_selectedId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return _selected;
+                }
+
+                _selected = Nodes.FirstOrDefault(
+                    node => node.Id.Equals(_selectedId, StringComparison.OrdinalIgnoreCase));
+                return _selected;
             }
         }
     }
@@ -159,6 +264,7 @@ internal static class NodeStore
         lock (Gate)
         {
             _selectedId = node.Id;
+            _selected = node;
             JsonFileStore.Write(SelectedPath, new SelectedNodeState { Id = node.Id });
         }
     }
@@ -169,7 +275,7 @@ internal static class NodeStore
         var url = (input ?? string.Empty).Trim();
         if (url.Length == 0)
         {
-            return "Укажите ссылку на подписку или на узел";
+            return "Укажите ссылку на подписку или на сервер";
         }
 
         // Happ умеет импортировать подписку ссылкой happ://add/… — поддержим тот же формат.
@@ -196,7 +302,7 @@ internal static class NodeStore
 
             if (scheme is "vless" or "vmess" or "trojan" or "ss" or "hysteria2" or "hy2")
             {
-                var nodeName = string.IsNullOrWhiteSpace(name) ? "Мой узел" : name.Trim();
+                var nodeName = string.IsNullOrWhiteSpace(name) ? "Мой сервер" : name.Trim();
                 var single = new SourceDefinition
                 {
                     Name = nodeName,
@@ -206,7 +312,7 @@ internal static class NodeStore
                 };
                 Sources.Add(single);
                 NodeSourceService.SaveSources(Sources);
-                return "Добавлен узел: " + nodeName;
+                return "Добавлен сервер: " + nodeName;
             }
 
             if (!Uri.TryCreate(url, UriKind.Absolute, out var uri) ||
@@ -298,7 +404,7 @@ internal static class NodeStore
         }
 
         var message = outcome.Error is null
-            ? $"{source.Name}: {outcome.Nodes.Count} узлов"
+            ? $"{source.Name}: {outcome.Nodes.Count} серверов"
             : $"{source.Name}: ошибка — {outcome.Error}";
         progress?.Report(message);
         return message;
@@ -323,18 +429,19 @@ internal static class NodeStore
         }
 
         var working = Nodes.Count(node => node.Status == NodeStatus.Working);
-        var summary = $"Источники: {collected.Nodes.Count} узлов, в списке {Nodes.Count}, рабочих {working}";
+        var summary = $"Источники: {collected.Nodes.Count} серверов, в списке {Nodes.Count}, рабочих {working}";
         AppLog.Write("sources", summary);
         progress?.Report(summary);
         return summary;
     }
 
     /// <summary>
-    /// Добавляет узлы к уже собранным, сохраняя задержки и статусы проверок
+    /// Добавляет серверы к уже собранным, сохраняя задержки и статусы проверок
     /// (как в Windows-версии: иначе после каждого обновления статусы терялись бы).
     /// </summary>
     private static void Merge(IReadOnlyCollection<ProxyNode> incoming)
     {
+        List<ProxyNode> snapshot;
         lock (Gate)
         {
             var now = DateTime.UtcNow;
@@ -381,9 +488,13 @@ internal static class NodeStore
 
             Nodes.Clear();
             Nodes.AddRange(trimmed);
-
-            NodeSourceService.SaveCache(Nodes);
+            _selected = null;
+            snapshot = Nodes.ToList();
         }
+
+        // Сериализация и запись кэша — вне блокировки: UI не должен ждать диск,
+        // когда открывает шапку или экран «Серверы» сразу после фоновой работы.
+        NodeSourceService.SaveCache(snapshot);
     }
 
     /// <summary>
@@ -392,10 +503,13 @@ internal static class NodeStore
     /// </summary>
     public static int TrimToLimit()
     {
+        List<ProxyNode> snapshot;
+        int removed;
         lock (Gate)
         {
             EnsureLoaded();
-            var (trimmed, removed) = NodeLimits.Trim(Nodes, Settings.MaxTotalNodes);
+            var (trimmed, dropped) = NodeLimits.Trim(Nodes, Settings.MaxTotalNodes);
+            removed = dropped;
             if (removed <= 0)
             {
                 return 0;
@@ -403,49 +517,61 @@ internal static class NodeStore
 
             Nodes.Clear();
             Nodes.AddRange(trimmed);
-            NodeSourceService.SaveCache(Nodes);
-            AppLog.Write("nodes", $"Лимит списка: удалено {removed}, осталось {Nodes.Count}");
-            return removed;
+            _selected = null;
+            snapshot = Nodes.ToList();
         }
+
+        NodeSourceService.SaveCache(snapshot);
+        AppLog.Write("nodes", $"Лимит списка: удалено {removed}, осталось {snapshot.Count}");
+        return removed;
     }
 
-    /// <summary>Убирает весь кэш узлов (источники остаются).</summary>
+    /// <summary>Убирает весь кэш серверов (источники остаются).</summary>
     public static int ClearCache()
     {
+        int removed;
         lock (Gate)
         {
             EnsureLoaded();
-            var removed = Nodes.Count;
+            removed = Nodes.Count;
             Nodes.Clear();
             _selectedId = null;
-            try
+            _selected = null;
+            // Удаляем и сам кэш, и резервную копию: иначе следующее чтение
+            // восстановило бы только что очищенные серверы из nodes.json.bak.
+            foreach (var path in new[] { SelectedPath, AppPaths.NodesPath, AppPaths.NodesPath + ".bak" })
             {
-                if (File.Exists(SelectedPath))
+                try
                 {
-                    File.Delete(SelectedPath);
+                    if (File.Exists(path))
+                    {
+                        File.Delete(path);
+                    }
+                }
+                catch (IOException)
+                {
+                    // Файл освободится при следующем запуске.
                 }
             }
-            catch (IOException)
-            {
-                // Файл выбора перезапишется при следующем подключении.
-            }
-
-            NodeSourceService.SaveCache(Nodes);
-            return removed;
         }
+
+        return removed;
     }
 
     /// <summary>Сохраняет результаты проверки в кэш (задержки и статусы не теряются между запусками).</summary>
     public static void SaveNodes()
     {
+        List<ProxyNode> snapshot;
         lock (Gate)
         {
-            NodeSourceService.SaveCache(Nodes);
+            snapshot = Nodes.ToList();
         }
+
+        NodeSourceService.SaveCache(snapshot);
     }
 
     /// <summary>
-    /// Добавляет источники и узлы, найденные автопоиском. Возвращает число новых источников.
+    /// Добавляет источники и серверы, найденные автопоиском. Возвращает число новых источников.
     /// Уже известные адреса не дублируются, проверенные статусы сохраняются.
     /// </summary>
     public static int AddDiscovered(DiscoveryResult result)
@@ -485,40 +611,46 @@ internal static class NodeStore
     }
 
     /// <summary>
-    /// Убирает мёртвые узлы: непроверенный узел удаляется с первого провала,
+    /// Убирает мёртвые серверы: непроверенный сервер удаляется с первого провала,
     /// рабочий — после <see cref="NodeLimits.RemoveAfterFailures"/> провалов подряд.
-    /// Возвращает число удалённых.
+    /// Возвращает число удалённых. Кэш не пишет: вызывающий делает это один раз
+    /// через <see cref="SaveNodes"/> (иначе на партию приходилось две записи).
     /// </summary>
     public static int DropDeadNodes(IEnumerable<ProxyNode> tested)
     {
+        var dead = tested
+            .Where(node => node.Status == NodeStatus.Dead)
+            .Select(node => node.Id)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (dead.Count == 0)
+        {
+            return 0;
+        }
+
+        int removed;
         lock (Gate)
         {
-            var dead = tested
-                .Where(node => node.Status == NodeStatus.Dead)
-                .Select(node => node.Id)
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            if (dead.Count == 0)
-            {
-                return 0;
-            }
-
-            var removed = Nodes.RemoveAll(node => dead.Contains(node.Id));
+            removed = Nodes.RemoveAll(node => dead.Contains(node.Id));
             if (removed > 0)
             {
-                NodeSourceService.SaveCache(Nodes);
-                AppLog.Write("nodes", $"Убрано нерабочих узлов: {removed}");
+                _selected = null;
             }
-
-            return removed;
         }
+
+        if (removed > 0)
+        {
+            AppLog.Write("nodes", $"Убрано нерабочих серверов: {removed}");
+        }
+
+        return removed;
     }
 
-    /// <summary>Узлы в порядке выбора: личные, маскированные, быстрые.</summary>
+    /// <summary>Серверы в порядке выбора: личные, маскированные, быстрые.</summary>
     public static List<ProxyNode> OrderForConfig(IEnumerable<ProxyNode> nodes) =>
         nodes
             .Where(node => node.Status != NodeStatus.Dead && !string.IsNullOrWhiteSpace(node.OutboundJson))
             .OrderByDescending(node => node.IsMine)
-            .ThenByDescending(NodeRanking.Score)
+            .ThenByDescending(node => node.RankScore)
             .ThenByDescending(node => node.DelayMs is not null)
             .ThenByDescending(node => node.OpenDomains)
             .ThenBy(node => node.DelayMs ?? int.MaxValue)
@@ -526,9 +658,9 @@ internal static class NodeStore
             .ToList();
 
     /// <summary>
-    /// Лучший проверенный узел по тем же правилам, что в Windows: если включён
+    /// Лучший проверенный сервер по тем же правилам, что в Windows: если включён
     /// Telegram-канал — сначала с доступом к Telegram, затем личные, больше доменов,
-    /// маскировка, задержка; предпочитается узел в пределах <see cref="AppSettings.MaxDelayMs"/>.
+    /// маскировка, задержка; предпочитается сервер в пределах <see cref="AppSettings.MaxDelayMs"/>.
     /// </summary>
     private static List<ProxyNode> RankedVerified()
     {
@@ -541,7 +673,7 @@ internal static class NodeStore
             .OrderBy(node => node.DelayMs ?? int.MaxValue)
             .ThenByDescending(node => node.IsMine)
             .ThenByDescending(node => node.OpenDomains)
-            .ThenByDescending(NodeRanking.Score)
+            .ThenByDescending(node => node.RankScore)
             .ToList();
     }
 
@@ -559,16 +691,16 @@ internal static class NodeStore
     }
 
     /// <summary>
-    /// Узел для автоподключения: проверенный рабочий, открывающий больше заблокированных
+    /// Сервер для автоподключения: проверенный рабочий, открывающий больше заблокированных
     /// доменов, затем самый быстрый. Задержка null означает недавний провал
-    /// (см. <c>NodeHealth</c>), поэтому такие узлы не берём. null — здоровых нет.
+    /// (см. <c>NodeHealth</c>), поэтому такие серверы не берём. null — здоровых нет.
     /// </summary>
     private static ProxyNode? PickAutoNode(ProxyNode? selected) => BestVerified(selected);
 
     /// <summary>
-    /// Запоминает лучший проверенный узел по правилам Windows (Telegram, личные,
+    /// Запоминает лучший проверенный сервер по правилам Windows (Telegram, личные,
     /// домены, маскировка, задержка). Вызывается после проверки, чтобы вручную
-    /// не выбирать «Лучший». Возвращает выбранный узел или null, если живых нет.
+    /// не выбирать «Лучший». Возвращает выбранный сервер или null, если живых нет.
     /// </summary>
     public static ProxyNode? SelectBestWorking()
     {
@@ -584,14 +716,14 @@ internal static class NodeStore
             {
                 _selectedId = best.Id;
                 JsonFileStore.Write(SelectedPath, new SelectedNodeState { Id = best.Id });
-                AppLog.Write("nodes", "Автоматически выбран лучший узел: " + best.Name);
+                AppLog.Write("nodes", "Автоматически выбран лучший сервер: " + best.Name);
             }
 
             return best;
         }
     }
 
-    /// <summary>Сервис, для которого кнопка главного экрана ищет уже проверенный узел.</summary>
+    /// <summary>Сервис, для которого кнопка главного экрана ищет уже проверенный сервер.</summary>
     public enum QuickService
     {
         Universal,
@@ -601,12 +733,12 @@ internal static class NodeStore
     }
 
     /// <summary>
-    /// Узел для быстрого подключения к сервису: только свежие проверенные узлы,
+    /// Сервер для быстрого подключения к сервису: только свежие проверенные серверы,
     /// отсортированные скрытно от пользователя — сначала самые быстрые. Правило то же,
     /// что у счётчиков: число на значке и результат кнопки не должны расходиться.
-    /// null — подходящих узлов нет.
+    /// null — подходящих серверов нет.
     /// </summary>
-    public static ProxyNode? PickForService(QuickService service)
+    public static ProxyNode? PickForService(QuickService service, string? avoidId = null)
     {
         lock (Gate)
         {
@@ -614,7 +746,8 @@ internal static class NodeStore
             var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
             var onlyMine = Settings.ConnectOnlyMine;
             return Nodes
-                .Where(node => NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now) &&
+                .Where(node => (avoidId is null || !node.Id.Equals(avoidId, StringComparison.OrdinalIgnoreCase)) &&
+                               NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now) &&
                                OpenedFor(node, service))
                 .OrderBy(node => node.DelayMs ?? int.MaxValue)
                 .ThenByDescending(node => node.OpenDomains)
@@ -623,7 +756,7 @@ internal static class NodeStore
         }
     }
 
-    /// <summary>Есть ли у узла подтверждённый доступ к сервису.</summary>
+    /// <summary>Есть ли у сервера подтверждённый доступ к сервису.</summary>
     private static bool OpenedFor(ProxyNode node, QuickService service) =>
         NodeAvailability.OpenedFor(node, service switch
         {
@@ -634,55 +767,66 @@ internal static class NodeStore
         });
 
     /// <summary>
-    /// Узел, который прямо сейчас реально открывает сайт. Кэш мог устареть (узел умер,
+    /// Сервер, который прямо сейчас реально открывает сайт. Кэш мог устареть (сервер умер,
     /// пока телефон лежал), поэтому перед подключением проверяем всех кандидатов сервиса
     /// одной партией в :probe и берём первый живой. Так значок сервиса и результат кнопки
-    /// сходятся за одно нажатие: не открывшиеся узлы сразу перестают считаться рабочими.
+    /// сходятся за одно нажатие: не открывшиеся серверы сразу перестают считаться рабочими.
     /// Возвращает null, если живых нет.
     /// </summary>
     public static async Task<ProxyNode?> PickVerifiedAsync(
         QuickService? service,
         ProxyNode? preferred,
         IProgress<string>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? avoidId = null)
     {
-        EnsureLoaded();
+        await Task.Run(() => EnsureLoaded(), cancellationToken);
 
-        List<ProxyNode> unique;
-        lock (Gate)
+        // Снимок и отбор кандидатов — в фоне: сортировка тысяч серверов на UI-потоке
+        // давала ANR при нажатии кнопок сервисов.
+        var unique = await Task.Run(() =>
         {
             var candidates = new List<ProxyNode>();
-            if (preferred is not null &&
-                (!Settings.ConnectOnlyMine || preferred.IsMine))
+            lock (Gate)
             {
-                candidates.Add(preferred);
-            }
-
-            if (service is { } wanted)
-            {
-                var picked = PickForService(wanted);
-                if (picked is not null)
+                if (preferred is not null &&
+                    !preferred.Id.Equals(avoidId ?? string.Empty, StringComparison.OrdinalIgnoreCase) &&
+                    (!Settings.ConnectOnlyMine || preferred.IsMine))
                 {
-                    candidates.Add(picked);
+                    candidates.Add(preferred);
                 }
 
-                // Для конкретного сервиса не подставляем узлы без его доступа:
-                // иначе кнопка Telegram подключила бы узел, где Telegram не открывается.
-                candidates.AddRange(RankedVerified()
-                    .Where(node => OpenedFor(node, wanted))
-                    .Take(8));
-            }
-            else
-            {
-                candidates.AddRange(RankedVerified().Take(4));
-            }
+                if (service is { } wanted)
+                {
+                    var picked = PickForService(wanted, avoidId);
+                    if (picked is not null)
+                    {
+                        candidates.Add(picked);
+                    }
 
-            unique = candidates
-                .GroupBy(node => node.Id, StringComparer.OrdinalIgnoreCase)
-                .Select(group => group.First())
-                .Take(8)
-                .ToList();
-        }
+                    // Для конкретного сервиса не подставляем серверы без его доступа:
+                    // иначе кнопка Telegram подключила бы сервер, где Telegram не открывается.
+                    candidates.AddRange(RankedVerified()
+                        .Where(node => OpenedFor(node, wanted) &&
+                                       (avoidId is null ||
+                                        !node.Id.Equals(avoidId, StringComparison.OrdinalIgnoreCase)))
+                        .Take(8));
+                }
+                else
+                {
+                    candidates.AddRange(RankedVerified()
+                        .Where(node => avoidId is null ||
+                                       !node.Id.Equals(avoidId, StringComparison.OrdinalIgnoreCase))
+                        .Take(4));
+                }
+
+                return candidates
+                    .GroupBy(node => node.Id, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => group.First())
+                    .Take(8)
+                    .ToList();
+            }
+        }, cancellationToken);
 
         if (unique.Count == 0)
         {
@@ -691,16 +835,27 @@ internal static class NodeStore
 
         if (TunnelService.IsBypassMode)
         {
-            // В TUN-обходе проверка узлов недоступна: берём как есть.
+            // В TUN-обходе проверка серверов недоступна: берём как есть.
             Select(unique[0]);
             return unique[0];
         }
 
-        progress?.Report($"Проверяю узлы перед подключением: {unique.Count}…");
+        progress?.Report($"Проверяю серверы перед подключением: {unique.Count}…");
         var summary = await ProbeClient.RunAsync(unique, cancellationToken).ConfigureAwait(false);
         if (summary.Error is not null && summary.Tested == 0)
         {
-            // Проверка не запустилась (занята или процесс не поднялся): статусы не менять.
+            // Проверка занята фоновой партией или процесс не поднялся: кнопка не должна
+            // отвечать «сервера нет», если сервер со свежей проверкой уже есть. Берём его как
+            // есть — фоновая перепроверка всё равно обновит статус в ближайшую минуту.
+            var fallback = service is { } wantedFallback
+                ? PickForService(wantedFallback, avoidId)
+                : Selected;
+            if (fallback is not null)
+            {
+                Select(fallback);
+                return fallback;
+            }
+
             return null;
         }
 
@@ -728,8 +883,8 @@ internal static class NodeStore
     }
 
     /// <summary>
-    /// Готовый конфиг TUN для VPN-службы: все живые узлы в selector, выбранный — по умолчанию.
-    /// <paramref name="preferWorking"/> — для автозапуска после загрузки: человек узел не
+    /// Готовый конфиг TUN для VPN-службы: все живые серверы в selector, выбранный — по умолчанию.
+    /// <paramref name="preferWorking"/> — для автозапуска после загрузки: человек сервер не
     /// выбирает, поэтому вместо прежнего (возможно, уже мёртвого) берём проверенный рабочий.
     /// null и текст ошибки — если подключать нечего.
     /// </summary>
@@ -740,13 +895,13 @@ internal static class NodeStore
         var selected = Selected;
 
         // Автозапуск: прежний выбор мог умереть, пока телефон был выключен. Рабочим
-        // считаем только узел с задержкой и без провалов; иначе оставляем как есть.
+        // считаем только сервер с задержкой и без провалов; иначе оставляем как есть.
         if (preferWorking)
         {
             var auto = PickAutoNode(selected);
             if (auto is not null && (selected is null || auto.Id != selected.Id))
             {
-                AppLog.Write("android", "Автоподключение: выбран рабочий узел " + auto.Name);
+                AppLog.Write("android", "Автоподключение: выбран рабочий сервер " + auto.Name);
                 Select(auto);
                 selected = auto;
             }
@@ -766,21 +921,21 @@ internal static class NodeStore
         if (ordered.Count == 0)
         {
             error = Settings.ConnectOnlyMine
-                ? "Нет узлов в личных подписках: добавьте свою подписку или выключите «Только мои»"
+                ? "Нет серверов в личных подписках: добавьте свою подписку или выключите «Только мои»"
                 : Settings.ConnectOnlyVerified
-                    ? "Нет проверенных узлов: обновите источники и нажмите «Проверить»"
-                    : "Список узлов пуст: обновите источники";
+                    ? "Нет проверенных серверов: обновите источники и нажмите «Проверить»"
+                    : "Список серверов пуст: обновите источники";
             return null;
         }
 
         var cap = Math.Min(Math.Max(1, Settings.MaxNodesInConfig), MobileMaxNodesInConfig);
-        // Защита от повторов: в конфиг не попадают два узла с одинаковым outbound'ом (тегом).
+        // Защита от повторов: в конфиг не попадают два сервера с одинаковым outbound'ом (тегом).
         var candidates = ordered
             .DistinctBy(node => node.Tag, StringComparer.OrdinalIgnoreCase)
             .Take(cap)
             .ToList();
 
-        // Выбранный узел обязан попасть в конфиг, даже если рейтинг вытеснил его за лимит.
+        // Выбранный сервер обязан попасть в конфиг, даже если рейтинг вытеснил его за лимит.
         if (selected is not null && candidates.All(node => node.Id != selected.Id) &&
             (!Settings.ConnectOnlyVerified || NodeAvailability.HasSuccess(selected)) &&
             (!Settings.ConnectOnlyMine || selected.IsMine))
@@ -810,7 +965,7 @@ internal static class NodeStore
                 CoreRuntime.ApiPort,
                 CoreRuntime.ApiSecret,
                 settings,
-                // На Android локальный UDP/53 часто зарезан или подменяется — DNS идёт через узел.
+                // На Android локальный UDP/53 часто зарезан или подменяется — DNS идёт через сервер.
                 dnsThroughProxy: true);
         }
         catch (InvalidOperationException exception)

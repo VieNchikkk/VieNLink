@@ -7,28 +7,30 @@ using System.Net.Sockets;
 namespace VieNLink;
 
 /// <summary>
-/// Управляет жизненным циклом ядра: проверка узлов через Clash API, подключение,
+/// Управляет жизненным циклом ядра: проверка серверов через Clash API, подключение,
 /// системный прокси и контроль, что sing-box не упал.
 /// </summary>
 internal sealed class ProxyManager : IAsyncDisposable
 {
-    /// <summary>Универсальный адрес: доступ к Cloudflare — главный признак годности узла.</summary>
+    /// <summary>Универсальный адрес: доступ к Cloudflare — главный признак годности сервера.</summary>
     public const string UniversalTestUrl = "https://cp.cloudflare.com/generate_204";
 
     /// <summary>
-    /// Заблокированные домены для оценки узла: тот же список, что у zapret/десинка
-    /// (`TlsHello.TargetDomains`). Чем больше открывается — тем лучше узел.
+    /// Заблокированные домены для оценки сервера: тот же список, что у zapret/десинка
+    /// (`TlsHello.TargetDomains`). Чем больше открывается — тем лучше сервер.
     /// </summary>
     public static IReadOnlyList<string> BlockedTestDomains => TlsHello.TargetDomains;
 
-    /// <summary>Проверочные адреса: узел считается рабочим, если открывает хотя бы один.</summary>
+    /// <summary>Проверочные адреса: сервер считается рабочим, если открывает хотя бы один.</summary>
     public const string YoutubeTestUrl = "https://www.youtube.com/";
 
     public const string TelegramTestUrl = "https://t.me/";
 
+    public const string DiscordTestUrl = "https://discord.com/";
+
     /// <summary>
-    /// Telegram живёт на нескольких доменах: мессенджер, веб-версия и сайт. Узел получает
-    /// отметку «Telegram», если открылся хотя бы один — иначе рабочий узел браковался бы
+    /// Telegram живёт на нескольких доменах: мессенджер, веб-версия и сайт. Сервер получает
+    /// отметку «Telegram», если открылся хотя бы один — иначе рабочий сервер браковался бы
     /// из-за блокировки одного адреса.
     /// </summary>
     public static IReadOnlyList<string> TelegramTestUrls { get; } = new[]
@@ -46,7 +48,7 @@ internal sealed class ProxyManager : IAsyncDisposable
     private List<ProxyNode> _loadedNodes = new();
     private readonly HashSet<string> _loadedTags = new(StringComparer.Ordinal);
 
-    /// <summary>Узлы, которые sing-box не принял (несовместимый формат): их нужно удалить из списка.</summary>
+    /// <summary>Серверы, которые sing-box не принял (несовместимый формат): их нужно удалить из списка.</summary>
     private readonly List<ProxyNode> _incompatible = new();
     private int _mixedPort;
     private int _apiPort;
@@ -78,21 +80,23 @@ internal sealed class ProxyManager : IAsyncDisposable
 
     public bool IsRunning => _runner.IsRunning;
 
-    /// <summary>Узел уже загружен в работающее ядро — переключение на него не требует перезапуска.</summary>
+    /// <summary>Сервер уже загружен в работающее ядро — переключение на него не требует перезапуска.</summary>
     public bool IsNodeLoaded(ProxyNode node) => _loadedTags.Contains(node.Tag);
 
     public ProxyNode? CurrentNode { get; private set; }
 
     public int ActiveMixedPort => _mixedPort > 0 ? _mixedPort : Settings.MixedPort;
 
-    /// <summary>Узлы, которые сейчас загружены в работающее ядро.</summary>
+    /// <summary>Серверы, которые сейчас загружены в работающее ядро.</summary>
     public IReadOnlyList<ProxyNode> LoadedNodes => _loadedNodes;
 
     /// <summary>Ядро упало или прокси отключён извне — UI должен обновить состояние.</summary>
     public event Action<string>? StateChanged;
 
-    /// <summary>Узел подключён, но перестал открывать проверочный адрес — пора переключаться.</summary>
-    public event Action<string>? NodeUnhealthy;
+    /// <summary>Сервер подключён, но перестал открывать проверочный адрес — пора переключаться.</summary>
+    /// <summary>Сервер перестал открывать проверочный адрес. Передаётся сам сервер, чтобы
+    /// обработчик не принял событие за уже сменившийся вручную сервер.</summary>
+    public event Action<ProxyNode>? NodeUnhealthy;
 
     /// <summary>Отсчёт статистики трафика: скорость и накопленный объём за сессию.</summary>
     public event Action<TrafficSample>? TrafficUpdated;
@@ -103,7 +107,7 @@ internal sealed class ProxyManager : IAsyncDisposable
     }
 
     /// <summary>
-    /// Поднимает ядро с указанными узлами без проверки — нужно для замера скорости,
+    /// Поднимает ядро с указанными серверами без проверки — нужно для замера скорости,
     /// когда пользователь ещё не подключён.
     /// </summary>
     public Task PrepareTestCoreAsync(
@@ -113,8 +117,8 @@ internal sealed class ProxyManager : IAsyncDisposable
         EnsureTestCoreAsync(nodes, progress, cancellationToken);
 
     /// <summary>
-    /// Проверяет узлы по двум адресам (YouTube и Telegram) и заполняет отметки в узле.
-    /// Не открыл ни один — узел остаётся в списке, пока не наберёт
+    /// Проверяет серверы по двум адресам (YouTube и Telegram) и заполняет отметки в сервере.
+    /// Не открыл ни один — сервер остаётся в списке, пока не наберёт
     /// <see cref="NodeLimits.RemoveAfterFailures"/> провалов подряд; затем удаляется.
     /// </summary>
     public async Task<TestSummary> TestNodesAsync(
@@ -134,7 +138,7 @@ internal sealed class ProxyManager : IAsyncDisposable
 
         await EnsureTestCoreAsync(nodes, progress, cancellationToken);
 
-        // Узлы, которые sing-box не принял (например, чужой отпечаток uTLS), проверять
+        // Серверы, которые sing-box не принял (например, чужой отпечаток uTLS), проверять
         // нечем: без тега в ядре проба падает мгновенно. Убираем их из списка навсегда,
         // иначе они занимают место в каждой партии и она никогда не набирает 500.
         if (_incompatible.Count > 0)
@@ -154,8 +158,8 @@ internal sealed class ProxyManager : IAsyncDisposable
             nodes = nodes.Where(node => !skipped.Contains(node)).ToList();
         }
 
-        // Конфиг мог не принять часть узлов (несовместимый формат): по ним нет тега
-        // в ядре, и проба упала бы мгновенно. Такие узлы не считаем провалившимися.
+        // Конфиг мог не принять часть серверов (несовместимый формат): по ним нет тега
+        // в ядре, и проба упала бы мгновенно. Такие серверы не считаем провалившимися.
         var loaded = nodes.Where(node => _loadedTags.Contains(node.Tag)).ToList();
         return await TestWithApiAsync(
             loaded, progress, onNodeTested, cancellationToken,
@@ -163,7 +167,7 @@ internal sealed class ProxyManager : IAsyncDisposable
     }
 
     /// <summary>
-    /// Проверка только узлов, уже загруженных в работающее ядро: без перезапуска ядра,
+    /// Проверка только серверов, уже загруженных в работающее ядро: без перезапуска ядра,
     /// без пересборки конфига и без TUN-перехвата — не мешает другим приложениям.
     /// </summary>
     public async Task<TestSummary> TestLoadedNodesAsync(
@@ -229,8 +233,8 @@ internal sealed class ProxyManager : IAsyncDisposable
         var bestDomains = 0;
         var done = 0;
 
-        // Снимок состояния: если ни один узел не открылся, значит проблема в сети/ядре,
-        // а не в 6 000 узлах — откатываем, чтобы не удалить весь список.
+        // Снимок состояния: если ни один сервер не открылся, значит проблема в сети/ядре,
+        // а не в 6 000 серверах — откатываем, чтобы не удалить весь список.
         var snapshots = new Dictionary<ProxyNode, (NodeStatus Status, int? DelayMs, DateTime? CheckedAtUtc,
             bool? YoutubeOk, bool? TelegramOk, bool? UniversalOk, bool? DiscordOk,
             int OpenDomains, int FailCount)>();
@@ -242,8 +246,8 @@ internal sealed class ProxyManager : IAsyncDisposable
                 node.OpenDomains, node.FailCount));
         }
 
-        // Скорость проверки подстраивается под ситуацию: стартуем скромно (8 узлов
-        // одновременно), а когда видно, что узлы живые, добавляем параллельность. Так слабый
+        // Скорость проверки подстраивается под ситуацию: стартуем скромно (8 серверов
+        // одновременно), а когда видно, что серверы живые, добавляем параллельность. Так слабый
         // канал и слабая машина не душат сами себя, а хороший список проверяется быстро.
         var limit = concurrency > 0 ? concurrency : 32;
         var start = Math.Min(limit, 8);
@@ -254,7 +258,7 @@ internal sealed class ProxyManager : IAsyncDisposable
             await limiter.WaitAsync(cancellationToken);
             try
             {
-                // Два направления проверяем параллельно: вдвое быстрее при том же лимите узлов.
+                // Два направления проверяем параллельно: вдвое быстрее при том же лимите серверов.
                 // Telegram пробуем по нескольким доменам — хватает первого ответившего.
                 var youtubeTask = api.TestDelayAsync(node.Tag, timeoutMs, cancellationToken, youtubeTarget);
                 var telegramTask = TestAnyDelayAsync(api, node.Tag, telegramTargets, timeoutMs, cancellationToken);
@@ -268,7 +272,7 @@ internal sealed class ProxyManager : IAsyncDisposable
 
                 if (youtubeDelay is null && telegramDelay is null)
                 {
-                    // Провал не удаляет узел сразу: считаем и убираем только после
+                    // Провал не удаляет сервер сразу: считаем и убираем только после
                     // NodeLimits.RemoveAfterFailures провалов подряд.
                     node.DelayMs = null;
                     node.UniversalOk = false;
@@ -280,8 +284,8 @@ internal sealed class ProxyManager : IAsyncDisposable
                 {
                     node.DelayMs = youtubeDelay ?? telegramDelay;
 
-                    // Полный список заблокированных доменов прогоняем только у живого узла:
-                    // он и решает, насколько узел хорош. Мёртвым это 18 таймаутов впустую.
+                    // Полный список заблокированных доменов прогоняем только у живого сервера:
+                    // он и решает, насколько сервер хорош. Мёртвым это 18 таймаутов впустую.
                     var (openDomains, universalDelay, discordOk) = await ProbeBlockedDomainsAsync(
                         api, node.Tag, timeoutMs, cancellationToken).ConfigureAwait(false);
                     node.OpenDomains = openDomains;
@@ -310,7 +314,7 @@ internal sealed class ProxyManager : IAsyncDisposable
                 limiter.Release();
                 var finished = Interlocked.Increment(ref done);
 
-                // Плавный разгон: если первые 40 узлов в основном живые, добавляем параллельность.
+                // Плавный разгон: если первые 40 серверов в основном живые, добавляем параллельность.
                 if (finished == 40 && limit > start &&
                     Interlocked.CompareExchange(ref ramp, 1, 0) == 0 &&
                     Volatile.Read(ref working) * 100 / finished >= 35)
@@ -326,16 +330,17 @@ internal sealed class ProxyManager : IAsyncDisposable
 
                 if (finished % 25 == 0 || finished == nodes.Count)
                 {
+                    // В шапке нужен только ход проверки: разбивка по сервисам есть
+                    // в итоговой строке и в журнале.
                     progress?.Report(
-                        $"Проверено {finished} из {nodes.Count}: YouTube {Volatile.Read(ref youtubeOk)}, " +
-                        $"Telegram {Volatile.Read(ref telegramOk)}");
+                        $"Проверено {finished} из {nodes.Count}: рабочих {Volatile.Read(ref working)}");
                 }
             }
         });
 
         await Task.WhenAll(tasks);
 
-        if (working == 0 && nodes.Count >= 20 && !await DirectInternetWorksAsync(cancellationToken))
+        if (working == 0 && nodes.Count > 0 && !await DirectInternetWorksAsync(cancellationToken))
         {
             foreach (var (node, snapshot) in snapshots)
             {
@@ -351,20 +356,20 @@ internal sealed class ProxyManager : IAsyncDisposable
             }
 
             AppLog.Write("test",
-                $"Откат проверки: ни один из {nodes.Count} узлов не открылся и прямой интернет недоступен");
+                $"Откат проверки: ни один из {nodes.Count} серверов не открылся и прямой интернет недоступен");
             throw new InvalidOperationException(
-                "Ни один узел не открылся, и прямой интернет тоже недоступен. " +
-                "Проверьте сеть, ядро и обход DPI — статусы узлов не изменены.");
+                "Ни один сервер не открылся, и прямой интернет тоже недоступен. " +
+                "Проверьте сеть, ядро и обход DPI — статусы серверов не изменены.");
         }
 
         AppLog.Write("test",
-            $"Проверка узлов: YouTube {youtubeOk}, Telegram {telegramOk}, " +
+            $"Проверка серверов: YouTube {youtubeOk}, Telegram {telegramOk}, " +
             $"лучший открывает доменов {bestDomains}, рабочих {working} из {nodes.Count}");
         return new TestSummary(nodes.Count, youtubeOk, telegramOk, working, bestDomains);
     }
 
     /// <summary>
-    /// Сколько заблокированных доменов открывает узел. Универсальный адрес проверяется
+    /// Сколько заблокированных доменов открывает сервер. Универсальный адрес проверяется
     /// параллельно и возвращается отдельно — он главный, его задержка важнее счётчика.
     /// </summary>
     private static async Task<(int OpenDomains, int? UniversalDelay, bool DiscordOk)> ProbeBlockedDomainsAsync(
@@ -375,8 +380,8 @@ internal sealed class ProxyManager : IAsyncDisposable
     {
         var domains = TlsHello.TargetDomains;
 
-        // Не больше четырёх запросов одновременно на узел: 18 параллельных соединений
-        // перегружают слабый бесплатный узел, и он ложно показывает ноль доменов.
+        // Не больше четырёх запросов одновременно на сервер: 18 параллельных соединений
+        // перегружают слабый бесплатный сервер, и он ложно показывает ноль доменов.
         using var limiter = new SemaphoreSlim(4);
         var tasks = domains
             .Select(async domain =>
@@ -423,8 +428,8 @@ internal sealed class ProxyManager : IAsyncDisposable
     }
 
     /// <summary>
-    /// Проверка узла по списку адресов. Первый адрес пробуем отдельно, остальные —
-    /// параллельно: так мёртвый узел ждёт не три таймаута, а два.
+    /// Проверка сервера по списку адресов. Первый адрес пробуем отдельно, остальные —
+    /// параллельно: так мёртвый сервер ждёт не три таймаута, а два.
     /// </summary>
     private static async Task<int?> TestAnyDelayAsync(
         ClashApiClient api,
@@ -450,7 +455,7 @@ internal sealed class ProxyManager : IAsyncDisposable
         return working.Count == 0 ? null : working.Min();
     }
 
-    /// <summary>Прямой HTTPS без прокси: нужен, чтобы отличить «все узлы мертвы» от «нет интернета».</summary>
+    /// <summary>Прямой HTTPS без прокси: нужен, чтобы отличить «все серверы мертвы» от «нет интернета».</summary>
     private static async Task<bool> DirectInternetWorksAsync(CancellationToken cancellationToken)
     {
         try
@@ -482,7 +487,7 @@ internal sealed class ProxyManager : IAsyncDisposable
     {
         if (node is null)
         {
-            throw new InvalidOperationException("Не выбран узел");
+            throw new InvalidOperationException("Не выбран сервер");
         }
 
         _probeUrls = probeUrls;
@@ -501,7 +506,7 @@ internal sealed class ProxyManager : IAsyncDisposable
         }
         catch (HttpRequestException exception)
         {
-            throw new InvalidOperationException("Ядро не приняло выбранный узел. Обновите списки и попробуйте снова.", exception);
+            throw new InvalidOperationException("Ядро не приняло выбранный сервер. Обновите списки и попробуйте снова.", exception);
         }
 
         if (Settings.ApplySystemProxy && Settings.TunnelMode != TunnelMode.Tun)
@@ -529,8 +534,8 @@ internal sealed class ProxyManager : IAsyncDisposable
     }
 
     /// <summary>
-    /// Переключение на уже загруженный узел без перезапуска ядра.
-    /// Возвращает false, если узел не входит в текущий конфиг — тогда нужно полное подключение.
+    /// Переключение на уже загруженный сервер без перезапуска ядра.
+    /// Возвращает false, если сервер не входит в текущий конфиг — тогда нужно полное подключение.
     /// </summary>
     public async Task<bool> SwitchToAsync(ProxyNode node, IProgress<string>? progress, CancellationToken cancellationToken)
     {
@@ -546,7 +551,7 @@ internal sealed class ProxyManager : IAsyncDisposable
         }
         catch (HttpRequestException exception)
         {
-            AppLog.Write("proxy", $"Ядро не приняло узел «{node.Name}»", exception);
+            AppLog.Write("proxy", $"Ядро не приняло сервер «{node.Name}»", exception);
             return false;
         }
 
@@ -628,7 +633,7 @@ internal sealed class ProxyManager : IAsyncDisposable
         return false;
     }
 
-    /// <summary>Проверка одного узла на уже запущенном ядре.</summary>
+    /// <summary>Проверка одного сервера на уже запущенном ядре.</summary>
     public async Task<int?> TestSingleAsync(ProxyNode node, CancellationToken cancellationToken)
     {
         if (_api is null)
@@ -676,22 +681,24 @@ internal sealed class ProxyManager : IAsyncDisposable
         IsConnected = false;
         IsKillSwitchHeld = false;
         CurrentNode = null;
-        // В конфиге лежат UUID и пароли узлов: не оставляем их в папке после выхода.
+        // В конфиге лежат UUID и пароли серверов: не оставляем их в папке после выхода.
         DeleteActiveConfig();
     }
 
     private async Task EnsureTestCoreAsync(IReadOnlyList<ProxyNode> nodes, IProgress<string>? progress, CancellationToken cancellationToken)
     {
         _incompatible.Clear();
-        // Загружаем в ядро все узлы партии, а не только лимит конфига: иначе узлы
-        // сверх лимита не попадут в конфиг, проба для них сразу упадёт и узел
-        // получит ложный провал. Лимит «узлов в конфиге» действует при подключении.
+        // Загружаем в ядро все серверы партии, а не только лимит конфига: иначе серверы
+        // сверх лимита не попадут в конфиг, проба для них сразу упадёт и сервер
+        // получит ложный провал. Лимит «серверов в конфиге» действует при подключении.
         var cap = Math.Max(Settings.MaxNodesInConfig, nodes.Count);
-        var ordered = OrderForConfig(nodes)
+        // Сортировка тысяч серверов (NodeRanking.Score) — в фоне: на UI-потоке это
+        // заметно подвешивало окно при подключении и переключении.
+        var ordered = await Task.Run(() => OrderForConfig(nodes)
             .GroupBy(n => n.Id, StringComparer.OrdinalIgnoreCase)
             .Select(g => g.First())
             .Take(cap)
-            .ToList();
+            .ToList(), cancellationToken);
         // Маршрутизация тоже входит в подпись: смена TUN/правил должна пересобрать конфиг.
         var routingSignature = string.Join("|",
             Settings.TunnelMode,
@@ -724,13 +731,13 @@ internal sealed class ProxyManager : IAsyncDisposable
         }
         catch (InvalidOperationException exception)
         {
-            // Один несовместимый узел не должен ломать весь список: находим и выбрасываем такие узлы.
-            AppLog.Write("core", "Конфиг не прошёл проверку, исключаю несовместимые узлы", exception);
-            progress?.Report("Убираю несовместимые с sing-box узлы…");
+            // Один несовместимый сервер не должен ломать весь список: находим и выбрасываем такие серверы.
+            AppLog.Write("core", "Конфиг не прошёл проверку, исключаю несовместимые серверы", exception);
+            progress?.Report("Убираю несовместимые с sing-box серверы…");
             var filtered = await FilterBrokenNodesAsync(ordered, cancellationToken);
             if (filtered.Count == 0)
             {
-                throw new InvalidOperationException("Все узлы оказались несовместимы с sing-box: " + exception.Message, exception);
+                throw new InvalidOperationException("Все серверы оказались несовместимы с sing-box: " + exception.Message, exception);
             }
 
             ordered = filtered;
@@ -782,11 +789,11 @@ internal sealed class ProxyManager : IAsyncDisposable
         AppLog.Write("core", $"Ядро готово: mixed {_mixedPort}, API {_apiPort}");
     }
 
-    /// <summary>Личные узлы первыми, затем маскированные и быстрые — так они попадают в конфиг и выбираются раньше.</summary>
+    /// <summary>Личные серверы первыми, затем маскированные и быстрые — так они попадают в конфиг и выбираются раньше.</summary>
     public IEnumerable<ProxyNode> OrderForConfig(IEnumerable<ProxyNode> nodes) =>
         nodes
             .OrderByDescending(n => n.IsMine)
-            .ThenByDescending(NodeRanking.Score)
+            .ThenByDescending(n => n.RankScore)
             .ThenByDescending(n => n.DelayMs is not null)
             .ThenByDescending(n => n.OpenDomains)
             .ThenBy(n => n.DelayMs ?? int.MaxValue)
@@ -800,7 +807,7 @@ internal sealed class ProxyManager : IAsyncDisposable
     }
 
     /// <summary>
-    /// Проверка, что через узел реально открывается сайт. Каждый запрос идёт через узел,
+    /// Проверка, что через сервер реально открывается сайт. Каждый запрос идёт через сервер,
     /// то есть тратит его трафик: обычная пауза — 90 секунд, после сбоя — быстрее
     /// (25–120 с), чтобы автопереключение сработало без долгого простоя.
     /// </summary>
@@ -831,14 +838,19 @@ internal sealed class ProxyManager : IAsyncDisposable
 
             try
             {
+                // Запоминаем, какой сервер проверяли: пока шёл запрос, пользователь мог
+                // нажать «Дальше» и выбрать другой. Сбой старого сервера не должен
+                // удалять только что выбранный рабочий.
+                var testedNode = CurrentNode;
                 var healthy = await VerifyAnyThroughProxyAsync(CancellationToken.None, _probeUrls);
-                if (!healthy && IsConnected)
+                if (!healthy && IsConnected && testedNode is not null &&
+                    ReferenceEquals(CurrentNode, testedNode))
                 {
                     _healthFailures++;
                     _nextHealthCheckUtc = DateTime.UtcNow.AddSeconds(Math.Min(120, 25 + _healthFailures * 12));
                     AppLog.Write("proxy",
-                        $"Узел перестал открывать проверочный адрес (сбой {_healthFailures}) — нужно переключение");
-                    NodeUnhealthy?.Invoke(CurrentNode?.Name ?? "узел");
+                        $"Сервер перестал открывать проверочный адрес (сбой {_healthFailures}) — нужно переключение");
+                    NodeUnhealthy?.Invoke(testedNode);
                     return;
                 }
 
@@ -852,7 +864,7 @@ internal sealed class ProxyManager : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            AppLog.Write("proxy", "Ошибка проверки состояния узла", exception);
+            AppLog.Write("proxy", "Ошибка проверки состояния сервера", exception);
         }
     }
 
@@ -961,9 +973,9 @@ internal sealed class ProxyManager : IAsyncDisposable
     }
 
     /// <summary>
-    /// Замер пропускной способности узла. Качает ~1 МБ через локальный mixed-порт:
+    /// Замер пропускной способности сервера. Качает ~1 МБ через локальный mixed-порт:
     /// задержка не показывает скорость, а для видео важна именно она. Во время
-    /// активного соединения замер разрешён только для текущего узла.
+    /// активного соединения замер разрешён только для текущего сервера.
     /// </summary>
     public async Task<double?> MeasureSpeedAsync(ProxyNode node, CancellationToken cancellationToken, int targetBytes = 1_000_000)
     {
@@ -1016,7 +1028,7 @@ internal sealed class ProxyManager : IAsyncDisposable
                 }
                 catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException)
                 {
-                    AppLog.Write("speed", "Не удалось вернуть прежний узел после замера", exception);
+                    AppLog.Write("speed", "Не удалось вернуть прежний сервер после замера", exception);
                 }
             }
         }
@@ -1065,7 +1077,7 @@ internal sealed class ProxyManager : IAsyncDisposable
         }
     }
 
-    /// <summary>В конфиге ядра лежат UUID и пароли узлов — не оставляем их в папке после выхода.</summary>
+    /// <summary>В конфиге ядра лежат UUID и пароли серверов — не оставляем их в папке после выхода.</summary>
     private static void DeleteActiveConfig()
     {
         try
@@ -1082,7 +1094,7 @@ internal sealed class ProxyManager : IAsyncDisposable
     }
 
     /// <summary>
-    /// Ищет узлы, из-за которых sing-box не принимает конфиг, делением списка пополам.
+    /// Ищет серверы, из-за которых sing-box не принимает конфиг, делением списка пополам.
     /// Проверка запускается только когда обычный конфиг уже не прошёл, поэтому редкая.
     /// </summary>
     private async Task<List<ProxyNode>> FilterBrokenNodesAsync(List<ProxyNode> nodes, CancellationToken cancellationToken)
@@ -1097,7 +1109,7 @@ internal sealed class ProxyManager : IAsyncDisposable
         {
             if (checks >= 80)
             {
-                AppLog.Write("core", "Проверка конфига остановлена по лимиту, часть узлов отброшена");
+                AppLog.Write("core", "Проверка конфига остановлена по лимиту, часть серверов отброшена");
                 break;
             }
 
@@ -1119,7 +1131,7 @@ internal sealed class ProxyManager : IAsyncDisposable
             {
                 if (batch.Count == 1)
                 {
-                    AppLog.Write("core", "Узел исключён из конфига: " + batch[0].Name);
+                    AppLog.Write("core", "Сервер исключён из конфига: " + batch[0].Name);
                     continue;
                 }
 
@@ -1141,7 +1153,7 @@ internal sealed class ProxyManager : IAsyncDisposable
             // Временный конфиг удалится при следующей проверке.
         }
 
-        AppLog.Write("core", $"Проверок конфига: {checks}, осталось узлов {result.Count} из {nodes.Count}");
+        AppLog.Write("core", $"Проверок конфига: {checks}, осталось серверов {result.Count} из {nodes.Count}");
         return result;
     }
 

@@ -1,4 +1,4 @@
-﻿# VieNLink (бета)
+# VieNLink (бета)
 
 <img src="branding/vienlink-wordmark.png" alt="VieNLink" width="720">
 
@@ -26,15 +26,15 @@ Shadowsocks / Hysteria2 из открытых списков и подписок
 
 Готовые сборки — в [Releases](https://github.com/VieNchikkk/VieNLink/releases):
 
-- **Windows:** `VieNLink-1.0.10-setup.exe` (установщик в профиль пользователя) или портативный
-  `VieNLink-1.0.10-win-x64.zip`. .NET устанавливать не нужно.
-- **Android (отдельный релиз):** [VieNLink-1.1.1-android.apk](https://github.com/VieNchikkk/VieNLink/releases/download/v1.1.1-android/VieNLink-1.1.1-android.apk)
+- **Windows:** `VieNLink-1.3.0-setup.exe` (установщик в профиль пользователя) или портативный
+  `VieNLink-1.3.0-win-x64.zip`. .NET устанавливать не нужно.
+- **Android (отдельный релиз):** [VieNLink-1.3.0-android.apk](https://github.com/VieNchikkk/VieNLink/releases/download/v1.3.0-android/VieNLink-1.3.0-android.apk)
   (Android 8.0+, arm64). Отдельной страницы в магазине нет — APK ставится вручную,
   с разрешением установки из этого источника.
 
-**Прямые ссылки:** [Windows setup.exe](https://github.com/VieNchikkk/VieNLink/releases/download/v1.0.10-beta/VieNLink-1.0.10-setup.exe)
-· [Windows ZIP](https://github.com/VieNchikkk/VieNLink/releases/download/v1.0.10-beta/VieNLink-1.0.10-win-x64.zip)
-· [Android APK](https://github.com/VieNchikkk/VieNLink/releases/download/v1.1.1-android/VieNLink-1.1.1-android.apk)
+**Прямые ссылки:** [Windows setup.exe](https://github.com/VieNchikkk/VieNLink/releases/download/v1.3.0-beta/VieNLink-1.3.0-setup.exe)
+· [Windows ZIP](https://github.com/VieNchikkk/VieNLink/releases/download/v1.3.0-beta/VieNLink-1.3.0-win-x64.zip)
+· [Android APK](https://github.com/VieNchikkk/VieNLink/releases/download/v1.3.0-android/VieNLink-1.3.0-android.apk)
 
 Контрольные суммы — в `SHA256SUMS.txt` рядом с файлами релиза. Android-версия при запуске
 сама проверяет GitHub: если там версия выше, APK скачивается и предлагается установка
@@ -138,9 +138,9 @@ Windows-версии без MAUI: VPN-туннель через `VpnService` и 
 в отдельном процессе `:probe`, экраны «Подключение / Обход / Инструменты / Журнал / Общие»,
 виджет и плитка, split-tunnel по приложениям, MTProto для Telegram и TUN-обход (бета).
 
-1. Скачайте [VieNLink-1.1.1-android.apk](https://github.com/VieNchikkk/VieNLink/releases/download/v1.1.1-android/VieNLink-1.1.1-android.apk)
+1. Скачайте [VieNLink-1.3.0-android.apk](https://github.com/VieNchikkk/VieNLink/releases/download/v1.3.0-android/VieNLink-1.3.0-android.apk)
    и откройте файл на телефоне. Android-версия публикуется отдельным релизом
-   `v1.1.1-android`, независимо от Windows-релиза `v1.0.10-beta`.
+   `v1.3.0-android`, независимо от Windows-релиза `v1.3.0-beta`.
 2. Разрешите установку из выбранного источника (Android спросит один раз).
 3. В приложении нажмите «Проверить узлы», затем кнопку нужного сервиса — VPN поднимется
    на проверенном узле.
@@ -152,6 +152,24 @@ Windows-версии без MAUI: VPN-туннель через `VpnService` и 
 проверку вручную. Android не позволяет ставить APK совсем без подтверждения: последний шаг —
 системное окно «Установить».
 
+**«Приложение может быть вредоносным» — почему так и что делать.**
+APK подписан собственным ключом и не публикуется в Google Play, поэтому Play Protect
+считает его «неизвестным разработчиком» и иногда показывает предупреждение. Это
+эвристика по набору разрешений, а не найденный вирус: приложению нужны `VpnService`,
+`REQUEST_INSTALL_PACKAGES` (самообновление), foreground-службы и автозапуск — именно
+такая комбинация часто встречается у нежелательных программ. Варианты:
+
+1. В окне установки нажать «Подробнее» → «Всё равно установить».
+2. Если установка заблокирована: Play Маркет → профиль → Play Protect → шестерёнка →
+   временно выключить «Проверять приложения с помощью Play Protect», установить и включить
+   обратно. Отключать защиту навсегда не нужно.
+3. Сверить файл: `SHA256` опубликован рядом с APK (`VieNLink-<версия>-android.apk.sha256`),
+   подпись — долговременным ключом проекта.
+
+Убрать предупреждение полностью можно только распространением через магазин
+(Google Play, RuStore, F-Droid): репутация складывается из магазина, подписи и числа
+установок. Для личного использования достаточно вариантов 1–2.
+
 Сборка APK для релиза:
 
 ```powershell
@@ -162,7 +180,7 @@ powershell -File build\publish-android.ps1
 первом запуске) и кладёт в `release\` подписанный APK и файл `.apk.sha256`. Храните этот ключ:
 следующие версии должны быть подписаны им же, иначе Android не установит обновление поверх.
 
-Версия для Windows публикуется отдельно: [VieNLink 1.0.10 (бета)](https://github.com/VieNchikkk/VieNLink/releases/tag/v1.0.10-beta).
+Версия для Windows публикуется отдельно: [VieNLink 1.3.0 (бета)](https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.0-beta).
 
 ## Сколько узлов живых
 
@@ -309,7 +327,7 @@ powershell -File build\publish-release.ps1
 
 ## Версии и обновления
 
-- Текущие версии: Windows — **1.0.10-beta**, Android — **1.1.1**; сборки —
+- Текущие версии: Windows — **1.3.0-beta**, Android — **1.3.0**; сборки —
   в [Releases](https://github.com/VieNchikkk/VieNLink/releases).
 - В Windows-релизе лежат `setup.exe`, портативный ZIP и `SHA256SUMS.txt`; в Android-релизе —
   APK и файл `.apk.sha256`.

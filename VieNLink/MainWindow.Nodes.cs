@@ -18,7 +18,7 @@ public partial class MainWindow
     {
         if (WorkingGrid.SelectedItem is not NodeRow row)
         {
-            MessageBox.Show(this, "Выберите узел в таблице.", "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(this, "Выберите сервер в таблице.", "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -29,26 +29,26 @@ public partial class MainWindow
     {
         if (WorkingGrid.SelectedItem is not NodeRow row)
         {
-            MessageBox.Show(this, "Выберите узел в таблице.", "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(this, "Выберите сервер в таблице.", "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
-        if (!BeginOperation("проверку узла"))
+        if (!BeginOperation("проверку сервера"))
         {
             return;
         }
 
         try
         {
-            await RunTestAsync(new[] { row.Node }, "Проверка рабочего узла");
+            await RunTestAsync(new[] { row.Node }, "Проверка рабочего сервера");
         }
         catch (OperationCanceledException)
         {
-            SetStatus("Проверка узла отменена", string.Empty);
+            SetStatus("Проверка сервера отменена", string.Empty);
         }
         catch (Exception exception)
         {
-            ReportError("Не удалось проверить узел", exception);
+            ReportError("Не удалось проверить сервер", exception);
         }
         finally
         {

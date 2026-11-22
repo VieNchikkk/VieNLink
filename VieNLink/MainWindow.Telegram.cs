@@ -20,20 +20,24 @@ public partial class MainWindow
     /// </summary>
     private async Task AutoCollectMtProtoAsync(bool force = false)
     {
-        if (_closing || _mtprotoCollecting || _busy)
+        if (_closing || _mtprotoCollecting || _busy || _settings.AutomationPaused)
         {
             return;
         }
 
-        if (!_sources.Any(source => source.Enabled && source.Kind == SourceKind.Telegram))
+        if (!_sources.Any(source => source.Enabled && SourceKinds.IsProxy(source)))
         {
             return;
         }
 
         var now = DateTime.UtcNow;
+        var collectMinutes = _mtprotoRows.Count(row => row.Proxy.Status == MtProtoStatus.Working) <
+                             MtProtoSchedule.MinWorking
+            ? MtProtoSchedule.CollectMinutesWhenFew
+            : MtProtoSchedule.CollectMinutes;
         if (!force &&
             _lastMtProtoCollectUtc is { } last &&
-            now - last < TimeSpan.FromMinutes(MtProtoSchedule.CollectMinutes))
+            now - last < TimeSpan.FromMinutes(collectMinutes))
         {
             return;
         }
@@ -64,37 +68,32 @@ public partial class MainWindow
     }
 
     /// <summary>
+    /// Первичное наполнение данных: собираем каналы MTProto и сразу проверяем большую
+    /// партию, чтобы на новом устройстве список не оставался пустым и «непроверенным».
+    /// </summary>
+    private async Task CollectAndCheckMtProtoOnStartupAsync()
+    {
+        try
+        {
+            await AutoCollectMtProtoAsync(force: true);
+            await AutoCheckMtProtoAsync(batchScale: _mtprotoRows.Count > 0 ? 3 : 1);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            AppLog.Write("mtproto", "Стартовый сбор MTProto не удался", exception);
+        }
+    }
+
+    /// <summary>
     /// Автопроверка MTProto: рабочие — часто, нерабочие — изредка. За проход
     /// проверяется небольшая партия, чтобы не отнимать канал у пользователя.
+    /// <paramref name="batchScale"/> увеличивает партию при первом запуске.
     /// </summary>
-    private async Task AutoCheckMtProtoAsync()
+    private async Task AutoCheckMtProtoAsync(int batchScale = 1)
     {
-        // Проверка TCP лёгкая и не мешает обновлению источников или подключению.
-        if (_closing || _mtprotoChecking)
-        {
-            return;
-        }
-
-        var now = DateTime.UtcNow;
-        var workingCutoff = now.AddMinutes(-MtProtoSchedule.WorkingRecheckMinutes);
-        var deadCutoff = now.AddHours(-MtProtoSchedule.DeadRecheckHours);
-
-        var working = _mtprotoRows
-            .Select(row => row.Proxy)
-            .Where(proxy => proxy.CheckedAtUtc is null || proxy.CheckedAtUtc < workingCutoff)
-            .OrderBy(proxy => proxy.CheckedAtUtc ?? DateTime.MinValue)
-            .Take(MtProtoSchedule.WorkingBatch)
-            .ToList();
-
-        var dead = _mtprotoDeadRows
-            .Select(row => row.Proxy)
-            .Where(proxy => proxy.CheckedAtUtc is null || proxy.CheckedAtUtc < deadCutoff)
-            .OrderBy(proxy => proxy.CheckedAtUtc ?? DateTime.MinValue)
-            .Take(MtProtoSchedule.DeadBatch)
-            .ToList();
-
-        var batch = working.Concat(dead).ToList();
-        if (batch.Count == 0)
+        // Проверка идёт настоящим рукопожатием с Telegram, но партии небольшие,
+        // чтобы не отнимать канал у видео.
+        if (_closing || _mtprotoChecking || _settings.AutomationPaused)
         {
             return;
         }
@@ -104,15 +103,63 @@ public partial class MainWindow
         var token = _mtprotoCheckCts.Token;
         try
         {
-            AppendLog($"MTProto: автопроверка {batch.Count} (рабочих {working.Count}, нерабочих {dead.Count})");
-            await MtProtoService.TestAsync(
-                batch,
-                null,
-                proxy => Dispatcher.BeginInvoke(() => ApplyTestedMtProto(proxy)),
-                token,
-                concurrency: 4,
-                timeoutMs: 2500);
-            RepartitionMtProtoAndSave();
+            // Пока рабочих прокси меньше пяти, проверяем несколько партий подряд,
+            // а не ждём следующего такта.
+            for (var round = 1; round <= 3; round++)
+            {
+                var workingCount = _mtprotoRows.Count(row => row.Proxy.Status == MtProtoStatus.Working);
+                if (round > 1 && workingCount >= MtProtoSchedule.MinWorking)
+                {
+                    break;
+                }
+
+                var now = DateTime.UtcNow;
+                var workingCutoff = now.AddMinutes(-MtProtoSchedule.WorkingRecheckMinutes);
+                var deadCutoff = now.AddHours(-MtProtoSchedule.DeadRecheckHours);
+                var scale = workingCount < MtProtoSchedule.MinWorking
+                    ? Math.Max(batchScale, 3)
+                    : Math.Max(1, batchScale);
+
+                var working = _mtprotoRows
+                    .Select(row => row.Proxy)
+                    .Where(proxy => proxy.CheckedAtUtc is null || proxy.CheckedAtUtc < workingCutoff)
+                    .OrderBy(proxy => proxy.CheckedAtUtc ?? DateTime.MinValue)
+                    .Take(MtProtoSchedule.WorkingBatch * scale)
+                    .ToList();
+
+                var dead = _mtprotoDeadRows
+                    .Select(row => row.Proxy)
+                    .Where(proxy => proxy.CheckedAtUtc is null ||
+                                    proxy.CheckedAtUtc < deadCutoff ||
+                                    // Недавно упавший рабочий проверяем быстро: возможно, это была заминка.
+                                    (proxy.FailCount <= 1 &&
+                                     proxy.CheckedAtUtc < now.AddMinutes(-MtProtoSchedule.QuickRecheckMinutes)))
+                    .OrderBy(proxy => proxy.CheckedAtUtc ?? DateTime.MinValue)
+                    .Take(MtProtoSchedule.DeadBatch * scale)
+                    .ToList();
+
+                var batch = working.Concat(dead).ToList();
+                if (batch.Count == 0)
+                {
+                    break;
+                }
+
+                AppendLog($"MTProto: автопроверка {batch.Count} (рабочих {working.Count}, нерабочих {dead.Count})");
+                await MtProtoService.TestAsync(
+                    batch,
+                    null,
+                    proxy => Dispatcher.BeginInvoke(() => ApplyTestedMtProto(proxy)),
+                    token,
+                    concurrency: 6,
+                    timeoutMs: MtProtoProbe.DefaultTimeoutMs);
+                RepartitionMtProtoAndSave();
+
+                if (_mtprotoRows.Count(row => row.Proxy.Status == MtProtoStatus.Working) >=
+                    MtProtoSchedule.MinWorking)
+                {
+                    break;
+                }
+            }
         }
         catch (OperationCanceledException)
         {
@@ -152,14 +199,21 @@ public partial class MainWindow
     /// </summary>
     private async Task<int> CollectMtProtoCoreAsync(CancellationToken cancellationToken, bool forceRss = false)
     {
-        var sources = _sources.Where(s => s.Enabled && s.Kind == SourceKind.Telegram).ToList();
+        var sources = _sources
+            .Where(s => s.Enabled && SourceKinds.IsProxy(s))
+            .OrderBy(s => s.Kind == SourceKind.Telegram ? 1 : 0)
+            .ToList();
         if (sources.Count == 0)
         {
-            AppendLog("Нет включённых каналов Telegram — включите их на вкладке «Источники»");
+            AppendLog("Нет включённых каналов/сайтов MTProto — включите их на вкладке «Источники»");
             return 0;
         }
 
         var found = new List<MtProtoProxy>();
+        AppLog.Write("mtproto",
+            $"Источники MTProto: {sources.Count} " +
+            $"(каналов {sources.Count(s => s.Kind == SourceKind.Telegram)}, " +
+            $"сайтов {sources.Count(s => s.Kind == SourceKind.MtProto)})");
         foreach (var source in sources)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -279,10 +333,10 @@ public partial class MainWindow
             return;
         }
 
-        var alive = _mtprotoRows.Count(r => r.Proxy.DelayMs is not null);
+        var alive = _mtprotoRows.Count(r => r.Proxy.Status == MtProtoStatus.Working);
         MtProtoWorkingTab.Header = $"Список ({_mtprotoRows.Count})";
         MtProtoDeadTab.Header = $"Нерабочие ({_mtprotoDeadRows.Count})";
-        MtProtoSummary.Text = $"В списке {_mtprotoRows.Count} · отвечают {alive} · нерабочих {_mtprotoDeadRows.Count}";
+        MtProtoSummary.Text = $"В списке {_mtprotoRows.Count} · работают {alive} · нерабочих {_mtprotoDeadRows.Count}";
 
         if (MtProtoEmpty is not null)
         {
@@ -326,7 +380,7 @@ public partial class MainWindow
 
         try
         {
-            SetStatus(dead ? "Проверяю нерабочие MTProto" : "Проверяю MTProto", "TCP-подключение к серверам…");
+            SetStatus(dead ? "Проверяю нерабочие MTProto" : "Проверяю MTProto", "Рукопожатие с прокси и запрос к серверам Telegram…");
             var proxies = rows.Select(r => r.Proxy).ToList();
             await MtProtoService.TestAsync(
                 proxies,
@@ -334,10 +388,10 @@ public partial class MainWindow
                 proxy => Dispatcher.BeginInvoke(() => ApplyTestedMtProto(proxy)),
                 _operation!.Token);
 
-            var alive = proxies.Count(p => p.DelayMs is not null);
+            var alive = proxies.Count(p => p.Status == MtProtoStatus.Working);
             StatusDetail.Text = dead
-                ? $"Ожило {alive} из {proxies.Count} — они вернулись в «Список»"
-                : $"Отвечают {alive} из {proxies.Count}; остальные перенесены в «Нерабочие»";
+                ? $"Заработало {alive} из {proxies.Count} — они вернулись в «Список»"
+                : $"Работают {alive} из {proxies.Count} (Telegram ответил); остальные перенесены в «Нерабочие»";
         }
         catch (OperationCanceledException)
         {
@@ -382,8 +436,8 @@ public partial class MainWindow
                 _operation!.Token);
 
             StatusDetail.Text = proxy.Status == MtProtoStatus.Working
-                ? $"Отвечает: {proxy.Server}:{proxy.Port}"
-                : $"Не отвечает: {proxy.Server}:{proxy.Port} — перенесён в «Нерабочие»";
+                ? $"Работает: {proxy.Server}:{proxy.Port} — Telegram ответил"
+                : $"Не работает: {proxy.Server}:{proxy.Port} — перенесён в «Нерабочие»";
         }
         catch (OperationCanceledException)
         {
@@ -454,21 +508,21 @@ public partial class MainWindow
         FooterText.Text = "Ссылка tg://proxy скопирована";
     }
 
-    /// <summary>Ручное добавление узлов: вставляются ссылки, источник попадает в «Мои подписки».</summary>
+    /// <summary>Ручное добавление серверов: вставляются ссылки, источник попадает в «Мои подписки».</summary>
     private async void OnAddNodeManuallyClick(object sender, RoutedEventArgs e)
     {
         var text = TextInputWindow.Show(
             this,
-            "Добавить узлы вручную",
+            "Добавить серверы вручную",
             "Вставьте ссылки на серверы — по одной в строке: vless://, vmess://, trojan://, ss://, hysteria2://.\n" +
-            "Узлы попадут в группу «Мои подписки» и будут пробоваться первыми.",
+            "Серверы попадут в группу «Мои подписки» и будут пробоваться первыми.",
             string.Empty);
         if (string.IsNullOrWhiteSpace(text))
         {
             return;
         }
 
-        const string manualName = "Мои узлы (вручную)";
+        const string manualName = "Мои серверы (вручную)";
         var source = _sources.FirstOrDefault(s => s.Kind == SourceKind.SingleLink && s.Name == manualName);
         if (source is null)
         {

@@ -7,7 +7,7 @@ namespace VieNLink.Mobile;
 /// Единая точка работы с libbox внутри процесса: <c>Setup</c> ровно один раз,
 /// один <c>CommandServer</c> на приложение, запуск и остановка конфига.
 ///
-/// Одновременно в процессе не может жить два ядра, поэтому VPN-служба и проверка узлов
+/// Одновременно в процессе не может жить два ядра, поэтому VPN-служба и проверка серверов
 /// ходят через этот класс: проверка запускает конфиг без TUN и останавливает его,
 /// а если туннель уже поднят — только опрашивает Clash API работающего ядра.
 /// </summary>
@@ -86,7 +86,7 @@ internal static class CoreRuntime
         }
     }
 
-    /// <summary>Теги узлов, реально принятых ядром в последнем конфиге.</summary>
+    /// <summary>Теги серверов, реально принятых ядром в последнем конфиге.</summary>
     public static IReadOnlyCollection<string> LoadedTags { get; private set; } = Array.Empty<string>();
 
     /// <summary>
@@ -173,7 +173,7 @@ internal static class CoreRuntime
         }
     }
 
-    /// <summary>Теги outbound'ов конфига: по ним видно, какие узлы ядро реально приняло.</summary>
+    /// <summary>Теги outbound'ов конфига: по ним видно, какие серверы ядро реально приняло.</summary>
     private static IReadOnlyCollection<string> ReadTags(string configJson)
     {
         var tags = new HashSet<string>(StringComparer.Ordinal);

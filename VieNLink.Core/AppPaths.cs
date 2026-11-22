@@ -31,7 +31,7 @@ internal static class AppPaths
     public static string ActiveConfigPath { get; } = Path.Combine(RuntimeDirectory, "sing-box-config.json");
     public static string TunBypassConfigPath { get; } = Path.Combine(RuntimeDirectory, "tun-bypass-config.json");
 
-    /// <summary>Конфиг скрытого пробного ядра: проверка узлов не мешает основному подключению.</summary>
+    /// <summary>Конфиг скрытого пробного ядра: проверка серверов не мешает основному подключению.</summary>
     public static string ProbeConfigPath { get; } = Path.Combine(RuntimeDirectory, "probe-config.json");
     public static string MtProtoPath { get; } = Path.Combine(DataDirectory, "mtproto.json");
     public static string ProxyBackupPath { get; } = Path.Combine(DataDirectory, "proxy-backup.json");

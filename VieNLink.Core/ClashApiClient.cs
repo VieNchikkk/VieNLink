@@ -7,7 +7,7 @@ using System.Text.Json;
 namespace VieNLink;
 
 /// <summary>
-/// Клиент Clash API, который поднимает сам sing-box: проверка задержки узла, переключение
+/// Клиент Clash API, который поднимает сам sing-box: проверка задержки сервера, переключение
 /// selector, поток статистики трафика и версия ядра.
 /// </summary>
 internal sealed class ClashApiClient : IDisposable
@@ -61,7 +61,7 @@ internal sealed class ClashApiClient : IDisposable
         }
     }
 
-    /// <summary>Задержка узла в миллисекундах или null, если узел не ответил.</summary>
+    /// <summary>Задержка сервера в миллисекундах или null, если сервер не ответил.</summary>
     public async Task<int?> TestDelayAsync(string tag, int timeoutMs, CancellationToken cancellationToken, string? testUrl = null)
     {
         var url = $"proxies/{Uri.EscapeDataString(tag)}/delay?timeout={timeoutMs}&url={Uri.EscapeDataString(testUrl ?? TestUrl)}";
@@ -96,7 +96,7 @@ internal sealed class ClashApiClient : IDisposable
         response.EnsureSuccessStatusCode();
     }
 
-    /// <summary>Какой узел выбран в selector сейчас; null — API не ответил.</summary>
+    /// <summary>Какой сервер выбран в selector сейчас; null — API не ответил.</summary>
     public async Task<string?> GetSelectedAsync(string selectorTag, CancellationToken cancellationToken)
     {
         try

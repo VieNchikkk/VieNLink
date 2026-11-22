@@ -15,7 +15,7 @@ public partial class MainWindow
     /// </summary>
     private async Task AutoCheckAppUpdateAsync()
     {
-        if (_appUpdateChecked || _closing)
+        if (_appUpdateChecked || _closing || _settings.AutomationPaused)
         {
             return;
         }
@@ -64,19 +64,47 @@ public partial class MainWindow
 
             SetStatus("Обновление VieNLink", $"Скачиваю {release.Tag}…");
             var target = Path.Combine(Path.GetTempPath(), $"VieNLink-update-{release.Tag}.exe");
-            using (var handler = new SocketsHttpHandler
-                   {
-                       ConnectTimeout = TimeSpan.FromSeconds(20),
-                       AllowAutoRedirect = true,
-                   })
-            using (var client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(10) })
-            using (var response = await client.GetAsync(
-                       release.SetupUrl, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None))
+            // Прямой GitHub, затем зеркала: у операторов редирект на
+            // objects.githubusercontent.com часто блокируется.
+            var setupUrls = new[]
             {
-                response.EnsureSuccessStatusCode();
-                await using var source = await response.Content.ReadAsStreamAsync(CancellationToken.None);
-                await using var file = File.Create(target);
-                await source.CopyToAsync(file, CancellationToken.None);
+                release.SetupUrl,
+                "https://ghfast.top/" + release.SetupUrl,
+                "https://gh-proxy.com/" + release.SetupUrl,
+            };
+            Exception? downloadError = null;
+            foreach (var setupUrl in setupUrls)
+            {
+                try
+                {
+                    using var handler = new SocketsHttpHandler
+                    {
+                        ConnectTimeout = TimeSpan.FromSeconds(20),
+                        AllowAutoRedirect = true,
+                    };
+                    using var client = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(10) };
+                    using var response = await client.GetAsync(
+                        setupUrl, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None);
+                    response.EnsureSuccessStatusCode();
+                    await using var source = await response.Content.ReadAsStreamAsync(CancellationToken.None);
+                    await using var file = File.Create(target);
+                    await source.CopyToAsync(file, CancellationToken.None);
+                    downloadError = null;
+                    break;
+                }
+                catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException
+                                                     or IOException)
+                {
+                    downloadError = exception;
+                    AppLog.Write("update", "Скачивание установщика не удалось: " + setupUrl, exception);
+                }
+            }
+
+            if (downloadError is not null)
+            {
+                throw new InvalidOperationException(
+                    "Не удалось скачать установщик ни с GitHub, ни с зеркал. " + downloadError.Message,
+                    downloadError);
             }
 
             SetStatus("Обновление VieNLink", "Запускаю установщик…");

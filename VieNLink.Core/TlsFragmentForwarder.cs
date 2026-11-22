@@ -42,7 +42,7 @@ internal sealed record StreamFragmentStrategy(string Name, StreamFragmentMode Mo
 /// <summary>
 /// Локальный SOCKS5-форвардер для TUN-обхода: принимает соединения от sing-box,
 /// открывает прямой TCP-канал до сайта и режет TLS ClientHello на сегменты.
-/// Никакого прокси-узла и WinDivert: только пользовательские сокеты.
+/// Никакого прокси-сервера и WinDivert: только пользовательские сокеты.
 /// </summary>
 internal sealed class TlsFragmentForwarder : IAsyncDisposable
 {

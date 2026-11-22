@@ -6,7 +6,7 @@ namespace VieNLink.Mobile;
 /// <summary>
 /// Автозапуск после загрузки устройства: если в настройках включено, поднимаем туннель
 /// без открытия приложения. Конфиг собирает сама служба (ActionAuto), чтобы приёмник
-/// не держал процесс ради чтения кэша узлов.
+/// не держал процесс ради чтения кэша серверов.
 /// </summary>
 [BroadcastReceiver(Enabled = true, Exported = true)]
 [IntentFilter(new[] { Intent.ActionBootCompleted })]

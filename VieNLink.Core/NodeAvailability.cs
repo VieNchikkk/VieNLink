@@ -1,9 +1,9 @@
 namespace VieNLink;
 
 /// <summary>
-/// Единое правило «узел можно предлагать прямо сейчас». Счётчики сервисов в шапке
+/// Единое правило «сервер можно предлагать прямо сейчас». Счётчики сервисов в шапке
 /// и кнопки быстрого подключения обязаны считать одинаково: иначе число на значке
-/// обещает узел, которого кнопка не находит. Причина расхождения — кэш: узел,
+/// обещает сервер, которого кнопка не находит. Причина расхождения — кэш: сервер,
 /// проверенный много часов назад, остаётся «рабочим» в списке, хотя уже умер.
 /// </summary>
 internal static class NodeAvailability
@@ -20,8 +20,16 @@ internal static class NodeAvailability
         checkedAt >= nowUtc.AddMinutes(-Math.Clamp(recheckMinutes, MinRecheckMinutes, MaxRecheckMinutes));
 
     /// <summary>
+    /// Момент, раньше которого рабочий сервер пора перепроверить: на
+    /// <see cref="NodeLimits.RecheckLeadMinutes"/> раньше истечения окна свежести.
+    /// Так сервер успевает попасть в партию до того, как счётчик перестанет его учитывать.
+    /// </summary>
+    public static DateTime RecheckCutoffUtc(DateTime nowUtc) =>
+        nowUtc.AddMinutes(-Math.Max(1, NodeLimits.WorkingRecheckMinutes - NodeLimits.RecheckLeadMinutes));
+
+    /// <summary>
     /// Есть хотя бы один подтверждённый успех: задержка или отметка сервиса. На Android
-    /// задержка — это только Cloudflare, поэтому узел, открывший лишь YouTube/Telegram,
+    /// задержка — это только Cloudflare, поэтому сервер, открывший лишь YouTube/Telegram,
     /// тоже считается проверенным (но не универсальным).
     /// </summary>
     public static bool HasSuccess(ProxyNode node) =>
@@ -44,7 +52,7 @@ internal static class NodeAvailability
         IsFresh(node, recheckMinutes, nowUtc);
 
     /// <summary>
-    /// Открывает ли узел сервис. Ключи — как в тегах кнопок Windows:
+    /// Открывает ли сервер сервис. Ключи — как в тегах кнопок Windows:
     /// <c>youtube</c>, <c>telegram</c>, <c>discord</c>, всё остальное — универсальный доступ
     /// (проверочный адрес Cloudflare), а не «хоть что-нибудь открылось».
     /// </summary>

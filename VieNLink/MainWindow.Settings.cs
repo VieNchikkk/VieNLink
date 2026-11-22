@@ -70,7 +70,7 @@ public partial class MainWindow
             ReplaceNodes(AllRows.Select(r => r.Node).ToList());
             var kept = AllRows.Select(r => r.Node).ToList();
             await Task.Run(() => NodeSourceService.SaveCache(kept));
-            SetStatus("Лимит узлов уменьшен", $"В списке {kept.Count} из {_settings.MaxTotalNodes}");
+            SetStatus("Лимит серверов уменьшен", $"В списке {kept.Count} из {_settings.MaxTotalNodes}");
         }
 
         if (portsChanged && _manager.IsConnected)
@@ -90,6 +90,69 @@ public partial class MainWindow
         int.TryParse(box.Text.Trim(), out var value) ? Math.Clamp(value, minimum, maximum) : fallback;
 
     private void SaveSettings() => JsonFileStore.Write(AppPaths.SettingsPath, _settings);
+
+    private void OnAutomationToggleClick(object sender, RoutedEventArgs e)
+    {
+        _settings.AutomationPaused = !_settings.AutomationPaused;
+        SaveSettings();
+        ApplyAutomationState();
+        UpdateAutomationUi();
+    }
+
+    /// <summary>Останавливает или запускает всю фоновую автоматику, не трогая туннель.</summary>
+    private void ApplyAutomationState()
+    {
+        if (_settings.AutomationPaused)
+        {
+            _idleTimer?.Stop();
+            _autoTimer?.Stop();
+            _idleCts?.Cancel();
+            _mtprotoCollectCts?.Cancel();
+            _mtprotoCheckCts?.Cancel();
+            _probe.StopNow();
+            AppendLog("Все процессы остановлены: проверка серверов, MTProto, обслуживание и автообновления выключены");
+            SetStatus("Все процессы остановлены", "Туннель и ручные действия продолжают работать");
+            return;
+        }
+
+        _lastIdleTestUtc = null;
+        _lastRecheckUtc = null;
+        _lastMtProtoCollectUtc = null;
+        _idleTimer?.Start();
+        _autoTimer?.Start();
+        AppendLog("Все процессы запущены: проверка серверов, MTProto и автообновления снова работают");
+        SetStatus("Все процессы запущены", "Фоновая проверка серверов и MTProto включены");
+    }
+
+    private void UpdateAutomationUi()
+    {
+        if (AutomationToggleButton is null)
+        {
+            return;
+        }
+
+        if (_settings.AutomationPaused)
+        {
+            AutomationToggleButton.Content = "Запустить все процессы";
+            AutomationToggleButton.Style = (Style)FindResource("PrimaryButton");
+            AutomationToggleButton.ToolTip = "Снова включить все фоновые процессы приложения";
+            if (AutomationHintText is not null)
+            {
+                AutomationHintText.Text = "Все фоновые процессы остановлены. Туннель и ручные действия продолжают работать.";
+            }
+        }
+        else
+        {
+            AutomationToggleButton.Content = "Остановить все процессы";
+            AutomationToggleButton.Style = (Style)FindResource("WarningButton");
+            AutomationToggleButton.ToolTip = "Полностью выключить фоновые процессы приложения";
+            if (AutomationHintText is not null)
+            {
+                AutomationHintText.Text = "Останавливает все фоновые процессы приложения: проверку серверов, MTProto, " +
+                                          "обслуживание и автообновления. Подключённый туннель и ручные действия продолжают работать.";
+            }
+        }
+    }
 
     /// <summary>Галочка «Виджет поверх всех окон» применяется сразу, без «Сохранить».</summary>
     private void OnWidgetTopmostChanged(object sender, RoutedEventArgs e)

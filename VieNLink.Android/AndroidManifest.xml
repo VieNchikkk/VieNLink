@@ -5,12 +5,12 @@
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
   <!-- Android 14+ требует тип foreground-сервиса; для VPN это specialUse. -->
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-  <!-- Проверка узлов в :probe идёт как короткая foreground-служба. -->
+  <!-- Проверка серверов в :probe идёт как короткая foreground-служба. -->
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
   <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
   <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-  <!-- Обновление APK с GitHub через PackageInstaller (подтверждение ставит пользователь). -->
-  <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+  <!-- REQUEST_INSTALL_PACKAGES живёт только в GitHub-сборке (Store\SideloadManifest.xml):
+       в магазинной сборке самообновления нет, этого требуют Play и RuStore. -->
 
   <!-- Android 11+ скрывает пакеты без явного <queries>: без этого список приложений
        для split-tunnel показывал бы только несколько системных. -->

@@ -2,6 +2,7 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Xml;
 
 namespace VieNLink.Mobile;
 
@@ -33,6 +34,29 @@ internal static class AndroidUpdate
         $"https://api.github.com/repos/{Repository}/releases?per_page=30",
         $"https://ghfast.top/https://api.github.com/repos/{Repository}/releases?per_page=30",
         $"https://gh-proxy.com/https://api.github.com/repos/{Repository}/releases?per_page=30",
+    };
+
+    /// <summary>
+    /// Резервный источник, когда JSON API недоступен: atom-лента релизов есть и через
+    /// зеркала, а адреса APK у нас строятся по одному правилу из тега.
+    /// </summary>
+    private static readonly string[] AtomUrls =
+    {
+        $"https://github.com/{Repository}/releases.atom",
+        $"https://ghfast.top/https://github.com/{Repository}/releases.atom",
+        $"https://gh-proxy.com/https://github.com/{Repository}/releases.atom",
+    };
+
+    /// <summary>
+    /// Зеркала для скачивания APK. Сам github.com/releases/download... часто отдаёт
+    /// редирект на objects.githubusercontent.com, который у операторов блокируется —
+    /// поэтому после прямой попытки пробуем проксирующие зеркала.
+    /// </summary>
+    private static readonly string[] DownloadPrefixes =
+    {
+        string.Empty,
+        "https://ghfast.top/",
+        "https://gh-proxy.com/",
     };
 
     public static async Task<Release?> FindLatestAsync(CancellationToken cancellationToken)
@@ -151,7 +175,104 @@ internal static class AndroidUpdate
             }
         }
 
+        // JSON API не ответил (блокировка или лимит): читаем atom-ленту релизов.
+        // Этого достаточно, потому что имена APK в наших релизах строятся из версии.
+        foreach (var url in AtomUrls)
+        {
+            try
+            {
+                using var response = await client.GetAsync(url, cancellationToken).ConfigureAwait(false);
+                response.EnsureSuccessStatusCode();
+                var xml = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+                var release = ParseAtom(xml);
+                if (release is not null)
+                {
+                    AppLog.Write("update", "Релизы получены через atom-ленту " + new Uri(url).Host);
+                    return release;
+                }
+            }
+            catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException
+                                                 or JsonException or XmlException)
+            {
+                AppLog.Write("update", $"Не удалось получить atom-ленту через {new Uri(url).Host}", exception);
+            }
+        }
+
         return null;
+    }
+
+    /// <summary>
+    /// Разбирает atom-ленту релизов. Тег берётся из ссылки, версия — из тега;
+    /// адрес APK собирается по правилу сборки: <c>VieNLink-&lt;версия&gt;-android.apk</c>.
+    /// </summary>
+    private static Release? ParseAtom(string xml)
+    {
+        Release? best = null;
+        int[]? bestVersion = null;
+        foreach (Match entry in Regex.Matches(xml, "<entry>(.*?)</entry>", RegexOptions.Singleline))
+        {
+            var block = entry.Groups[1].Value;
+            var link = Regex.Match(block, "<link[^>]*href=\"([^\"]+)\"");
+            if (!link.Success)
+            {
+                continue;
+            }
+
+            var href = link.Groups[1].Value;
+            var tagIndex = href.LastIndexOf("/tag/", StringComparison.OrdinalIgnoreCase);
+            if (tagIndex < 0)
+            {
+                continue;
+            }
+
+            var tag = href[(tagIndex + "/tag/".Length)..].Trim();
+            // Только Android-релизы: у Windows-релиза APK нет, и попытка скачать
+            // придуманный по версии файл закончилась бы «не удалось скачать».
+            if (!tag.Contains("android", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var version = ParseVersion(tag);
+            var versionText = VersionText(tag);
+            if (version is null || versionText is null)
+            {
+                continue;
+            }
+
+            if (bestVersion is not null && Compare(version, bestVersion) <= 0)
+            {
+                continue;
+            }
+
+            var apkName = $"VieNLink-{versionText}-android.apk";
+            var apkUrl = $"{ReleasesPage}/download/{tag}/{apkName}";
+            var updated = Regex.Match(block, "<updated>([^<]+)</updated>");
+            var published = updated.Success &&
+                            DateTimeOffset.TryParse(updated.Groups[1].Value, out var publishedAt)
+                ? publishedAt.UtcDateTime
+                : DateTime.MinValue;
+
+            bestVersion = version;
+            best = new Release(
+                tag,
+                $"{ReleasesPage}/tag/{tag}",
+                string.Empty,
+                published,
+                apkUrl,
+                apkName,
+                0,
+                apkUrl + ".sha256");
+        }
+
+        return best;
+    }
+
+    /// <summary>Числовая часть версии из тега: «v1.3.1-android» → «1.3.1».</summary>
+    private static string? VersionText(string tag)
+    {
+        var match = Regex.Match(tag, @"(\d+(?:\.\d+)+)");
+        return match.Success ? match.Groups[1].Value : null;
     }
 
     /// <summary>
@@ -164,26 +285,64 @@ internal static class AndroidUpdate
         IProgress<double>? progress,
         CancellationToken cancellationToken)
     {
-        var fullPath = Path.GetFullPath(targetPath);
-        var directory = Path.GetDirectoryName(fullPath)
-                        ?? throw new InvalidOperationException("Не удалось определить папку для APK.");
-        Directory.CreateDirectory(directory);
-        var tempPath = fullPath + ".part";
-
         // Общий предел на скачивание: без него поток может «повиснуть» после
         // последнего байта, и уведомление навсегда останется на 100%.
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromMinutes(20));
         var token = timeout.Token;
 
+        using var handler = CreateHandler();
+        using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+        Prepare(client);
+
+        // Прямой адрес GitHub, затем зеркала: у операторов редирект на
+        // objects.githubusercontent.com часто заблокирован, и APK «не скачивается».
+        Exception? lastError = null;
+        foreach (var prefix in DownloadPrefixes)
+        {
+            var apkUrl = prefix + release.ApkUrl;
+            var shaUrl = release.Sha256Url is null ? null : prefix + release.Sha256Url;
+            try
+            {
+                return await DownloadOnceAsync(client, release, apkUrl, shaUrl, targetPath, progress, token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException
+                                                 or InvalidDataException or IOException)
+            {
+                lastError = exception;
+                AppLog.Write("update",
+                    $"Скачивание APK через {(prefix.Length == 0 ? "GitHub" : new Uri(prefix).Host)} не удалось",
+                    exception);
+            }
+        }
+
+        throw lastError ?? new InvalidOperationException("Не удалось скачать APK ни с одного адреса.");
+    }
+
+    private static async Task<string> DownloadOnceAsync(
+        HttpClient client,
+        Release release,
+        string apkUrl,
+        string? shaUrl,
+        string targetPath,
+        IProgress<double>? progress,
+        CancellationToken token)
+    {
+        var fullPath = Path.GetFullPath(targetPath);
+        var directory = Path.GetDirectoryName(fullPath)
+                        ?? throw new InvalidOperationException("Не удалось определить папку для APK.");
+        Directory.CreateDirectory(directory);
+        var tempPath = fullPath + ".part";
+
         try
         {
-            using var handler = CreateHandler();
-            using var client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-            Prepare(client);
-
             using var response = await client.GetAsync(
-                release.ApkUrl, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
+                apkUrl, HttpCompletionOption.ResponseHeadersRead, token).ConfigureAwait(false);
             response.EnsureSuccessStatusCode();
 
             var total = response.Content.Headers.ContentLength ?? release.ApkSize;
@@ -212,11 +371,11 @@ internal static class AndroidUpdate
                 throw new InvalidDataException("Загрузка APK оборвалась: размер файла не совпал.");
             }
 
-            var expected = await ReadExpectedSha256Async(client, release.Sha256Url, token)
+            var expected = await ReadExpectedSha256Async(client, shaUrl, token)
                 .ConfigureAwait(false);
             if (expected is not null)
             {
-                var actual = await ComputeSha256Async(tempPath, cancellationToken).ConfigureAwait(false);
+                var actual = await ComputeSha256Async(tempPath, token).ConfigureAwait(false);
                 if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase))
                 {
                     throw new InvalidDataException(
@@ -224,7 +383,7 @@ internal static class AndroidUpdate
                 }
             }
 
-            await EnsureZipAsync(tempPath, cancellationToken).ConfigureAwait(false);
+            await EnsureZipAsync(tempPath, token).ConfigureAwait(false);
             File.Move(tempPath, fullPath, overwrite: true);
             progress?.Report(1);
             return fullPath;
@@ -258,7 +417,7 @@ internal static class AndroidUpdate
             AllowAutoRedirect = true,
         };
 
-        // Если поднят VPN-узел, GitHub и загрузка идут через него: прямой доступ
+        // Если поднят VPN-сервер, GitHub и загрузка идут через него: прямой доступ
         // к api.github.com у части провайдеров блокируется.
         if (CoreRuntime.IsRunning)
         {

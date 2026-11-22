@@ -20,8 +20,7 @@ public sealed class AboutActivity : BaseActivity
     private const string SingBoxSource = "https://github.com/SagerNet/sing-box";
     private const string GplUrl = "https://www.gnu.org/licenses/gpl-3.0.html";
     private const string Repository = "https://github.com/VieNchikkk/VieNLink";
-
-    private TextView? _updateStatus;
+    private const string PrivacyUrl = "https://vienchikkk.github.io/VieNLink/privacy.html";
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
@@ -63,7 +62,7 @@ public sealed class AboutActivity : BaseActivity
         var body = Ui.Card(P, this,
             Ui.Text(this, "Назначение", 14.5f, P.TextStrong, bold: true),
             Ui.Hint(this,
-                "Клиент для сбора, проверки и подключения прокси-узлов из открытых списков, " +
+                "Клиент для сбора, проверки и подключения прокси-серверов из открытых списков, " +
                 "подписок и каналов Telegram. Ядро — sing-box через libbox (JNI).", P),
             Ui.Text(this, "Лицензия", 14.5f, P.TextStrong, bold: true),
             Ui.Hint(this,
@@ -71,20 +70,15 @@ public sealed class AboutActivity : BaseActivity
                 "поэтому исходный код открыт. Тексты лицензий лежат в APK.", P),
             Ui.Text(this, "Безопасность", 14.5f, P.TextStrong, bold: true),
             Ui.Hint(this,
-                "Бесплатные узлы никем не проверяются: владелец сервера видит ваш трафик. " +
-                "Не входите через них в банки и почту, если не доверяете узлу.", P));
+                "Бесплатные серверы никем не проверяются: владелец сервера видит ваш трафик. " +
+                "Не входите через них в банки и почту, если не доверяете серверу.", P));
         page.AddView(body);
-
-        page.AddView(Ui.Section(this, "Обновления", P));
-        _updateStatus = Ui.Hint(this,
-            "Проверка идёт автоматически при запуске. Кнопка проверяет вручную, скачивает более новую версию и предлагает установку.",
-            P);
-        var update = Ui.Pill(this, P, "Проверить обновление", UiButtonKind.Accent,
-            () => _ = CheckUpdateAsync(), Resource.Drawable.ic_download);
-        page.AddView(update);
-        page.AddView(_updateStatus);
+        page.AddView(Ui.Hint(this,
+            "Проверка и установка обновлений — в «Настройках» → «Обновления».", P));
 
         page.AddView(Ui.Section(this, "Документы и исходники", P));
+        page.AddView(Ui.Pill(this, P, "Политика конфиденциальности", UiButtonKind.Ghost,
+            () => OpenUrl(PrivacyUrl), Resource.Drawable.ic_open));
         page.AddView(Ui.Pill(this, P, "Текст GPL-3.0", UiButtonKind.Secondary,
             () => OpenLicense("LICENSE.txt", "GPL-3.0"), Resource.Drawable.ic_info));
         page.AddView(Ui.Pill(this, P, "Сторонние компоненты", UiButtonKind.Secondary,
@@ -104,28 +98,7 @@ public sealed class AboutActivity : BaseActivity
         SetPage(page);
     }
 
-    private string ReadVersion()
-    {
-        try
-        {
-            return PackageManager?.GetPackageInfo(PackageName!, 0)?.VersionName ?? AppInfo.Version;
-        }
-        catch (Exception)
-        {
-            return AppInfo.Version;
-        }
-    }
-
-    private async Task CheckUpdateAsync()
-    {
-        if (_updateStatus is null)
-        {
-            return;
-        }
-
-        _updateStatus.Text = "Проверяю GitHub…";
-        await UpdateCenter.CheckInteractiveAsync(this, text => _updateStatus.Text = text);
-    }
+    private string ReadVersion() => UpdateCenter.CurrentVersion(this);
 
     private void OpenLicense(string asset, string title)
     {

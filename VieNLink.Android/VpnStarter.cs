@@ -25,11 +25,11 @@ internal static class VpnStarter
         StartForeground(context, intent);
     }
 
-    /// <summary>Подключение без готового конфига: служба сама выберет узел и соберёт конфиг.</summary>
+    /// <summary>Подключение без готового конфига: служба сама выберет сервер и соберёт конфиг.</summary>
     public static void StartAuto(Context context) =>
         StartForeground(context, new Intent(context, typeof(TunnelService)).SetAction(TunnelService.ActionAuto));
 
-    /// <summary>TUN-обход без узла: служба поднимет форвардер и TUN-конфиг.</summary>
+    /// <summary>TUN-обход без сервера: служба поднимет форвардер и TUN-конфиг.</summary>
     public static void StartBypass(Context context, StreamFragmentMode mode) =>
         StartForeground(context, new Intent(context, typeof(TunnelService))
             .SetAction(TunnelService.ActionBypass)

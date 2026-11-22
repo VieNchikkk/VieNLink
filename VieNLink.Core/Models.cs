@@ -4,14 +4,14 @@ using System.Text.Json.Serialization;
 
 namespace VieNLink;
 
-/// <summary>Состояние узла после проверок.</summary>
+/// <summary>Состояние сервера после проверок.</summary>
 internal enum NodeStatus
 {
     /// <summary>Ещё не проверялся.</summary>
     Unknown = 0,
 
     /// <summary>
-    /// Не открыл ни один проверочный сервис: непроверенный узел — сразу, уже работавший —
+    /// Не открыл ни один проверочный сервис: непроверенный сервер — сразу, уже работавший —
     /// после <see cref="NodeLimits.RemoveAfterFailures"/> провалов подряд.
     /// </summary>
     Dead = 1,
@@ -20,7 +20,7 @@ internal enum NodeStatus
     Working = 2,
 }
 
-/// <summary>Один узел (сервер) из публичного списка или подписки.</summary>
+/// <summary>Один сервер (сервер) из публичного списка или подписки.</summary>
 internal sealed class ProxyNode
 {
     public string RawLink { get; set; } = string.Empty;
@@ -31,7 +31,7 @@ internal sealed class ProxyNode
     public string Tag { get; set; } = string.Empty;
     public string SourceName { get; set; } = string.Empty;
 
-    /// <summary>Узел пришёл из личной подписки — показывается отдельно и пробуется первым.</summary>
+    /// <summary>Сервер пришёл из личной подписки — показывается отдельно и пробуется первым.</summary>
     public bool IsMine { get; set; }
 
     /// <summary>Задержка последней проверки в миллисекундах; null — ещё не проверялся.</summary>
@@ -40,13 +40,13 @@ internal sealed class ProxyNode
     public DateTime? CheckedAtUtc { get; set; }
 
     /// <summary>
-    /// Когда узел последний раз пытались проверить. Нужна, чтобы партия, где ничего
-    /// не открылось (откат), не проверялась заново теми же узлами по кругу.
+    /// Когда сервер последний раз пытались проверить. Нужна, чтобы партия, где ничего
+    /// не открылось (откат), не проверялась заново теми же серверами по кругу.
     /// </summary>
     public DateTime? TriedAtUtc { get; set; }
 
     /// <summary>
-    /// Когда узел последний раз встречался в источниках. Узлы, которые давно
+    /// Когда сервер последний раз встречался в источниках. Серверы, которые давно
     /// не приходят из списков, удаляются — в кэше остаются только свежие данные.
     /// </summary>
     public DateTime? LastSeenUtc { get; set; }
@@ -54,7 +54,7 @@ internal sealed class ProxyNode
     /// <summary>Скорость последнего замера, Мбит/с; null — не замерялась. Задержка не показывает пропускную способность.</summary>
     public double? SpeedMbps { get; set; }
 
-    /// <summary>Узел просит не проверять TLS-сертификат (insecure): трафик виден посреднику, выбираем его последним.</summary>
+    /// <summary>Сервер просит не проверять TLS-сертификат (insecure): трафик виден посреднику, выбираем его последним.</summary>
     public bool AllowInsecure { get; set; }
 
     // Результаты проверки по сервисам: null — не проверялся.
@@ -62,24 +62,24 @@ internal sealed class ProxyNode
 
     public bool? TelegramOk { get; set; }
 
-    /// <summary>Универсальный доступ (Cloudflare): главный признак пригодности узла.</summary>
+    /// <summary>Универсальный доступ (Cloudflare): главный признак пригодности сервера.</summary>
     public bool? UniversalOk { get; set; }
 
     public bool? DiscordOk { get; set; }
 
-    /// <summary>Сколько заблокированных доменов открылось через узел — главный показатель качества.</summary>
+    /// <summary>Сколько заблокированных доменов открылось через сервер — главный показатель качества.</summary>
     public int OpenDomains { get; set; }
 
     public NodeStatus Status { get; set; } = NodeStatus.Unknown;
 
     /// <summary>
-    /// Сколько проверок подряд узел не открыл ни один сервис. Успешная проверка
-    /// сбрасывает счётчик; после <see cref="NodeLimits.RemoveAfterFailures"/> узел удаляется.
+    /// Сколько проверок подряд сервер не открыл ни один сервис. Успешная проверка
+    /// сбрасывает счётчик; после <see cref="NodeLimits.RemoveAfterFailures"/> сервер удаляется.
     /// </summary>
     public int FailCount { get; set; }
 
     /// <summary>
-    /// Ключ повтора: один физический сервер = один узел. Разные ссылки на тот же
+    /// Ключ повтора: один физический сервер = один сервер. Разные ссылки на тот же
     /// хост:порт (другой UUID, имя или камуфляж) склеиваются в одну строку.
     /// </summary>
     [JsonIgnore]
@@ -91,13 +91,23 @@ internal sealed class ProxyNode
     [JsonIgnore]
     public string OutboundJson { get; set; } = string.Empty;
 
-    /// <summary>Стабильный идентификатор: одинаковые узлы из разных источников склеиваются.</summary>
+    /// <summary>
+    /// Оценка маскировки, посчитанная один раз: <see cref="NodeRanking.Score"/> ищет
+    /// подстроки в outbound-JSON, а сортировка тысяч серверов вызывала её сотни тысяч раз.
+    /// Поля, от которых зависит оценка, после разбора ссылки не меняются.
+    /// </summary>
+    [JsonIgnore]
+    public int RankScore => _rankScore ??= NodeRanking.Score(this);
+
+    private int? _rankScore;
+
+    /// <summary>Стабильный идентификатор: одинаковые серверы из разных источников склеиваются.</summary>
     [JsonIgnore]
     public string Identity { get; set; } = string.Empty;
 
     public string Id => string.IsNullOrEmpty(Identity) ? ComputeId() : Identity;
 
-    /// <summary>Стабильный идентификатор: одинаковые узлы из разных источников склеиваются.</summary>
+    /// <summary>Стабильный идентификатор: одинаковые серверы из разных источников склеиваются.</summary>
     public string ComputeId()
     {
         var key = Protocol.ToLowerInvariant() + "|" + Server.ToLowerInvariant() + "|" + Port.ToString(System.Globalization.CultureInfo.InvariantCulture) + "|" + OutboundJson;
@@ -111,7 +121,7 @@ internal sealed class ProxyNode
 /// <summary>
 /// Склейка повторов. Сначала убираются буквальные дубли (одинаковый outbound — тот же
 /// тег), затем на один сервер:порт остаётся несколько лучших вариантов. Жёсткое
-/// «одна строка на хост:порт» выбрасывало рабочие узлы с общих CDN: у Cloudflare под
+/// «одна строка на хост:порт» выбрасывало рабочие серверы с общих CDN: у Cloudflare под
 /// одним адресом живут десятки аккаунтов с разными UUID и SNI, и оставшийся мог быть мёртвым.
 /// </summary>
 internal static class NodeDedup
@@ -143,7 +153,7 @@ internal static class NodeDedup
         }
 
         // Мягкий лимит на физический сервер: разные аккаунты на одном CDN-адресе — это
-        // разные узлы, но хранить десятки вариантов одного адреса тоже незачем.
+        // разные серверы, но хранить десятки вариантов одного адреса тоже незачем.
         var result = new List<ProxyNode>(unique.Count);
         foreach (var group in unique.Values.GroupBy(node => node.EndpointKey, StringComparer.OrdinalIgnoreCase))
         {
@@ -159,8 +169,8 @@ internal static class NodeDedup
             foreach (var extra in ordered.Skip(NodeLimits.MaxPerEndpoint))
             {
                 // Другой аккаунт на том же адресе — не дубль: его успехи нельзя
-                // приписывать оставшемуся узлу, иначе кнопка получит «рабочий»
-                // узел, который этот сервис не открывает.
+                // приписывать оставшемуся серверу, иначе кнопка получит «рабочий»
+                // сервер, который этот сервис не открывает.
                 Absorb(keep[0], extra, mergeChecks: false);
             }
 
@@ -177,10 +187,10 @@ internal static class NodeDedup
          node.DelayMs is not null ? 1 : 0,
          node.AllowInsecure ? 0 : 1,
          node.SpeedMbps ?? -1,
-         NodeRanking.Score(node),
+         node.RankScore,
          (node.LastSeenUtc ?? DateTime.MinValue).Ticks);
 
-    /// <summary>Какой из двух дублей оставить. Рабочий узел важнее красивого, но непроверенного.</summary>
+    /// <summary>Какой из двух дублей оставить. Рабочий сервер важнее красивого, но непроверенного.</summary>
     private static bool IsBetter(ProxyNode candidate, ProxyNode current)
     {
         if (candidate.IsMine != current.IsMine)
@@ -212,8 +222,8 @@ internal static class NodeDedup
             return !candidate.AllowInsecure;
         }
 
-        var candidateScore = NodeRanking.Score(candidate);
-        var currentScore = NodeRanking.Score(current);
+        var candidateScore = candidate.RankScore;
+        var currentScore = current.RankScore;
         if (candidateScore != currentScore)
         {
             return candidateScore > currentScore;
@@ -223,7 +233,7 @@ internal static class NodeDedup
     }
 
     /// <summary>
-    /// Переносит на оставшийся узел всё полезное от дубля: проверки, метку «моя», источники.
+    /// Переносит на оставшийся сервер всё полезное от дубля: проверки, метку «моя», источники.
     /// <paramref name="mergeChecks"/> — только для настоящих дублей (тот же outbound).
     /// У разных аккаунтов на общем CDN-адресе результаты проверок не переносятся:
     /// они относятся к другому UUID/SNI и могут не открывать тот же сервис.
@@ -279,7 +289,7 @@ internal static class NodeDedup
     private static bool? MergeAccess(bool? target, bool? source) =>
         target == true || source == true ? true : target ?? source;
 
-    /// <summary>Названия источников объединяются без повторов: видно, что узел популярен.</summary>
+    /// <summary>Названия источников объединяются без повторов: видно, что сервер популярен.</summary>
     public static void MergeSource(ProxyNode node, string sourceName)
     {
         if (string.IsNullOrWhiteSpace(sourceName))
@@ -304,14 +314,14 @@ internal static class NodeDedup
 }
 
 /// <summary>
-/// Учёт неудачных проверок узла. Узел, который уже был рабочим, не удаляется с первого
+/// Учёт неудачных проверок сервера. Сервер, который уже был рабочим, не удаляется с первого
 /// провала: счётчик растёт, и только после <see cref="NodeLimits.RemoveAfterFailures"/>
-/// провалов подряд такой узел убирается из списка. Непроверенные узлы удаляются сразу —
+/// провалов подряд такой сервер убирается из списка. Непроверенные серверы удаляются сразу —
 /// их держать незачем.
 /// </summary>
 internal static class NodeHealth
 {
-    /// <summary>Отмечает неудачную проверку. true — узел пора удалить.</summary>
+    /// <summary>Отмечает неудачную проверку. true — сервер пора удалить.</summary>
     public static bool RegisterFailure(ProxyNode node)
     {
         node.CheckedAtUtc = DateTime.UtcNow;
@@ -322,7 +332,7 @@ internal static class NodeHealth
         node.DiscordOk = false;
         node.OpenDomains = 0;
 
-        // Узел ещё ни разу не открывал сайты — не храним его вовсе.
+        // Сервер ещё ни разу не открывал сайты — не храним его вовсе.
         if (node.Status != NodeStatus.Working)
         {
             node.FailCount = Math.Max(1, node.FailCount + 1);
@@ -351,7 +361,7 @@ internal static class NodeHealth
 }
 
 /// <summary>
-/// Жёсткий лимит списка узлов. Когда список заполнен, новые узлы не добавляются
+/// Жёсткий лимит списка серверов. Когда список заполнен, новые серверы не добавляются
 /// и источники не ищутся, пока накопленные не проверены: нерабочие удаляются,
 /// место освобождается и загрузка продолжается.
 /// </summary>
@@ -366,31 +376,38 @@ internal static class NodeLimits
     public const int MaxPerEndpoint = 4;
 
     /// <summary>
-    /// После скольких неудачных проверок подряд убирается узел, который раньше работал.
-    /// Непроверенные узлы удаляются с первого провала — держать их в списке незачем.
+    /// После скольких неудачных проверок подряд убирается сервер, который раньше работал.
+    /// Непроверенные серверы удаляются с первого провала — держать их в списке незачем.
     /// </summary>
     public const int RemoveAfterFailures = 5;
 
     /// <summary>
-    /// Сколько рабочих узлов приложение старается держать наготове. Если их меньше,
+    /// Сколько рабочих серверов приложение старается держать наготове. Если их меньше,
     /// фоновая проверка идёт без пауз, пока минимум не наберётся.
     /// </summary>
     public const int MinWorkingNodes = 10;
 
-    /// <summary>Сколько рабочих узлов нужно на каждый сервис: YouTube, Telegram, Discord
+    /// <summary>Сколько рабочих серверов нужно на каждый сервис: YouTube, Telegram, Discord
     /// и универсальный доступ.</summary>
     public const int MinWorkingPerService = 2;
 
     /// <summary>
-    /// Как часто перепроверять узел, который уже считается рабочим. Бесплатные узлы живут
+    /// Как часто перепроверять сервер, который уже считается рабочим. Бесплатные серверы живут
     /// минуты: «рабочий» из кэша без свежей перепроверки — главная причина, почему значок
-    /// сервиса обещал узел, которого кнопка не находила. Этот же интервал — окно свежести
-    /// для значков и выбора узла: счётчик не должен обещать узел, проверенный дольше этого.
+    /// сервиса обещал сервер, которого кнопка не находила. Этот же интервал — окно свежести
+    /// для значков и выбора сервера: счётчик не должен обещать сервер, проверенный дольше этого.
     /// </summary>
-    public const int WorkingRecheckMinutes = 15;
+    public const int WorkingRecheckMinutes = 5;
 
     /// <summary>
-    /// Оставляет не больше <paramref name="max"/> узлов: сначала личные, затем проверенные
+    /// Насколько раньше окна свежести начинать перепроверку. Фон проверяет не мгновенно
+    /// (такт раз в минуту, партия ограничена), поэтому сервер берётся в работу за минуту
+    /// до истечения окна: иначе счётчик на секунды обнулялся бы между проверками.
+    /// </summary>
+    public const int RecheckLeadMinutes = 1;
+
+    /// <summary>
+    /// Оставляет не больше <paramref name="max"/> серверов: сначала личные, затем проверенные
     /// (рабочие), затем самые свежие, затем лучшие по маскировке и задержке.
     /// Возвращает число отброшенных.
     /// </summary>
@@ -408,7 +425,7 @@ internal static class NodeLimits
             .ThenByDescending(node => node.Status == NodeStatus.Working || node.DelayMs is not null)
             .ThenByDescending(node => node.OpenDomains)
             .ThenByDescending(node => node.LastSeenUtc ?? DateTime.MinValue)
-            .ThenByDescending(NodeRanking.Score)
+            .ThenByDescending(node => node.RankScore)
             .ThenBy(node => node.DelayMs ?? int.MaxValue)
             .Take(cap)
             .ToList();
@@ -423,16 +440,16 @@ internal enum SourceKind
     Subscription,
     Telegram,
 
-    /// <summary>Одна ссылка на узел (vless://, vmess://…), вставленная вручную.</summary>
+    /// <summary>Одна ссылка на сервер (vless://, vmess://…), вставленная вручную.</summary>
     SingleLink,
 
-    /// <summary>Сайт или GitHub-список с MTProto-прокси для Telegram (не узлы).</summary>
+    /// <summary>Сайт или GitHub-список с MTProto-прокси для Telegram (не серверы).</summary>
     MtProto,
 }
 
 /// <summary>
 /// Общее правило: источник относится к Telegram-прокси (канал или сайт с MTProto),
-/// а не к списку узлов. Им пользуются сбор MTProto и фильтры источников узлов.
+/// а не к списку серверов. Им пользуются сбор MTProto и фильтры источников серверов.
 /// </summary>
 internal static class SourceKinds
 {
@@ -463,7 +480,7 @@ internal static class SourceKinds
         url.Contains("mtpro", StringComparison.OrdinalIgnoreCase);
 }
 
-/// <summary>Источник узлов: raw-список на GitHub, подписка или публичный канал Telegram.</summary>
+/// <summary>Источник серверов: raw-список на GitHub, подписка или публичный канал Telegram.</summary>
 internal sealed class SourceDefinition
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N")[..8];
@@ -498,7 +515,7 @@ internal enum TunnelMode
     Tun,
 }
 
-/// <summary>Что отправлять через узел: всё, только список сайтов или всё, кроме списка.</summary>
+/// <summary>Что отправлять через сервер: всё, только список сайтов или всё, кроме списка.</summary>
 internal enum SiteRouteMode
 {
     All,
@@ -520,10 +537,18 @@ internal enum AppRouteMode
 /// </summary>
 internal static class SchemaVersions
 {
-    public const int Settings = 1;
+    /// <summary>
+    /// 2 — партия проверки в простое 40 → 200.
+    /// 3 — разово включить все источники, которые раньше были выключены по умолчанию.
+    /// </summary>
+    public const int Settings = 3;
 
-    /// <summary>2 — добавлены необязательные отметки UniversalOk/DiscordOk; старый кэш читается как есть.</summary>
-    public const int NodeCache = 2;
+    /// <summary>
+    /// 2 — добавлены необязательные отметки UniversalOk/DiscordOk; старый кэш читается как есть.
+    /// 3 — добавлены разобранные поля сервера (Protocol/Name/Server/Port/Tag/Identity/OutboundJson):
+    /// новый кэш читается без повторного разбора ссылок, старый — прежним путём.
+    /// </summary>
+    public const int NodeCache = 3;
 
     public const int MtProtoCache = 1;
 }
@@ -540,19 +565,19 @@ internal sealed class AppSettings
     /// <summary>Локальный mixed-порт (HTTP+SOCKS5), который слушает sing-box.</summary>
     public int MixedPort { get; set; } = 20800;
 
-    /// <summary>Порт Clash API для проверки задержек и переключения узла.</summary>
+    /// <summary>Порт Clash API для проверки задержек и переключения сервера.</summary>
     public int ApiPort { get; set; } = 20801;
 
-    /// <summary>Узлы с задержкой выше порога не предлагаются к подключению.</summary>
+    /// <summary>Серверы с задержкой выше порога не предлагаются к подключению.</summary>
     public int MaxDelayMs { get; set; } = 2500;
 
-    /// <summary>Адрес проверки узлов: важно, чтобы он открывался только через рабочий узел.</summary>
+    /// <summary>Адрес проверки серверов: важно, чтобы он открывался только через рабочий сервер.</summary>
     public string TestUrl { get; set; } = "https://www.youtube.com/";
 
-    /// <summary>При подключении без выбранного узла брать самый быстрый рабочий.</summary>
+    /// <summary>При подключении без выбранного сервера брать самый быстрый рабочий.</summary>
     public bool AutoSelectBest { get; set; } = true;
 
-    /// <summary>При сбое узла автоматически переключаться на запасной другого камуфляжа.</summary>
+    /// <summary>При сбое сервера автоматически переключаться на запасной другого камуфляжа.</summary>
     public bool AutoFailover { get; set; } = true;
 
     /// <summary>
@@ -570,10 +595,10 @@ internal sealed class AppSettings
     /// <summary>Показывать страну и IP выхода после подключения.</summary>
     public bool ShowExitInfo { get; set; } = true;
 
-    /// <summary>Подключаться только к узлам, прошедшим проверку (есть задержка).</summary>
+    /// <summary>Подключаться только к серверам, прошедшим проверку (есть задержка).</summary>
     public bool ConnectOnlyVerified { get; set; } = true;
 
-    /// <summary>Подключаться только к личным подпискам — свой сервер, без публичных узлов.</summary>
+    /// <summary>Подключаться только к личным подпискам — свой сервер, без публичных серверов.</summary>
     public bool ConnectOnlyMine { get; set; }
 
     /// <summary>Запускать обход DPI (zapret) при старте приложения.</summary>
@@ -597,7 +622,7 @@ internal sealed class AppSettings
     /// <summary>Строгая маршрутизация TUN: блокировать попытки обойти туннель.</summary>
     public bool TunStrictRoute { get; set; }
 
-    /// <summary>Какие сайты заворачивать в узел.</summary>
+    /// <summary>Какие сайты заворачивать в сервер.</summary>
     public SiteRouteMode SiteRouteMode { get; set; } = SiteRouteMode.All;
 
     /// <summary>Список доменов (по одному в строке) для режимов «только» и «кроме».</summary>
@@ -612,13 +637,13 @@ internal sealed class AppSettings
     /// <summary>Имена процессов (по одному в строке), которым разрешён прокси.</summary>
     public string AppList { get; set; } = string.Empty;
 
-    /// <summary>SNI-маскировка: подставляется узлам Reality/TLS без собственного server_name.</summary>
+    /// <summary>SNI-маскировка: подставляется серверам Reality/TLS без собственного server_name.</summary>
     public string DefaultSni { get; set; } = string.Empty;
 
     /// <summary>
     /// Фрагментировать TLS-рукопожатие в outbound'ах sing-box (tls.fragment).
     /// Отдельный, «быстрый» обход DPI: без WinDivert и без внешних компонентов,
-    /// но действует только на трафик, который идёт через прокси-узел.
+    /// но действует только на трафик, который идёт через прокси-сервер.
     /// </summary>
     public bool TlsFragment { get; set; }
 
@@ -649,19 +674,27 @@ internal sealed class AppSettings
     /// <summary>Проверять задержки сразу после обновления списков.</summary>
     public bool TestAfterRefresh { get; set; } = true;
 
-    /// <summary>Проверять накопившиеся узлы в простое, когда компьютер не используется.</summary>
+    /// <summary>Проверять накопившиеся серверы в простое, когда компьютер не используется.</summary>
     public bool IdleTestEnabled { get; set; } = true;
+
+    /// <summary>
+    /// Вся фоновая автоматика выключена пользователем: проверка серверов, MTProto,
+    /// обслуживание, автообновления и автопереключение не запускаются. Туннель
+    /// и ручные действия продолжают работать.
+    /// </summary>
+    public bool AutomationPaused { get; set; }
 
     /// <summary>Сколько минут бездействия компьютера считать простоем.</summary>
     public int IdleTestMinutes { get; set; } = 5;
 
-    /// <summary>Сколько узлов проверять за один проход в простое.</summary>
-    public int IdleTestBatch { get; set; } = 40;
+    /// <summary>Сколько серверов проверять за один проход в простое.</summary>
+    /// <summary>Сколько серверов проверять за один проход в простое. 200 — на ПК партия по 10 слишком мала.</summary>
+    public int IdleTestBatch { get; set; } = 200;
 
     /// <summary>Пауза между проходами проверки в простое, минут.</summary>
     public int IdleTestIntervalMinutes { get; set; } = 10;
 
-    /// <summary>Рабочие узлы и MTProto старше этого возраста перепроверяются в простое, часов.</summary>
+    /// <summary>Рабочие серверы и MTProto старше этого возраста перепроверяются в простое, часов.</summary>
     public int IdleRecheckHours { get; set; } = 6;
 
     public bool MinimizeToTray { get; set; } = true;
@@ -673,15 +706,15 @@ internal sealed class AppSettings
     public int AutoUpdateHours { get; set; } = 6;
 
     /// <summary>
-    /// Сколько суток хранить узел, который перестал приходить из источников.
-    /// Свежие данные важнее объёма: старые узлы удаляются из кэша.
+    /// Сколько суток хранить сервер, который перестал приходить из источников.
+    /// Свежие данные важнее объёма: старые серверы удаляются из кэша.
     /// </summary>
     public int KeepUnseenNodeDays { get; set; } = 7;
 
     /// <summary>Периодическое обновление списков во время работы, в минутах (0 — выключено).</summary>
     public int AutoRefreshMinutes { get; set; } = 120;
 
-    /// <summary>Искать новые источники узлов автоматически.</summary>
+    /// <summary>Искать новые источники серверов автоматически.</summary>
     public bool AutoDiscoverSources { get; set; } = true;
 
     /// <summary>Как часто искать новые источники, в часах.</summary>
@@ -715,10 +748,13 @@ internal sealed class AppSettings
     /// </summary>
     public bool WidgetTopmost { get; set; } = true;
 
-    /// <summary>Ограничение числа узлов, попадающих в конфиг ядра.</summary>
+    /// <summary>Показывать плавающий виджет при запуске (закрытие крестиком выключает).</summary>
+    public bool WidgetVisible { get; set; } = true;
+
+    /// <summary>Ограничение числа серверов, попадающих в конфиг ядра.</summary>
     public int MaxNodesInConfig { get; set; } = 400;
 
-    /// <summary>Общий лимит списка узлов: больше не добавляем, пока накопленные не проверены.</summary>
+    /// <summary>Общий лимит списка серверов: больше не добавляем, пока накопленные не проверены.</summary>
     public int MaxTotalNodes { get; set; } = NodeLimits.DefaultMaxTotal;
 
     /// <summary>
@@ -728,7 +764,7 @@ internal sealed class AppSettings
     public AppSettings Clone() => (AppSettings)MemberwiseClone();
 }
 
-/// <summary>Кэш разобранных узлов, чтобы приложение открывалось мгновенно.</summary>
+/// <summary>Кэш разобранных серверов, чтобы приложение открывалось мгновенно.</summary>
 internal sealed class NodeCache
 {
     /// <summary>Версия схемы кэша: см. <see cref="SchemaVersions"/>.</summary>
@@ -742,6 +778,17 @@ internal sealed class CachedNode
 {
     public string RawLink { get; set; } = string.Empty;
     public string SourceName { get; set; } = string.Empty;
+
+    // Разобранные поля сервера. Старый кэш их не знает — тогда ссылка разбирается заново;
+    // новый кэш читается без LinkParser и SHA-256 на каждый сервер, иначе холодный старт
+    // Android с 12 000 серверов занимал секунды (его и было видно как «приложение грузится»).
+    public string Protocol { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Server { get; set; } = string.Empty;
+    public int Port { get; set; }
+    public string Tag { get; set; } = string.Empty;
+    public string Identity { get; set; } = string.Empty;
+    public string OutboundJson { get; set; } = string.Empty;
     public int? DelayMs { get; set; }
     public DateTime? CheckedAtUtc { get; set; }
 
@@ -754,18 +801,18 @@ internal sealed class CachedNode
     /// <summary>Скорость последнего замера, Мбит/с.</summary>
     public double? SpeedMbps { get; set; }
 
-    /// <summary>Узел без проверки TLS-сертификата.</summary>
+    /// <summary>Сервер без проверки TLS-сертификата.</summary>
     public bool AllowInsecure { get; set; }
     public bool? YoutubeOk { get; set; }
     public bool? TelegramOk { get; set; }
     public bool? UniversalOk { get; set; }
     public bool? DiscordOk { get; set; }
 
-    /// <summary>Сколько заблокированных доменов открылось через узел — главный показатель качества.</summary>
+    /// <summary>Сколько заблокированных доменов открылось через сервер — главный показатель качества.</summary>
     public int OpenDomains { get; set; }
     public NodeStatus Status { get; set; }
 
-    /// <summary>Неудачных проверок подряд: узел удаляется, когда их накопится 5.</summary>
+    /// <summary>Неудачных проверок подряд: сервер удаляется, когда их накопится 5.</summary>
     public int FailCount { get; set; }
 }
 

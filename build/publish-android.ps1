@@ -28,19 +28,26 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'version.ps1')
 $project = Join-Path $root 'VieNLink.Android\VieNLink.Android.csproj'
 
-if (-not $Version -or $VersionCode -le 0) {
+$shared = Get-VieNLinkVersion -Root $root
+if (-not $Version -and $shared) {
+    $Version = $shared.Version
+}
+if ($VersionCode -le 0 -and $shared -and $shared.VersionCode -gt 0) {
+    $VersionCode = $shared.VersionCode
+}
+if (-not $Version) {
     [xml]$projectXml = Get-Content -LiteralPath $project -Encoding UTF8
-    if (-not $Version) {
-        $Version = @($projectXml.Project.PropertyGroup | ForEach-Object { $_.ApplicationDisplayVersion } |
-            Where-Object { $_ })[0]
-    }
-    if ($VersionCode -le 0) {
-        $rawCode = @($projectXml.Project.PropertyGroup | ForEach-Object { $_.ApplicationVersion } |
-            Where-Object { $_ })[0]
-        $VersionCode = if ($rawCode) { [int]$rawCode } else { 1 }
-    }
+    $Version = @($projectXml.Project.PropertyGroup | ForEach-Object { $_.ApplicationDisplayVersion } |
+        Where-Object { $_ })[0]
+}
+if ($VersionCode -le 0) {
+    [xml]$projectXml = Get-Content -LiteralPath $project -Encoding UTF8
+    $rawCode = @($projectXml.Project.PropertyGroup | ForEach-Object { $_.ApplicationVersion } |
+        Where-Object { $_ })[0]
+    $VersionCode = if ($rawCode) { [int]$rawCode } else { 1 }
 }
 
 if (-not $Version) { throw 'Не удалось определить версию Android-приложения.' }
@@ -97,6 +104,14 @@ else {
 }
 
 # ---------- Сборка Release APK ----------
+# Чистая сборка: StoreBuild меняет манифест, иначе можно унаследовать магазинный вариант
+# без REQUEST_INSTALL_PACKAGES (тогда GitHub-APK не сможет обновляться сам).
+$objDir = Join-Path $root 'VieNLink.Android\obj\Release\net10.0-android'
+$binDir = Join-Path $root 'VieNLink.Android\bin\Release\net10.0-android'
+foreach ($dir in @($objDir, $binDir)) {
+    if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
+}
+
 $publishDir = Join-Path $root "VieNLink.Android\bin\Release\net10.0-android\publish"
 if (Test-Path -LiteralPath $publishDir) { Remove-Item -LiteralPath $publishDir -Recurse -Force }
 

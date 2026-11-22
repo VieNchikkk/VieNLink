@@ -242,8 +242,8 @@ public partial class MainWindow
             };
             MessageBox.Show(
                 _zapretWidget is { IsVisible: true } ? (Window)_zapretWidget : this,
-                $"Нет проверенных узлов с доступом: {name}.\n\n" +
-                "Обновите списки и нажмите «Все узлы» на вкладке «Узлы».",
+                $"Нет проверенных серверов с доступом: {name}.\n\n" +
+                "Обновите списки и нажмите «Все серверы» на вкладке «Серверы».",
                 "VieNLink",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -283,13 +283,13 @@ public partial class MainWindow
         return StartDesyncFlowAsync(false, fromWidget: true);
     }
 
-    /// <summary>Видео идёт через узел: подключены с маршрутизацией «только список» и в списке есть YouTube.</summary>
+    /// <summary>Видео идёт через сервер: подключены с маршрутизацией «только список» и в списке есть YouTube.</summary>
     internal bool VideoModeActive =>
         _manager.IsConnected &&
         _settings.SiteRouteMode == SiteRouteMode.OnlyListed &&
         _settings.SiteList.Contains("youtube.com", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Виджет: включить «Видео YouTube» через узел или выключить и вернуть весь трафик через узел.</summary>
+    /// <summary>Виджет: включить «Видео YouTube» через сервер или выключить и вернуть весь трафик через сервер.</summary>
     internal Task WidgetToggleVideoAsync() => VideoModeActive ? DisableVideoModeAsync() : VideoViaNodeAsync();
 
     /// <summary>Короткое имя работающего режима для виджета; пусто — ничего не включено.</summary>
@@ -317,11 +317,11 @@ public partial class MainWindow
                 return "TUN-обход";
             }
 
-            return _manager.IsConnected ? "Прокси-узел" : string.Empty;
+            return _manager.IsConnected ? "Прокси-сервер" : string.Empty;
         }
     }
 
-    /// <summary>Подробность работающего режима: стратегия, пресет или имя узла.</summary>
+    /// <summary>Подробность работающего режима: стратегия, пресет или имя сервера.</summary>
     internal string ActiveModeDetail
     {
         get
@@ -356,10 +356,10 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>Имя текущего узла для виджета — с обрезкой длинных названий.</summary>
+    /// <summary>Имя текущего сервера для виджета — с обрезкой длинных названий.</summary>
     private string ShortNodeName()
     {
-        var name = _manager.CurrentNode?.Name ?? "узел";
+        var name = _manager.CurrentNode?.Name ?? "сервер";
         return name.Length <= 32 ? name : name[..29] + "…";
     }
 
@@ -379,10 +379,20 @@ public partial class MainWindow
             _zapretWidget.Closed += (_, _) =>
             {
                 _zapretWidget = null;
+                // Закрытие пользователем запоминаем, чтобы виджет не появлялся
+                // при каждом запуске; при выходе из программы настройку не трогаем.
+                if (!_closing)
+                {
+                    _settings.WidgetVisible = false;
+                    SaveSettings();
+                }
+
                 UpdateWidgetToggleState();
             };
         }
 
+        _settings.WidgetVisible = true;
+        SaveSettings();
         _zapretWidget.Show();
         _zapretWidget.Activate();
         UpdateWidgetToggleState();
@@ -503,7 +513,7 @@ public partial class MainWindow
 
             if (_manager.IsConnected)
             {
-                SetStatus("Отключаю прокси-узел", "Для zapret нужен прямой трафик…");
+                SetStatus("Отключаю прокси-сервер", "Для zapret нужен прямой трафик…");
                 await _manager.DisconnectAsync();
                 UpdateConnectionUi();
             }
@@ -546,7 +556,7 @@ public partial class MainWindow
                     var fallback = Math.Clamp(_settings.ZapretPreset, 0, ZapretService.Presets.Count - 1);
                     ZapretTuneText.Text =
                         $"Автоподбор не нашёл рабочую стратегию — включена «{ZapretService.Presets[fallback].Name}».";
-                    SetStatus("Автоподбор не удался", "Включена сохранённая стратегия. Если сайты не открываются — подключите прокси-узел.");
+                    SetStatus("Автоподбор не удался", "Включена сохранённая стратегия. Если сайты не открываются — подключите прокси-сервер.");
                     _settings.ZapretPreset = fallback;
                     forceTune = false;
                 }
@@ -579,7 +589,7 @@ public partial class MainWindow
                 false, _settings.ZapretBlockQuic));
             UpdateZapretStrategyInfo(preset);
             SetStatus("Обход DPI включён", "zapret запущен. Проверьте YouTube и t.me напрямую.");
-            FooterText.Text = "zapret: обход DPI включён (без прокси-узла)";
+            FooterText.Text = "zapret: обход DPI включён (без прокси-сервера)";
         }
         catch (OperationCanceledException)
         {

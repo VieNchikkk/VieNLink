@@ -162,7 +162,7 @@ internal static class LinkParser
         var vmessSecurity = (Str(root, "scy") ?? "auto").ToLowerInvariant();
         if (!SupportedVmessSecurities.Contains(vmessSecurity))
         {
-            // Битый base64 часто даёт нечитаемый scy — такой узел всё равно не запустится.
+            // Битый base64 часто даёт нечитаемый scy — такой сервер всё равно не запустится.
             return null;
         }
 
@@ -290,7 +290,7 @@ internal static class LinkParser
 
         if (!SupportedShadowsocksMethods.Contains(method))
         {
-            // Неизвестный метод sing-box не запустит: лучше отбросить узел при разборе,
+            // Неизвестный метод sing-box не запустит: лучше отбросить сервер при разборе,
             // чем гонять его через 80 проверок конфига.
             return null;
         }
@@ -566,7 +566,7 @@ internal static class LinkParser
 
     private static ProxyNode? Finish(JsonObject outbound, string protocol, string server, int port, string name, string raw, string sourceName)
     {
-        // В списках попадается мусор вида "https://github.com/..." вместо адреса — такие узлы бесполезны.
+        // В списках попадается мусор вида "https://github.com/..." вместо адреса — такие серверы бесполезны.
         if (!IsUsableHost(server) || port is <= 0 or > 65535)
         {
             return null;
@@ -592,7 +592,7 @@ internal static class LinkParser
         };
     }
 
-    /// <summary>Узел отключил проверку сертификата — помечаем, чтобы не выбирать его автоматически первым.</summary>
+    /// <summary>Сервер отключил проверку сертификата — помечаем, чтобы не выбирать его автоматически первым.</summary>
     private static bool HasInsecureTls(JsonObject outbound) =>
         outbound["tls"] is JsonObject tls &&
         tls["insecure"] is JsonValue value &&

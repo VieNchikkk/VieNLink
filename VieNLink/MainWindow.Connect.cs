@@ -29,8 +29,8 @@ public partial class MainWindow
         if (node is null)
         {
             var text = _settings.ConnectOnlyMine
-                ? "Нет проверенных узлов в ваших подписках.\n\nДобавьте свой сервер на вкладке «Источники», проверьте его — и подключитесь снова."
-                : "Нет проверенных узлов для подключения.\n\nОбновите списки, откройте «Узлы → Непроверенные» и нажмите «Все узлы». К непроверенным серверам приложение подключаться не будет.";
+                ? "Нет проверенных серверов в ваших подписках.\n\nДобавьте свой сервер на вкладке «Источники», проверьте его — и подключитесь снова."
+                : "Нет проверенных серверов для подключения.\n\nОбновите списки, откройте «Серверы → Непроверенные» и нажмите «Все серверы». К непроверенным серверам приложение подключаться не будет.";
             MessageBox.Show(this, text, "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -43,7 +43,7 @@ public partial class MainWindow
         await DisconnectEverythingAsync();
     }
 
-    /// <summary>Кнопка шапки «Отключить»: снимает узел и все включённые обходы.</summary>
+    /// <summary>Кнопка шапки «Отключить»: снимает сервер и все включённые обходы.</summary>
     private async Task DisconnectEverythingAsync()
     {
         if (!BeginOperation("отключение"))
@@ -79,7 +79,7 @@ public partial class MainWindow
             {
                 SetStatus("Отключаюсь", "Возвращаю системный прокси…");
                 await _manager.DisconnectAsync();
-                stopped.Add("прокси-узел");
+                stopped.Add("прокси-сервер");
             }
 
             SetStatus("Отключено", stopped.Count == 0
@@ -99,7 +99,7 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Быстрое подключение к сервису: берём уже проверенный узел с нужным доступом.
+    /// Быстрое подключение к сервису: берём уже проверенный сервер с нужным доступом.
     /// Сортировка скрыта — сначала больше открытых заблокированных доменов, затем быстрее.
     /// </summary>
     private async void OnQuickServiceClick(object sender, RoutedEventArgs e)
@@ -124,25 +124,47 @@ public partial class MainWindow
             return;
         }
 
-        var node = PickNodeForService(service);
+        // Если уже подключены через другой сервис (например, «Универсальный»),
+        // нажатие «YouTube» должно именно переподключить: текущий сервер исключаем,
+        // чтобы кнопка не оставила старое подключение «как есть».
+        var avoidId = _activeService is { } active && active != service
+            ? _manager.CurrentNode?.Id
+            : null;
+        var node = PickNodeForService(service, avoidId);
         if (node is null)
         {
-            // Свежих узлов нет: проверяем тех, кто раньше открывал этот сервис.
-            node = await FindNodeForServiceAsync(service);
+            // Свежих серверов нет: проверяем тех, кто раньше открывал этот сервис.
+            SetStatus("Ищу сервер", "Нет свежего сервера: " + ServiceDisplayName(service));
+            node = await FindNodeForServiceAsync(service, avoidId);
         }
 
         if (node is null)
         {
             MessageBox.Show(this,
-                $"Сейчас нет узлов с подтверждённым доступом: {ServiceDisplayName(service)}.\n\n" +
-                "Проверенные ранее узлы не отвечают. Фоновая проверка продолжает искать замену — " +
-                "попробуйте через минуту или нажмите «Все узлы» на вкладке «Узлы».",
+                $"Сейчас нет серверов с подтверждённым доступом: {ServiceDisplayName(service)}.\n\n" +
+                "Проверенные ранее серверы не отвечают. Фоновая проверка продолжает искать замену — " +
+                "попробуйте через минуту или нажмите «Все серверы» на вкладке «Серверы».",
                 "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
-        await ConnectAsync(node);
+        // Проверяем сервер именно тем сервисом, ради которого нажата кнопка: иначе
+        // «Discord» мог подключиться к серверу, открывающему только YouTube.
+        await ConnectAsync(node, probeUrls: ProbeUrlsForService(service));
+        if (_manager.IsConnected)
+        {
+            _activeService = service;
+        }
     }
+
+    /// <summary>Проверочные адреса кнопки сервиса — те же, по которым ставится отметка доступа.</summary>
+    private static IReadOnlyList<string> ProbeUrlsForService(string service) => service switch
+    {
+        "youtube" => new[] { ProxyManager.YoutubeTestUrl },
+        "telegram" => ProxyManager.TelegramTestUrls,
+        "discord" => new[] { ProxyManager.DiscordTestUrl },
+        _ => new[] { ProxyManager.UniversalTestUrl },
+    };
 
     private void OnTelegramTabChecked(object sender, RoutedEventArgs e)
     {
@@ -167,16 +189,17 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Узел для сервиса: только свежая проверка, сначала самый быстрый (по пингу).
+    /// Сервер для сервиса: только свежая проверка, сначала самый быстрый (по пингу).
     /// Правило то же, что у счётчиков в шапке: число на значке и результат кнопки
     /// не должны расходиться.
     /// </summary>
-    private ProxyNode? PickNodeForService(string service)
+    private ProxyNode? PickNodeForService(string service, string? avoidId = null)
     {
         var now = DateTime.UtcNow;
         return _workingRows
             .Select(row => row.Node)
-            .Where(node => NodeAvailability.IsUsable(
+            .Where(node => (avoidId is null || node.Id != avoidId) &&
+                           NodeAvailability.IsUsable(
                 node, NodeLimits.WorkingRecheckMinutes, _settings.ConnectOnlyMine, now) &&
                            NodeAvailability.OpenedFor(node, service))
             .OrderBy(node => node.DelayMs)
@@ -191,20 +214,21 @@ public partial class MainWindow
         "youtube" => "YouTube",
         "telegram" => "Telegram",
         "discord" => "Discord",
-        _ => "универсальным доступом",
+        _ => "универсальный доступ",
     };
 
     /// <summary>
-    /// Свежих узлов для сервиса нет: проверяем скрытым ядром тех, кто раньше открывал
+    /// Свежих серверов для сервиса нет: проверяем скрытым ядром тех, кто раньше открывал
     /// этот сервис (данные устарели), и снова выбираем. null — живых не нашлось
     /// или пробное ядро занято фоновой проверкой.
     /// </summary>
-    private async Task<ProxyNode?> FindNodeForServiceAsync(string service)
+    private async Task<ProxyNode?> FindNodeForServiceAsync(string service, string? avoidId = null)
     {
         var now = DateTime.UtcNow;
         var candidates = AllRows
             .Select(row => row.Node)
             .Where(node => node.Status != NodeStatus.Dead &&
+                           (avoidId is null || node.Id != avoidId) &&
                            NodeAvailability.OpenedFor(node, service) &&
                            (!_settings.ConnectOnlyMine || node.IsMine) &&
                            !NodeAvailability.IsUsable(
@@ -217,14 +241,14 @@ public partial class MainWindow
             return null;
         }
 
-        if (!BeginOperation("поиск узла"))
+        if (!BeginOperation("поиск сервера"))
         {
             return null;
         }
 
         try
         {
-            SetStatus("Ищу узел", $"Проверяю {candidates.Count} узлов: {ServiceDisplayName(service)}");
+            SetStatus("Ищу сервер", $"Проверяю {candidates.Count} серверов: {ServiceDisplayName(service)}");
             var progress = new Progress<string>(line => StatusDetail.Text = line);
             var summary = await _probe.TestAsync(
                 candidates,
@@ -241,8 +265,8 @@ public partial class MainWindow
                 return null;
             }
 
-            AppendLog($"Поиск узла: проверено {summary.Total}, рабочих {summary.Working}");
-            return PickNodeForService(service);
+            AppendLog($"Поиск сервера: проверено {summary.Total}, рабочих {summary.Working}");
+            return PickNodeForService(service, avoidId);
         }
         catch (OperationCanceledException)
         {
@@ -250,7 +274,7 @@ public partial class MainWindow
         }
         catch (Exception exception)
         {
-            AppLog.Write("probe", "Поиск узла перед подключением не удался", exception);
+            AppLog.Write("probe", "Поиск сервера перед подключением не удался", exception);
             return null;
         }
         finally
@@ -260,21 +284,27 @@ public partial class MainWindow
         }
     }
 
-    private async Task ConnectAsync(ProxyNode node, bool automatic = false, IReadOnlyList<string>? probeUrls = null)
+    private async Task ConnectAsync(ProxyNode node, bool automatic = false, IReadOnlyList<string>? probeUrls = null,
+        bool markFailures = true)
     {
+        if (!automatic && !await TryTakeOverAutoAsync())
+        {
+            return;
+        }
+
         if (_zapret.IsRunning || _desync.IsRunning || _tunBypass.IsRunning)
         {
             if (!automatic)
             {
                 var mode = _tunBypass.IsRunning
-                    ? "TUN-обход без прокси-узла"
+                    ? "TUN-обход без прокси-сервера"
                     : _desync.IsRunning
                         ? "свой обход DPI (WinDivert)"
                         : "обход DPI (zapret)";
                 var answer = MessageBox.Show(
                     this,
                     $"Сейчас включён {mode}.\n\n" +
-                    "Подключение к узлу остановит обход. Продолжить?",
+                    "Подключение к серверу остановит обход. Продолжить?",
                     "VieNLink",
                     MessageBoxButton.YesNo,
                     MessageBoxImage.Question);
@@ -287,7 +317,7 @@ public partial class MainWindow
             if (_zapret.IsRunning)
             {
                 _zapret.Stop();
-                AppendLog("Обход DPI остановлен: подключаемся через узел");
+                AppendLog("Обход DPI остановлен: подключаемся через сервер");
                 UpdateZapretUi();
             }
 
@@ -295,27 +325,27 @@ public partial class MainWindow
             {
                 _desync.Stop();
                 _tunBypassStartedDesync = false;
-                AppendLog("Свой обход DPI остановлен: подключаемся через узел");
+                AppendLog("Свой обход DPI остановлен: подключаемся через сервер");
                 UpdateDesyncUi();
             }
 
             if (_tunBypass.IsRunning)
             {
                 await _tunBypass.StopAsync();
-                AppendLog("TUN-обход остановлен: подключаемся через узел");
+                AppendLog("TUN-обход остановлен: подключаемся через сервер");
                 UpdateTunBypassUi();
             }
         }
 
         if (_settings.ConnectOnlyVerified && node.DelayMs is null)
         {
-            SetStatus("Узел не проверен", "Сначала проверьте узлы: «Все узлы» на вкладке «Узлы»");
+            SetStatus("Сервер не проверен", "Сначала проверьте серверы: «Все серверы» на вкладке «Серверы»");
             return;
         }
 
         if (_settings.ConnectOnlyMine && !node.IsMine)
         {
-            SetStatus("Публичные узлы отключены", "Включено «Подключаться только к моим подпискам»");
+            SetStatus("Публичные серверы отключены", "Включено «Подключаться только к моим подпискам»");
             return;
         }
 
@@ -331,7 +361,7 @@ public partial class MainWindow
 
         try
         {
-            // Задержка ещё не гарантирует доступ к сайту: пробуем узел, затем следующие по скорости.
+            // Задержка ещё не гарантирует доступ к сайту: пробуем сервер, затем следующие по скорости.
             // Адрес проверки зависит от режима: Telegram — несколько его доменов, видео — YouTube.
             IReadOnlyList<string> targetUrls = probeUrls ?? new[] { _settings.TestUrl };
             var targetLabel = targetUrls.Count == 1
@@ -348,7 +378,7 @@ public partial class MainWindow
                 .ThenByDescending(n => telegramNeeded && n.TelegramOk == true)
                 .ThenByDescending(n => n.OpenDomains)
                 .ThenByDescending(n => n.IsMine)
-                .ThenByDescending(NodeRanking.Score)
+                .ThenByDescending(n => n.RankScore)
                 .ThenBy(n => n.DelayMs)
                 .Take(3));
 
@@ -367,12 +397,13 @@ public partial class MainWindow
                     StatusDetail.Text = "Проверяю, открывается ли " + targetLabel;
                     if (await _manager.VerifyAnyThroughProxyAsync(_operation.Token, targetUrls))
                     {
+                        StatusDetail.Text = "Открылось: " + targetLabel;
                         FooterText.Text = $"Прокси 127.0.0.1:{_manager.ActiveMixedPort} — сайт открылся через «{candidate.Name}»";
                         var backup = PickBackupNode(candidate);
                         if (backup is not null)
                         {
                             FooterText.Text += $" · запасной камуфляж: {NodeRanking.CamouflageLabel(backup)} ({backup.DelayMs} мс)";
-                            AppendLog($"Запасной узел: {backup.Name} — {NodeRanking.CamouflageLabel(backup)}"); 
+                            AppendLog($"Запасной сервер: {backup.Name} — {NodeRanking.CamouflageLabel(backup)}"); 
                         }
                         _tray?.ShowBalloon("Прокси включён", candidate.Name + Environment.NewLine + "127.0.0.1:" + _manager.ActiveMixedPort);
                         _headerConnectingNode = null;
@@ -398,9 +429,21 @@ public partial class MainWindow
                         return;
                     }
 
-                    AppLog.Write("proxy", $"Узел «{candidate.Name}» не открыл проверочный адрес — пробую следующий");
-                    DropFailedNode(candidate, "не открыл " + targetLabel);
-                    lastError = new InvalidOperationException("Узел не открыл " + targetLabel);
+                    AppLog.Write("proxy", $"Сервер «{candidate.Name}» не открыл проверочный адрес — пробую следующий");
+                    if (markFailures)
+                    {
+                        DropFailedNode(candidate, "не открыл " + targetLabel);
+                    }
+                    else
+                    {
+                        // Ручное переключение («Дальше») не повод удалять рабочий сервер:
+                        // разовый провал проверки может быть из-за смены маршрута,
+                        // а не потому, что сервер умер. Оставляем задержку и отметки,
+                        // фоновый проход всё равно перепроверит его в ближайшие минуты.
+                        AppendLog($"Сервер «{candidate.Name}» не открыл {targetLabel} — оставляю в списке (ручное переключение)");
+                    }
+
+                    lastError = new InvalidOperationException("Сервер не открыл " + targetLabel);
                 }
                 catch (OperationCanceledException)
                 {
@@ -409,13 +452,13 @@ public partial class MainWindow
                 catch (Exception exception)
                 {
                     lastError = exception;
-                    AppLog.Write("proxy", $"Узел «{candidate.Name}» не подключился", exception);
+                    AppLog.Write("proxy", $"Сервер «{candidate.Name}» не подключился", exception);
                 }
             }
 
             await _manager.DisconnectAsync();
             throw new InvalidOperationException(
-                "Ни один узел не открыл проверочный адрес. Обновите списки и проверьте узлы ещё раз. " + lastError?.Message,
+                "Ни один сервер не открыл проверочный адрес. Обновите списки и проверьте серверы ещё раз. " + lastError?.Message,
                 lastError);
         }
         catch (OperationCanceledException)
@@ -427,7 +470,7 @@ public partial class MainWindow
             if (automatic)
             {
                 AppLog.Write("proxy", "Автопереключение не удалось", exception);
-                SetStatus("Не удалось переключиться", "Проверьте узлы и попробуйте снова");
+                SetStatus("Не удалось переключиться", "Проверьте серверы и попробуйте снова");
             }
             else
             {
@@ -450,6 +493,7 @@ public partial class MainWindow
         }
 
         _failedForSession.Clear();
+        _activeService = null;
 
         try
         {
@@ -488,7 +532,7 @@ public partial class MainWindow
 
     private ProxyNode? PickBestNode()
     {
-        // Только проверенные узлы со свежей проверкой: «рабочий» из старого кэша
+        // Только проверенные серверы со свежей проверкой: «рабочий» из старого кэша
         // мог умереть, пока приложение было закрыто. Первым — самый быстрый.
         var now = DateTime.UtcNow;
         var pool = _workingRows
@@ -498,7 +542,7 @@ public partial class MainWindow
             .OrderBy(n => n.DelayMs ?? int.MaxValue)
             .ThenByDescending(n => n.IsMine)
             .ThenByDescending(n => n.OpenDomains)
-            .ThenByDescending(NodeRanking.Score)
+            .ThenByDescending(n => n.RankScore)
             .ToList();
 
         if (pool.Count == 0 && !_settings.ConnectOnlyVerified)
@@ -508,7 +552,7 @@ public partial class MainWindow
                 .Select(r => r.Node)
                 .Where(n => !_settings.ConnectOnlyMine || n.IsMine)
                 .OrderByDescending(n => n.IsMine)
-                .ThenByDescending(NodeRanking.Score)
+                .ThenByDescending(n => n.RankScore)
                 .ThenBy(n => n.DelayMs ?? int.MaxValue)
                 .ToList();
         }
@@ -524,57 +568,74 @@ public partial class MainWindow
             return;
         }
 
+        _activeService = null;
         await ConnectAsync(node);
     }
 
-    /// <summary>Узел перестал отвечать: молча переключаемся на следующий рабочий.</summary>
-    private void OnNodeUnhealthy(string nodeName)
+    /// <summary>Сервер перестал отвечать: молча переключаемся на следующий рабочий.</summary>
+    private void OnNodeUnhealthy(ProxyNode node)
     {
         if (!_settings.AutoFailover)
         {
-            AppendLog("Узел перестал отвечать, автопереключение выключено");
-            SetStatus("Узел перестал отвечать", "Автопереключение выключено — нажмите «Отключиться» и выберите другой узел");
+            AppendLog("Сервер перестал отвечать, автопереключение выключено");
+            SetStatus("Сервер перестал отвечать", "Автопереключение выключено — нажмите «Отключиться» и выберите другой сервер");
             return;
         }
 
         Dispatcher.BeginInvoke(new Action(() =>
         {
-            // Проверка узлов или другая операция: событие не теряем, вернёмся после неё.
-            if (_busy)
+            // Пока шла проверка, пользователь мог нажать «Дальше» и выбрать другой сервер.
+            // Событие относится к прежнему серверу — текущий не трогаем и не удаляем.
+            if (_manager.CurrentNode is not { } current || current.Id != node.Id)
             {
-                _pendingFailoverName = nodeName;
-                AppendLog("Сбой узла замечен во время операции — переключусь после её окончания");
+                AppendLog("Сбой сервера пришёл после ручного переключения — пропускаю");
                 return;
             }
 
-            _ = HandleUnhealthyNodeAsync(nodeName);
+            // Проверка серверов или другая операция: событие не теряем, вернёмся после неё.
+            if (_busy)
+            {
+                _pendingFailoverNode = node;
+                AppendLog("Сбой сервера замечен во время операции — переключусь после её окончания");
+                return;
+            }
+
+            _ = HandleUnhealthyNodeAsync(node);
         }));
     }
 
-    private async Task HandleUnhealthyNodeAsync(string nodeName)
+    private async Task HandleUnhealthyNodeAsync(ProxyNode unhealthy)
     {
         if (_busy || _closing || !_manager.IsConnected || _manager.CurrentNode is not { } current)
         {
             return;
         }
 
+        // Сервер уже сменили вручную — обрабатывать сбой нечего.
+        if (current.Id != unhealthy.Id)
+        {
+            return;
+        }
+
+        var nodeName = unhealthy.Name;
         var stopwatch = Stopwatch.StartNew();
         _failedForSession.Add(current.Id);
+        _activeService = null;
         DropFailedNode(current, "перестал открывать проверочный адрес");
-        AppendLog($"Узел «{nodeName}» перестал отвечать — ищу замену");
+        AppendLog($"Сервер «{nodeName}» перестал отвечать — ищу замену");
 
         var failedFamily = NodeRanking.Family(current);
         var next = PickFailoverNode(failedFamily);
 
         if (next is null)
         {
-            SetStatus("Узел перестал отвечать", "Рабочих узлов для замены нет — обновите списки и проверьте узлы");
+            SetStatus("Сервер перестал отвечать", "Рабочих серверов для замены нет — обновите списки и проверьте серверы");
             await DisconnectAsync();
             return;
         }
 
-        // Если запасной узел уже в конфиге — переключаемся без перезапуска ядра.
-        if (_manager.IsNodeLoaded(next) && BeginOperation("переключение узла"))
+        // Если запасной сервер уже в конфиге — переключаемся без перезапуска ядра.
+        if (_manager.IsNodeLoaded(next) && BeginOperation("переключение сервера"))
         {
             try
             {
@@ -582,7 +643,7 @@ public partial class MainWindow
                 var progress = new Progress<string>(line => StatusDetail.Text = line);
                 if (await _manager.SwitchToAsync(next, progress, _operation!.Token))
                 {
-                    StatusDetail.Text = "Проверяю новый узел…";
+                    StatusDetail.Text = "Проверяю новый сервер…";
                     if (await _manager.VerifyThroughProxyAsync(_operation.Token))
                     {
                         _failoverCount++;
@@ -590,8 +651,8 @@ public partial class MainWindow
                         _lastFailoverUtc = DateTime.UtcNow;
                         _lastFailoverNote =
                             $"тёплое: {NodeRanking.CamouflageLabel(current)} → {NodeRanking.CamouflageLabel(next)}, {stopwatch.ElapsedMilliseconds} мс";
-                        FooterText.Text = $"Прокси 127.0.0.1:{_manager.ActiveMixedPort} — узел заменён на «{next.Name}»";
-                        _tray?.ShowBalloon("Узел заменён", next.Name + Environment.NewLine + "127.0.0.1:" + _manager.ActiveMixedPort);
+                        FooterText.Text = $"Прокси 127.0.0.1:{_manager.ActiveMixedPort} — сервер заменён на «{next.Name}»";
+                        _tray?.ShowBalloon("Сервер заменён", next.Name + Environment.NewLine + "127.0.0.1:" + _manager.ActiveMixedPort);
                         _ = RefreshExitInfoAsync();
                         return;
                     }
@@ -611,7 +672,7 @@ public partial class MainWindow
             next = PickFailoverNode(null);
             if (next is null)
             {
-                SetStatus("Узел перестал отвечать", "Рабочих узлов для замены нет — обновите списки и проверьте узлы");
+                SetStatus("Сервер перестал отвечать", "Рабочих серверов для замены нет — обновите списки и проверьте серверы");
                 await DisconnectAsync();
                 return;
             }
@@ -631,23 +692,23 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Узел перестал открывать проверочный адрес: счётчик провалов растёт, из списка
-    /// узел убирается только после <see cref="NodeLimits.RemoveAfterFailures"/> провалов подряд —
-    /// разовый сбой живого узла не должен стирать его из списка.
+    /// Сервер перестал открывать проверочный адрес: счётчик провалов растёт, из списка
+    /// сервер убирается только после <see cref="NodeLimits.RemoveAfterFailures"/> провалов подряд —
+    /// разовый сбой живого сервера не должен стирать его из списка.
     /// </summary>
     private void DropFailedNode(ProxyNode node, string reason)
     {
         var removed = NodeHealth.RegisterFailure(node);
         ApplyTestedNode(node);
-        // Кэш пишется в фоне: список может быть десятки тысяч узлов, не тормозим UI.
+        // Кэш пишется в фоне: список может быть десятки тысяч серверов, не тормозим UI.
         var snapshot = AllRows.Select(r => r.Node).ToList();
         _ = Task.Run(() => NodeSourceService.SaveCache(snapshot));
         AppendLog(removed
-            ? $"Узел удалён после {node.FailCount} провалов — {reason}"
-            : $"Узел не отвечает ({node.FailCount} из {NodeLimits.RemoveAfterFailures}) — {reason}");
+            ? $"Сервер удалён после {node.FailCount} провалов — {reason}"
+            : $"Сервер не отвечает ({node.FailCount} из {NodeLimits.RemoveAfterFailures}) — {reason}");
     }
 
-    /// <summary>Кнопка «Дальше»: следующий проверенный узел по возрастанию пинга.</summary>
+    /// <summary>Кнопка «Дальше»: следующий проверенный сервер по возрастанию пинга.</summary>
     private async void OnNextNodeClick(object sender, RoutedEventArgs e)
     {
         if (!_manager.IsConnected || _closing)
@@ -658,14 +719,17 @@ public partial class MainWindow
         var next = PickNextNode();
         if (next is null)
         {
-            SetStatus("Нет других узлов", "Проверенных узлов больше нет — нажмите «Все узлы» на вкладке «Узлы»");
+            SetStatus("Нет других серверов", "Проверенных серверов больше нет — нажмите «Все серверы» на вкладке «Серверы»");
             return;
         }
 
-        if (!BeginOperation("переключение узла"))
+        if (!BeginOperation("переключение сервера"))
         {
             return;
         }
+
+        // Ручное переключение — сервис больше не определён однозначно.
+        _activeService = null;
 
         try
         {
@@ -674,13 +738,13 @@ public partial class MainWindow
             if (_manager.IsNodeLoaded(next) &&
                 await _manager.SwitchToAsync(next, progress, _operation!.Token))
             {
-                StatusDetail.Text = "Проверяю новый узел…";
+                StatusDetail.Text = "Проверяю новый сервер…";
                 if (await _manager.VerifyThroughProxyAsync(_operation.Token))
                 {
                     _warmSwitchCount++;
                     _lastFailoverUtc = DateTime.UtcNow;
-                    FooterText.Text = $"Прокси 127.0.0.1:{_manager.ActiveMixedPort} — узел {next.Name}";
-                    _tray?.ShowBalloon("Узел переключён", next.Name + Environment.NewLine +
+                    FooterText.Text = $"Прокси 127.0.0.1:{_manager.ActiveMixedPort} — сервер {next.Name}";
+                    _tray?.ShowBalloon("Сервер переключён", next.Name + Environment.NewLine +
                                                           "127.0.0.1:" + _manager.ActiveMixedPort);
                     _ = RefreshExitInfoAsync();
                     return;
@@ -689,7 +753,7 @@ public partial class MainWindow
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            AppLog.Write("proxy", "Переключение на следующий узел не удалось", exception);
+            AppLog.Write("proxy", "Переключение на следующий сервер не удалось", exception);
         }
         finally
         {
@@ -697,14 +761,18 @@ public partial class MainWindow
             UpdateConnectionUi();
         }
 
-        await ConnectAsync(next, automatic: true);
+        await ConnectAsync(next, automatic: true, markFailures: false);
     }
 
-    /// <summary>Следующий после текущего в списке свежих проверенных узлов по пингу.</summary>
+    /// <summary>
+    /// Очередь «Дальше»: текущий сервер уходит в конец, следующий берётся из начала.
+    /// Так все проверенные серверы участвуют по кругу и рабочий сервер не теряется
+    /// из-за ручного переключения.
+    /// </summary>
     private ProxyNode? PickNextNode()
     {
         var now = DateTime.UtcNow;
-        var ordered = _workingRows
+        var usable = _workingRows
             .Select(row => row.Node)
             .Where(node => NodeAvailability.IsUsable(
                 node, NodeLimits.WorkingRecheckMinutes, _settings.ConnectOnlyMine, now))
@@ -712,17 +780,76 @@ public partial class MainWindow
             .ThenByDescending(node => node.IsMine)
             .ThenByDescending(node => node.OpenDomains)
             .ToList();
-        if (ordered.Count < 2)
+        if (usable.Count == 0)
         {
             return null;
         }
 
+        var byId = usable.ToDictionary(node => node.Id, StringComparer.OrdinalIgnoreCase);
+        // Убираем из очереди то, что перестало быть пригодным, и добавляем новые:
+        // порядок уже набранной очереди сохраняется, а не сбрасывается каждый раз.
+        _nodeRotation.RemoveAll(id => !byId.ContainsKey(id));
+        foreach (var id in byId.Keys)
+        {
+            if (!_nodeRotation.Contains(id))
+            {
+                _nodeRotation.Add(id);
+            }
+        }
+
+        // Текущий сервер — в конец очереди, чтобы следующий раз он был последним.
         var currentId = _manager.CurrentNode?.Id;
-        var index = ordered.FindIndex(node => node.Id == currentId);
-        return ordered[(index + 1) % ordered.Count];
+        if (currentId is not null)
+        {
+            var index = _nodeRotation.IndexOf(currentId);
+            if (index >= 0)
+            {
+                _nodeRotation.RemoveAt(index);
+                _nodeRotation.Add(currentId);
+            }
+        }
+
+        if (_nodeRotation.Count < 2)
+        {
+            return null;
+        }
+
+        return byId[_nodeRotation[0]];
     }
 
-    /// <summary>Следующий рабочий узел, по возможности из другого семейства камуфляжа.</summary>
+    /// <summary>Поделиться подключённым сервером: ссылка копируется в буфер обмена.</summary>
+    private void OnShareNodeClick(object sender, RoutedEventArgs e)
+    {
+        var node = _manager.CurrentNode;
+        if (node is null)
+        {
+            SetStatus("Нечего отправить", "Сначала подключитесь к серверу");
+            return;
+        }
+
+        // Владелец просил делиться только адресом сервера: IP (или домен) и порт.
+        var endpoint = string.IsNullOrWhiteSpace(node.Server)
+            ? node.Name
+            : $"{node.Server}:{node.Port}";
+        if (string.IsNullOrWhiteSpace(endpoint))
+        {
+            SetStatus("Нечего отправить", "У сервера нет адреса");
+            return;
+        }
+
+        try
+        {
+            System.Windows.Clipboard.SetText(endpoint);
+            SetStatus("Адрес сервера скопирован", endpoint);
+            _tray?.ShowBalloon("Адрес сервера скопирован", endpoint);
+        }
+        catch (Exception exception)
+        {
+            ReportError("Не удалось скопировать адрес сервера", exception);
+        }
+    }
+
+    /// <summary>Следующий рабочий сервер, по возможности из другого семейства камуфляжа.</summary>
     private ProxyNode? PickFailoverNode(string? avoidFamily)    {
         var telegramNeeded = _sources.Any(s => s.Enabled && SourceKinds.IsProxy(s));
         return _workingRows
@@ -733,11 +860,11 @@ public partial class MainWindow
             .ThenByDescending(n => telegramNeeded && n.TelegramOk == true)
             .ThenByDescending(n => n.OpenDomains)
             .ThenByDescending(n => n.IsMine)
-            .ThenByDescending(NodeRanking.Score)
+            .ThenByDescending(n => n.RankScore)
             .FirstOrDefault();
     }
 
-    /// <summary>Запасной узел другого камуфляжного семейства — показываем его после подключения.</summary>
+    /// <summary>Запасной сервер другого камуфляжного семейства — показываем его после подключения.</summary>
     private ProxyNode? PickBackupNode(ProxyNode current) =>
         _workingRows
             .Select(r => r.Node)
@@ -745,7 +872,7 @@ public partial class MainWindow
                         NodeRanking.Family(n) != NodeRanking.Family(current))
             .OrderByDescending(n => n.IsMine)
             .ThenByDescending(n => n.OpenDomains)
-            .ThenByDescending(NodeRanking.Score)
+            .ThenByDescending(n => n.RankScore)
             .ThenBy(n => n.DelayMs)
             .FirstOrDefault();
 
@@ -767,7 +894,7 @@ public partial class MainWindow
         var held = _manager.IsKillSwitchHeld;
         var delay = _manager.CurrentNode?.DelayMs;
         StatusText.Text = connected
-            ? "Подключено · " + (delay is { } ms ? ms + " мс" : "проверенный узел")
+            ? "Подключено · " + (delay is { } ms ? ms + " мс" : "проверенный сервер")
             : held
                 ? "Трафик заблокирован (kill switch)"
                 : "Отключено";
@@ -775,7 +902,7 @@ public partial class MainWindow
         _tray?.UpdateStatus(connected, null, held);
         Title = connected
             ? $"{AppInfo.Name} {AppInfo.Version} — подключено"
-            : $"{AppInfo.Name} {AppInfo.Version} — свободные узлы";
+            : $"{AppInfo.Name} {AppInfo.Version} — свободные серверы";
         if (!connected)
         {
             _lastTrafficSample = null;
@@ -807,10 +934,10 @@ public partial class MainWindow
             : $"Последнее: {_lastFailoverUtc.Value.ToLocalTime():HH:mm:ss} — {_lastFailoverNote}";
 
         DiagnosticsText.Text = string.Join(Environment.NewLine,
-            $"Активный узел: проверенный" + (node.DelayMs is { } delay ? $" · {delay} мс" : string.Empty),
+            $"Активный сервер: проверенный" + (node.DelayMs is { } delay ? $" · {delay} мс" : string.Empty),
             $"Маскировка: {NodeRanking.Label(node)} · камуфляж: {NodeRanking.CamouflageLabel(node)}",
             backup is null
-                ? "Запасной: нет узла другого камуфляжа"
+                ? "Запасной: нет сервера другого камуфляжа"
                 : $"Запасной: другой камуфляж ({NodeRanking.CamouflageLabel(backup)}, {backup.DelayMs} мс)",
             $"Проверенных рабочих: {_workingRows.Count(r => r.Node.DelayMs is not null)} · " +
             $"моих: {_workingRows.Count(r => r.Node.IsMine && r.Node.DelayMs is not null)}",
@@ -829,12 +956,12 @@ public partial class MainWindow
         var nodes = _rows.Count + _workingRows.Count;
         var mtproto = _mtprotoRows.Count + _mtprotoDeadRows.Count;
         CacheSummaryText.Text =
-            $"Кэш: {nodes} узлов · MTProto {mtproto} (нерабочих {_mtprotoDeadRows.Count}). " +
-            $"Непроверенные узлы удаляются при первом провале, уже рабочие — после {NodeLimits.RemoveAfterFailures} провалов подряд; " +
+            $"Кэш: {nodes} серверов · MTProto {mtproto} (нерабочих {_mtprotoDeadRows.Count}). " +
+            $"Непроверенные серверы удаляются при первом провале, уже рабочие — после {NodeLimits.RemoveAfterFailures} провалов подряд; " +
             $"нерабочие MTProto: лимит {MtProtoRetention.MaxDead}, старше {MtProtoRetention.DeadHours} ч удаляются автоматически.";
     }
 
-    /// <summary>Ручная очистка: убирает нерабочие MTProto, узлы остаются.</summary>
+    /// <summary>Ручная очистка: убирает нерабочие MTProto, серверы остаются.</summary>
     private void OnClearCacheClick(object sender, RoutedEventArgs e)
     {
         var dead = _mtprotoDeadRows.Count;
@@ -848,7 +975,7 @@ public partial class MainWindow
         var answer = MessageBox.Show(
             this,
             $"Удалить из кэша:\n• нерабочих MTProto: {dead}\n\n" +
-            "Узлы и рабочие MTProto останутся.",
+            "Серверы и рабочие MTProto останутся.",
             "VieNLink",
             MessageBoxButton.YesNo,
             MessageBoxImage.Question);

@@ -12,7 +12,7 @@ namespace VieNLink;
 
 public partial class MainWindow
 {
-    // ---------- TUN-обход без узла (пользовательский TCP-форвардер) ----------
+    // ---------- TUN-обход без сервера (пользовательский TCP-форвардер) ----------
 
     private void BuildTunBypassStrategyList()
     {
@@ -269,11 +269,11 @@ public partial class MainWindow
                     TunBypassTuneText.Text = ipBlocked
                         ? "Ни одна стратегия не открыла сайты, а TCP до YouTube не устанавливается (IP-блок), " +
                           "хотя Cloudflare открывается. Провайдер блокирует YouTube/t.me по IP, а не по SNI — " +
-                          "обход по SNI здесь не поможет; для них нужен прокси-узел."
-                        : "Ни одна стратегия не открыла сайты. Попробуйте «Обход запрет» (zapret) или подключитесь к узлу.";
+                          "обход по SNI здесь не поможет; для них нужен прокси-сервер."
+                        : "Ни одна стратегия не открыла сайты. Попробуйте «Обход запрет» (zapret) или подключитесь к серверу.";
                     SetStatus("Автоподключение не удалось", ipBlocked
-                        ? "YouTube блокируется по IP — нужен узел"
-                        : "TUN-обход не помог — попробуйте zapret или узел");
+                        ? "YouTube блокируется по IP — нужен сервер"
+                        : "TUN-обход не помог — попробуйте zapret или сервер");
                     ShowTunBypassResults(results, null);
                     return;
                 }
@@ -297,7 +297,7 @@ public partial class MainWindow
                 "tun", index, TlsFragmentForwarder.Strategies[index].Name,
                 gameMode: false, _settings.TunBypassBlockQuic));
             SetStatus("TUN-обход включён", "Проверьте YouTube и t.me — трафик идёт через форвардер VieNLink");
-            FooterText.Text = "TUN-обход включён (без прокси-узла и WinDivert)";
+            FooterText.Text = "TUN-обход включён (без прокси-сервера и WinDivert)";
         }
         catch (OperationCanceledException)
         {
@@ -462,7 +462,7 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Домены YouTube, которым нужен именно узел: видео-CDН (googlevideo) провайдер
+    /// Домены YouTube, которым нужен именно сервер: видео-CDН (googlevideo) провайдер
     /// отдаёт с локального GGC и режет его по IP, поэтому обход по SNI там не помогает.
     /// </summary>
     private const string YouTubeProxyDomains =
@@ -472,7 +472,7 @@ public partial class MainWindow
 
     /// <summary>
     /// Для видео важна не задержка, а пропускная способность: если скорость замерялась,
-    /// берём самый быстрый узел, иначе обычный выбор по задержке и маскировке.
+    /// берём самый быстрый сервер, иначе обычный выбор по задержке и маскировке.
     /// </summary>
     private ProxyNode? PickVideoNode()
     {
@@ -489,18 +489,18 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Видео YouTube через узел, остальные сайты — напрямую. Провайдер блокирует
-    /// локальный видео-узел Google по IP, поэтому SNI-обход там бессилен.
+    /// Видео YouTube через сервер, остальные сайты — напрямую. Провайдер блокирует
+    /// локальный видео-сервер Google по IP, поэтому SNI-обход там бессилен.
     /// </summary>
     private async Task VideoViaNodeAsync()
     {
         var node = PickVideoNode();
         if (node is null)
         {
-            const string text = "Для видео нужен рабочий прокси-узел: видео-CDН YouTube у вашего провайдера " +
+            const string text = "Для видео нужен рабочий прокси-сервер: видео-CDН YouTube у вашего провайдера " +
                                 "блокируется по IP, обход по SNI там не работает.\n\n" +
-                                "Обновите списки: «Инструменты → Источники», затем «Инструменты → Узлы → Все узлы».";
-            SetStatus("Нет рабочих узлов", "Для видео нужен хотя бы один проверенный узел");
+                                "Обновите списки: «Инструменты → Источники», затем «Инструменты → Серверы → Все серверы».";
+            SetStatus("Нет рабочих серверов", "Для видео нужен хотя бы один проверенный сервер");
             MessageBox.Show(this, text, "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
@@ -509,17 +509,17 @@ public partial class MainWindow
         SiteListBox.Text = YouTubeProxyDomains;
         RouteOnlyRadio.IsChecked = true;
         OnRoutingChanged(this, new RoutedEventArgs());
-        AppendLog("Видео YouTube пойдёт через узел, остальные сайты — напрямую");
+        AppendLog("Видео YouTube пойдёт через сервер, остальные сайты — напрямую");
 
         await ConnectAsync(node, automatic: true, probeUrls: new[] { ProxyManager.YoutubeTestUrl });
-        SetStatus("Видео через узел",
-            "YouTube открывается через узел, остальные сайты идут напрямую. " +
-            "Вернуть всё как было: «Инструменты → Туннель → Всё через узел».");
+        SetStatus("Видео через сервер",
+            "YouTube открывается через сервер, остальные сайты идут напрямую. " +
+            "Вернуть всё как было: «Инструменты → Туннель → Всё через сервер».");
     }
 
     /// <summary>
-    /// Выключить «Видео через узел»: отключить узел и вернуть маршрутизацию
-    /// «всё через узел», как и советует подсказка на вкладке.
+    /// Выключить «Видео через сервер»: отключить сервер и вернуть маршрутизацию
+    /// «всё через сервер», как и советует подсказка на вкладке.
     /// </summary>
     private async Task DisableVideoModeAsync()
     {
@@ -527,8 +527,8 @@ public partial class MainWindow
         UpdateConnectionUi();
         RouteAllRadio.IsChecked = true;
         OnRoutingChanged(this, new RoutedEventArgs());
-        SetStatus("Видео через узел выключено", "Узел отключён, маршрутизация: всё через узел");
-        AppendLog("Видео через узел выключено: узел отключён");
+        SetStatus("Видео через сервер выключено", "Сервер отключён, маршрутизация: всё через сервер");
+        AppendLog("Видео через сервер выключено: сервер отключён");
     }
 
     private async void OnBlockDiagnoseClick(object sender, RoutedEventArgs e)
@@ -537,7 +537,7 @@ public partial class MainWindow
         {
             MessageBox.Show(
                 this,
-                "Для чистой диагностики отключитесь от узла и остановите обход DPI " +
+                "Для чистой диагностики отключитесь от сервера и остановите обход DPI " +
                 "(zapret, «Свой обход DPI», TUN-обход). Иначе проверка покажет результат уже с обходом.",
                 "VieNLink",
                 MessageBoxButton.OK,
@@ -595,12 +595,12 @@ public partial class MainWindow
         _ => $"{diagnosis.Host}: DNS не разрешился",
     };
 
-    /// <summary>Проверка туннеля по кнопке: YouTube и t.me через текущий узел.</summary>
+    /// <summary>Проверка туннеля по кнопке: YouTube и t.me через текущий сервер.</summary>
     private async void OnCheckTunnelClick(object sender, RoutedEventArgs e)
     {
         if (!_manager.IsConnected)
         {
-            MessageBox.Show(this, "Сначала подключитесь к узлу.", "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show(this, "Сначала подключитесь к серверу.", "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
@@ -611,7 +611,7 @@ public partial class MainWindow
 
         try
         {
-            SetStatus("Проверяю туннель", "YouTube и t.me через текущий узел…");
+            SetStatus("Проверяю туннель", "YouTube и t.me через текущий сервер…");
             var youtube = await _manager.VerifyThroughProxyAsync(_operation!.Token, "https://www.youtube.com/");
             var telegram = await _manager.VerifyThroughProxyAsync(_operation!.Token, "https://t.me/");
             StatusDetail.Text = $"Туннель: YouTube {(youtube ? "открылся" : "не открылся")}, t.me {(telegram ? "открылся" : "не открылся")}";
@@ -620,7 +620,7 @@ public partial class MainWindow
             if (!youtube && _settings.AutoFailover && _manager.CurrentNode is { } current)
             {
                 AppendLog("Проверка туннеля не прошла — запускаю переключение");
-                await HandleUnhealthyNodeAsync(current.Name);
+                await HandleUnhealthyNodeAsync(current);
             }
         }
         catch (OperationCanceledException)

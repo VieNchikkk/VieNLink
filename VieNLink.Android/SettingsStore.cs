@@ -2,7 +2,7 @@ namespace VieNLink.Mobile;
 
 /// <summary>
 /// Настройки Android-версии: тот же файл <c>settings.json</c>, что у Windows-части,
-/// поэтому общие поля (адрес проверки, лимит узлов, TLS-фрагментация) работают одинаково.
+/// поэтому общие поля (адрес проверки, лимит серверов, TLS-фрагментация) работают одинаково.
 /// </summary>
 internal static class SettingsStore
 {
@@ -38,9 +38,12 @@ internal static class SettingsStore
         var settings = JsonFileStore.Read<AppSettings>(AppPaths.SettingsPath);
         if (settings is null)
         {
-            // На телефоне конфиг ограничен 200 узлами (память и старт), поэтому
-            // сразу пишем это значение, а не виндовые 400.
+            // На телефоне конфиг ограничен 200 серверами (память и старт), поэтому
+            // сразу пишем это значение, а не виндовые 400. Схему фиксируем сразу,
+            // чтобы повторные миграции (партия 200, все источники) не запускались.
             settings = new AppSettings { MaxNodesInConfig = NodeStore.MobileMaxNodesInConfig };
+            SettingsUpgrade.Apply(settings);
+            JsonFileStore.Write(AppPaths.SettingsPath, settings);
         }
         else if (SettingsUpgrade.Apply(settings))
         {

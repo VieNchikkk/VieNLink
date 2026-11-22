@@ -7,7 +7,7 @@ namespace VieNLink.Mobile;
 
 /// <summary>
 /// Виджет главного экрана: состояние туннеля и две кнопки — «Лучший» и «Отключить».
-/// Обновляется из службы при подключении, переключении узла и остановке.
+/// Обновляется из службы при подключении, переключении сервера и остановке.
 /// </summary>
 [BroadcastReceiver(Name = "com.vienlink.app.TunnelWidget", Exported = false)]
 public sealed class TunnelWidget : AppWidgetProvider

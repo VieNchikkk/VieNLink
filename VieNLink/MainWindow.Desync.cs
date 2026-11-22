@@ -217,7 +217,7 @@ public partial class MainWindow
         {
             if (_manager.IsConnected)
             {
-                SetStatus("Отключаю прокси-узел", "Для своего обхода DPI нужен прямой трафик…");
+                SetStatus("Отключаю прокси-сервер", "Для своего обхода DPI нужен прямой трафик…");
                 await _manager.DisconnectAsync();
                 UpdateConnectionUi();
             }
@@ -279,14 +279,14 @@ public partial class MainWindow
 
                     DesyncTuneText.Text = ipBlocked
                         ? "TCP до YouTube не устанавливается (IP-блок), а Cloudflare открывается. " +
-                          "Обход по SNI здесь не поможет — подключитесь к узлу («Инструменты → Узлы → Подключить») или добавьте свою подписку."
+                          "Обход по SNI здесь не поможет — подключитесь к серверу («Инструменты → Серверы → Подключить») или добавьте свою подписку."
                         : tlsBlocked
                             ? "YouTube блокируется на уровне SNI/TLS. Автоподбор попробовал все стратегии; " +
-                              "если не помогло — включите zapret на вкладке «Обход Zapret» или подключитесь к узлу."
-                            : "Автоподбор не нашёл рабочую стратегию. Попробуйте «Обход Zapret» или подключитесь к узлу.";
+                              "если не помогло — включите zapret на вкладке «Обход Zapret» или подключитесь к серверу."
+                            : "Автоподбор не нашёл рабочую стратегию. Попробуйте «Обход Zapret» или подключитесь к серверу.";
                     SetStatus("Автоподбор не удался", ipBlocked
-                        ? "YouTube блокируется по IP — нужен узел"
-                        : "Обход не включён — попробуйте zapret или узел");
+                        ? "YouTube блокируется по IP — нужен сервер"
+                        : "Обход не включён — попробуйте zapret или сервер");
                     return;
                 }
                 else
@@ -296,7 +296,7 @@ public partial class MainWindow
                         ? $"Выбран: «{best.Name}» — YouTube {Mark(best.YoutubeOk)}, видео {Mark(best.VideoOk)}, " +
                           $"Telegram {Mark(best.TelegramOk)}"
                         : $"Выбран: «{best.Name}» — страница YouTube {Mark(best.YoutubeOk)}, видео {Mark(best.VideoOk)}. " +
-                          "Если страница открывается, а видео нет — включите блокировку QUIC или подключите прокси-узел.";
+                          "Если страница открывается, а видео нет — включите блокировку QUIC или подключите прокси-сервер.";
                     AppendLog($"Автоподбор своего обхода: выбран «{best.Name}» ({best.Ok}/{best.Total})");
                 }
 
@@ -311,8 +311,8 @@ public partial class MainWindow
                 "desync", Math.Clamp(_settings.DesyncStrategy, 0, DesyncService.Strategies.Count - 1),
                 strategy.Name, gameMode: false, _settings.DesyncBlockQuic));
             SetStatus("Свой обход DPI включён",
-                "Стратегия подобрана автоматически. Если видео не идёт — включите блокировку QUIC или прокси-узел.");
-            FooterText.Text = "Свой обход DPI включён (WinDivert, без прокси-узла)";
+                "Стратегия подобрана автоматически. Если видео не идёт — включите блокировку QUIC или прокси-сервер.");
+            FooterText.Text = "Свой обход DPI включён (WinDivert, без прокси-сервера)";
         }
         catch (OperationCanceledException)
         {

@@ -8,7 +8,7 @@ using Android.Widget;
 namespace VieNLink.Mobile;
 
 /// <summary>
-/// TUN-обход без прокси-узла: TUN → встроенный SOCKS5-форвардер, который режет TLS ClientHello.
+/// TUN-обход без прокси-сервера: TUN → встроенный SOCKS5-форвардер, который режет TLS ClientHello.
 /// Стратегии те же, что в общем ядре; удачный выбор запоминается в bypass-profiles.json.
 /// Автоподбор из Android-версии недоступен: процесс приложения исключён из TUN, поэтому
 /// проверить результат можно только из другого приложения или после отключения.
@@ -66,10 +66,10 @@ public sealed class BypassActivity : BaseActivity
         top.AddView(Ui.Badge(this, P, "БЕТА", P.Warning));
         page.AddView(top);
 
-        var info = Ui.Banner(P, this, P.Accent, "Без узла и без root",
+        var info = Ui.Banner(P, this, P.Accent, "Без сервера и без root",
             "sing-box поднимает TUN, TCP идёт в собственный SOCKS5-форвардер, который режет TLS " +
             "ClientHello. На SNI-блоке страницы открываются; при блоке по IP (часто видео YouTube) " +
-            "нужен прокси-узел.");
+            "нужен прокси-сервер.");
         page.AddView(info);
 
         var state = Ui.HeaderCard(P, this);
@@ -119,7 +119,7 @@ public sealed class BypassActivity : BaseActivity
             "В Windows автоподбор перезапускает TUN и проверяет сайты через curl.exe. На Android " +
             "сам процесс приложения исключён из TUN (иначе запросы ядра ушли бы в него же), поэтому " +
             "проверить результат изнутри нельзя. В разработке: отдельный процесс проверки, как :probe " +
-            "для узлов. Пока выберите стратегию вручную — «Разрез TLS-записей» обычно лучший.", P));
+            "для серверов. Пока выберите стратегию вручную — «Разрез TLS-записей» обычно лучший.", P));
         Ui.Add(page, dev, 14);
 
         var profile = BypassProfileStore.Ranked("tun").FirstOrDefault();
@@ -292,7 +292,7 @@ public sealed class BypassActivity : BaseActivity
 
         var running = TunnelService.State == TunnelState.Running;
         var bypass = TunnelService.IsBypassMode;
-        _status.Text = bypass ? "TUN-обход (бета) работает" : running ? "Подключён прокси-узел" : "VPN не подключён";
+        _status.Text = bypass ? "TUN-обход (бета) работает" : running ? "Подключён прокси-сервер" : "VPN не подключён";
         _status.SetTextColor(bypass || running ? P.Positive : P.TextStrong);
 
         if (_forwarder is not null)

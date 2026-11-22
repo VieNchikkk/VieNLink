@@ -57,6 +57,10 @@ public partial class App : Application
         AppLog.Initialize();
         AppPaths.EnsureDirectories();
 
+        // До создания окон: закреплённый ярлык и ярлык с рабочего стола должны
+        // открывать одну и ту же кнопку на панели задач.
+        TaskbarIdentity.Apply();
+
         // Ядро не знает про платформу: подставляем DPAPI до первого чтения настроек и источников.
         SecretProtector.Current = new DpapiSecretProtector();
 

@@ -19,7 +19,7 @@ internal sealed class DiscoveryResult
 /// <summary>
 /// Автопоиск новых источников: ищет на GitHub недавно обновлённые репозитории с конфигами,
 /// затем обходит публичные сайты с ежедневными подписками, смотрит дерево файлов и пробует
-/// те, что похожи на списки узлов. Ничего не добавляет, пока файл реально не дал узлы.
+/// те, что похожи на списки серверов. Ничего не добавляет, пока файл реально не дал серверы.
 /// </summary>
 internal static class SourceDiscoveryService
 {
@@ -185,7 +185,7 @@ internal static class SourceDiscoveryService
                 var nodes = await TryLoadAsync(rawUrl, $"{Shorten(candidate.FullName)} · {Shorten(path, 28)}", cancellationToken);
                 if (nodes is null || nodes.Count < MinimumNodes)
                 {
-                    progress?.Report($"  {candidate.FullName}/{Shorten(path, 28)}: узлов мало, пропускаю");
+                    progress?.Report($"  {candidate.FullName}/{Shorten(path, 28)}: серверов мало, пропускаю");
                     continue;
                 }
 
@@ -202,7 +202,7 @@ internal static class SourceDiscoveryService
 
                 result.Sources.Add(source);
                 result.Nodes.AddRange(nodes);
-                progress?.Report($"  + {source.Name}: {nodes.Count} узлов");
+                progress?.Report($"  + {source.Name}: {nodes.Count} серверов");
                 break;
             }
         }
@@ -276,7 +276,7 @@ internal static class SourceDiscoveryService
                     var nodes = await TryLoadAsync(candidate, $"{candidateUri.Host} · {shortName}", cancellationToken);
                     if (nodes is null || nodes.Count < MinimumNodes)
                     {
-                        progress?.Report($"  {candidateUri.Host}/{shortName}: узлов мало, пропускаю");
+                        progress?.Report($"  {candidateUri.Host}/{shortName}: серверов мало, пропускаю");
                         continue;
                     }
 
@@ -293,7 +293,7 @@ internal static class SourceDiscoveryService
 
                     result.Sources.Add(source);
                     result.Nodes.AddRange(nodes);
-                    progress?.Report($"  + {source.Name}: {nodes.Count} узлов");
+                    progress?.Report($"  + {source.Name}: {nodes.Count} серверов");
                     added++;
                     break;
                 }

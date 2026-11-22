@@ -7,19 +7,20 @@ using Android.Widget;
 namespace VieNLink.Mobile;
 
 /// <summary>
-/// Экран узлов без списка: сводка (всего, рабочих, доступ по сервисам), обновление
+/// Экран серверов без списка: сводка (всего, рабочих, доступ по сервисам), обновление
 /// и проверка в отдельном процессе. Подключение — с главного экрана и из шапки.
 /// </summary>
 #if DEBUG
-[Activity(Label = "Узлы", Theme = "@style/Theme.VieNLink", Exported = true)]
+[Activity(Label = "Серверы", Theme = "@style/Theme.VieNLink", Exported = true)]
 #else
-[Activity(Label = "Узлы", Theme = "@style/Theme.VieNLink")]
+[Activity(Label = "Серверы", Theme = "@style/Theme.VieNLink")]
 #endif
 public sealed class NodesActivity : BaseActivity
 {
     private TextView? _summary;
     private TextView? _detail;
     private TextView? _progress;
+    private TextView? _testButton;
     private ProgressBar? _bar;
 
     private CancellationTokenSource? _work;
@@ -63,6 +64,7 @@ public sealed class NodesActivity : BaseActivity
                 }
             }
 
+            UpdateTestButtonText();
             _handler?.PostDelayed(_tick, 2000);
         };
         _handler.PostDelayed(_tick, 2000);
@@ -92,7 +94,7 @@ public sealed class NodesActivity : BaseActivity
 
         var top = Ui.Row(this);
         top.AddView(Ui.Pill(this, P, "Назад", UiButtonKind.Ghost, Finish));
-        var title = Ui.Title(this, "Узлы", P);
+        var title = Ui.Title(this, "Серверы", P);
         title.SetPadding(Ui.Dp(this, 10), 0, 0, 0);
         top.AddView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         top.AddView(Ui.Badge(this, P, "СПИСОК СКРЫТ", P.Accent));
@@ -127,6 +129,7 @@ public sealed class NodesActivity : BaseActivity
             () => _ = RunRefreshAsync(), Resource.Drawable.ic_refresh);
         var test = Ui.Pill(this, P, "Проверить", UiButtonKind.Accent,
             () => _ = RunTestAsync(), Resource.Drawable.ic_check);
+        _testButton = test;
         actions.AddView(refresh, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         actions.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 8), 1));
         actions.AddView(test, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
@@ -142,17 +145,17 @@ public sealed class NodesActivity : BaseActivity
         quick.AddView(export, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         Ui.Add(page, quick, 8);
 
-        page.AddView(Ui.Section(this, "Как выбирается узел", P));
+        page.AddView(Ui.Section(this, "Как выбирается сервер", P));
         var how = Ui.Card(P, this,
             Bullet("Сначала личные подписки, затем маскированные (REALITY, Vision, WS/TLS), затем быстрые."),
-            Bullet("Рабочий узел — тот, через который реально открылся хотя бы один проверочный сайт."),
+            Bullet("Рабочий сервер — тот, через который реально открылся хотя бы один проверочный сайт."),
             Bullet("Лучший открывает больше заблокированных доменов; при равенстве — меньшая задержка."),
-            Bullet("Узел с 5 провалами подряд удаляется; успешная проверка обнуляет счётчик."));
+            Bullet("Сервер с 5 провалами подряд удаляется; успешная проверка обнуляет счётчик."));
         page.AddView(how);
 
         var hint = Ui.Banner(P, this, P.Accent, "Почему списка нет",
-            "В Windows таблица узлов скрыта так же: имена серверов не показываются. Приложение берёт " +
-            "проверенный узел по доступу к сервису и задержке, а вы видите только результат.");
+            "В Windows таблица серверов скрыта так же: имена серверов не показываются. Приложение берёт " +
+            "проверенный сервер по доступу к сервису и задержке, а вы видите только результат.");
         Ui.Add(page, hint, 12);
 
         SetPage(page);
@@ -174,8 +177,8 @@ public sealed class NodesActivity : BaseActivity
         }
         catch (Exception exception)
         {
-            AppLog.Write("nodes", "Не удалось прочитать узлы", exception);
-            SetProgress("Ошибка чтения узлов: " + exception.Message);
+            AppLog.Write("nodes", "Не удалось прочитать серверы", exception);
+            SetProgress("Ошибка чтения серверов: " + exception.Message);
         }
 
         ApplyAutoSelect();
@@ -212,44 +215,24 @@ public sealed class NodesActivity : BaseActivity
 
     private void UpdateSummary()
     {
-        var nodes = NodeStore.Snapshot();
-        var now = DateTime.UtcNow;
-        var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
-        var onlyMine = NodeStore.Settings.ConnectOnlyMine;
-
-        // Считаем только свежие проверки: «рабочий» узел из кэша мог умереть, пока
-        // телефон лежал. Значки сервисов и кнопки пользуются тем же правилом.
-        bool Usable(ProxyNode node) => NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now);
-
-        var working = nodes.Count(node => node.Status == NodeStatus.Working);
-        var fresh = nodes.Count(Usable);
-        var mine = nodes.Count(node => node.IsMine);
-        var universal = nodes.Count(node => Usable(node) && NodeAvailability.OpenedFor(node, "universal"));
-        var youtube = nodes.Count(node => Usable(node) && NodeAvailability.OpenedFor(node, "youtube"));
-        var telegram = nodes.Count(node => Usable(node) && NodeAvailability.OpenedFor(node, "telegram"));
-        var discord = nodes.Count(node => Usable(node) && NodeAvailability.OpenedFor(node, "discord"));
-        var bestDomains = nodes.Where(Usable).Select(node => node.OpenDomains).DefaultIfEmpty(0).Max();
-
-        var lastChecked = nodes
-            .Where(node => node.CheckedAtUtc is not null)
-            .Select(node => node.CheckedAtUtc!.Value)
-            .DefaultIfEmpty()
-            .Max();
+        // Один проход под блокировкой, без копии списка на 12 000 серверов:
+        // экран обновляется каждые 2 секунды и не должен давать аллокации.
+        var summary = NodeStore.DetailedSummary();
 
         if (_summary is not null)
         {
-            _summary.Text = $"{nodes.Count} узлов · рабочих {fresh}";
+            _summary.Text = $"{summary.Total} серверов · рабочих {summary.Fresh}";
         }
 
         if (_detail is not null)
         {
-            var checkedText = lastChecked == default
+            var checkedText = summary.LastChecked is null
                 ? "проверок ещё не было"
-                : "проверено " + lastChecked.ToLocalTime().ToString("dd.MM HH:mm");
-            _detail.Text = $"Доступ: универсальный {universal}, YouTube {youtube}, Telegram {telegram}, Discord {discord}\n" +
-                           $"Всего рабочих в списке: {working} · мои подписки: {mine} · " +
+                : "проверено " + summary.LastChecked.Value.ToLocalTime().ToString("dd.MM HH:mm");
+            _detail.Text = $"Доступ: универсальный {summary.Universal}, YouTube {summary.Youtube}, Telegram {summary.Telegram}, Discord {summary.Discord}\n" +
+                           $"Всего рабочих в списке: {summary.Working} · мои подписки: {summary.Mine} · " +
                            $"лимит {NodeStore.Settings.MaxTotalNodes} · " +
-                           $"макс. доменов {bestDomains} · {checkedText}";
+                           $"макс. доменов {summary.BestDomains} · {checkedText}";
         }
     }
 
@@ -304,7 +287,7 @@ public sealed class NodesActivity : BaseActivity
             // Повторное нажатие останавливает проверку — и ручную, и фоновую.
             _work?.Cancel();
             ProbeClient.Cancel();
-            SetProgress("Поиск узлов остановлен");
+            SetProgress("Поиск серверов остановлен");
             HideTestProgress();
             return;
         }
@@ -319,7 +302,7 @@ public sealed class NodesActivity : BaseActivity
         {
             // Идёт фоновая партия: останавливаем её, не запуская вторую.
             ProbeClient.Cancel();
-            SetProgress("Поиск узлов остановлен");
+            SetProgress("Поиск серверов остановлен");
             return;
         }
 
@@ -328,19 +311,19 @@ public sealed class NodesActivity : BaseActivity
         _testing = true;
         _busy = true;
         _work = new CancellationTokenSource();
-        ShowTestProgress(new ProbeProgress("Запускаю проверку узлов…", 0, 0, 0));
+        ShowTestProgress(new ProbeProgress("Запускаю проверку серверов…", 0, 0, 0));
 
         try
         {
             var progress = new Progress<ProbeProgress>(ShowTestProgress);
-            // Ручная проверка перепроверяет и рабочие узлы, иначе счётчики не менялись бы.
+            // Ручная проверка перепроверяет и рабочие серверы, иначе счётчики не менялись бы.
             var summary = await ProbeClient.RunBatchAsync(
                 NodeTester.MaxBatch, _work.Token, progress, recheckWorking: true);
             SetProgress(MainActivity.DescribeTestResult(summary));
         }
         catch (Exception exception)
         {
-            AppLog.Write("test", "Ошибка проверки узлов", exception);
+            AppLog.Write("test", "Ошибка проверки серверов", exception);
             SetProgress("Ошибка проверки: " + exception.Message);
         }
         finally
@@ -348,9 +331,22 @@ public sealed class NodesActivity : BaseActivity
             _testing = false;
             _busy = false;
             HideTestProgress();
+            UpdateTestButtonText();
             UpdateSummary();
         }
     }
+
+    /// <summary>Кнопка «Проверить» во время поиска становится «Остановить поиск».</summary>
+    private void UpdateTestButtonText() => RunOnUiThread(() =>
+    {
+        if (_testButton is null)
+        {
+            return;
+        }
+
+        var searching = _testing || (ProbeClient.IsRunning && !ProbeClient.IsPaused);
+        _testButton.Text = searching ? "Остановить поиск" : "Проверить";
+    });
 
     /// <summary>Ход проверки: текст и полоска прогресса.</summary>
     private void ShowTestProgress(ProbeProgress progress) => RunOnUiThread(() =>
@@ -389,11 +385,11 @@ public sealed class NodesActivity : BaseActivity
     {
         if (TunnelService.State != TunnelState.Running)
         {
-            SetProgress("Сначала подключитесь к узлу: скорость меряется через туннель");
+            SetProgress("Сначала подключитесь к серверу: скорость меряется через туннель");
             return;
         }
 
-        SetProgress("Замеряю скорость через узел…");
+        SetProgress("Замеряю скорость через сервер…");
         var speed = await NetworkProbe.MeasureSpeedAsync(CancellationToken.None);
         SetProgress(speed is null ? "Замер не удался" : $"Скорость: {speed:0.#} Мбит/с");
         UpdateSummary();
@@ -404,7 +400,7 @@ public sealed class NodesActivity : BaseActivity
         var node = NodeStore.Selected ?? NodeStore.Snapshot().FirstOrDefault();
         if (node is null)
         {
-            SetProgress("Нет узла для экспорта");
+            SetProgress("Нет сервера для экспорта");
             return;
         }
 
@@ -413,8 +409,8 @@ public sealed class NodesActivity : BaseActivity
             var send = new Intent(Intent.ActionSend)
                 .SetType("text/plain")
                 .PutExtra(Intent.ExtraText, ProfileExport.BuildShareLink(node))
-                .PutExtra(Intent.ExtraSubject, "Узел VieNLink");
-            StartActivity(Intent.CreateChooser(send, "Поделиться узлом"));
+                .PutExtra(Intent.ExtraSubject, "Сервер VieNLink");
+            StartActivity(Intent.CreateChooser(send, "Поделиться сервером"));
         }
         catch (Exception exception)
         {

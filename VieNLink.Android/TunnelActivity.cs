@@ -50,7 +50,7 @@ public sealed class TunnelActivity : BaseActivity
 
         var modes = new[]
         {
-            (SiteRouteMode.All, "Весь трафик через узел"),
+            (SiteRouteMode.All, "Весь трафик через сервер"),
             (SiteRouteMode.OnlyListed, "Только сайты из списка"),
             (SiteRouteMode.AllExceptListed, "Всё, кроме сайтов из списка"),
         };
@@ -116,7 +116,7 @@ public sealed class TunnelActivity : BaseActivity
 
         var modeHint = Ui.Hint(this,
             "Режим TUN на Android включён всегда: системного прокси здесь нет. Выше — какие сайты " +
-            "пускать через узел; остальные идут напрямую.", P);
+            "пускать через сервер; остальные идут напрямую.", P);
         Ui.Add(page, modeHint, 10);
 
         // -------------------------------------------------------- приложения
@@ -126,7 +126,7 @@ public sealed class TunnelActivity : BaseActivity
 
         var appModes = new[]
         {
-            (AppRouteMode.All, "Все приложения через узел"),
+            (AppRouteMode.All, "Все приложения через сервер"),
             (AppRouteMode.OnlyListed, "Только выбранные приложения"),
             (AppRouteMode.AllExceptListed, "Все, кроме выбранных"),
         };
@@ -195,12 +195,12 @@ public sealed class TunnelActivity : BaseActivity
         _appsSummary.Text = settings.AppRouteMode switch
         {
             AppRouteMode.OnlyListed => count == 0
-                ? "Список пуст — через узел пойдут все приложения. Отметьте нужные в списке."
-                : $"Через узел пойдут только отмеченные приложения: {count}.",
+                ? "Список пуст — через сервер пойдут все приложения. Отметьте нужные в списке."
+                : $"Через сервер пойдут только отмеченные приложения: {count}.",
             AppRouteMode.AllExceptListed => count == 0
-                ? "Список пуст — через узел пойдут все приложения. Отметьте те, что должны идти мимо."
-                : $"Через узел пойдут все приложения, кроме отмеченных: {count}.",
-            _ => "Через узел идут все приложения, кроме самого VieNLink.",
+                ? "Список пуст — через сервер пойдут все приложения. Отметьте те, что должны идти мимо."
+                : $"Через сервер пойдут все приложения, кроме отмеченных: {count}.",
+            _ => "Через сервер идут все приложения, кроме самого VieNLink.",
         };
     }
 

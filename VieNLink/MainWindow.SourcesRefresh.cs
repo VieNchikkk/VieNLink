@@ -19,8 +19,8 @@ public partial class MainWindow
         if (AtNodeLimit)
         {
             NotifyNodeLimit();
-            SetStatus("Достигнут лимит узлов",
-                $"В списке {NodeCount} из {_settings.MaxTotalNodes}. Проверьте накопленные: «Узлы» → «Все узлы» — " +
+            SetStatus("Достигнут лимит серверов",
+                $"В списке {NodeCount} из {_settings.MaxTotalNodes}. Проверьте накопленные: «Серверы» → «Все серверы» — " +
                 "нерабочие удалятся, и обновление разблокируется");
             return;
         }
@@ -33,7 +33,7 @@ public partial class MainWindow
         try
         {
             var count = await RefreshSourcesCoreAsync(_settings.TestAfterRefresh, testLimit: 0);
-            SetStatus("Списки обновлены", $"Узлов: {count}, MTProto: {_mtprotoRows.Count}");
+            SetStatus("Списки обновлены", $"Серверов: {count}, MTProto: {_mtprotoRows.Count}");
             _settings.LastAutoRefreshUtc = DateTime.UtcNow;
             SaveSettings();
         }
@@ -102,7 +102,7 @@ public partial class MainWindow
             else if (oldByEndpoint.TryGetValue(node.EndpointKey, out old))
             {
                 // Тот же адрес, другой аккаунт: только метка «моя»,
-                // проверки остаются за этим узлом.
+                // проверки остаются за этим сервером.
                 node.IsMine |= old.IsMine;
             }
         }
@@ -123,7 +123,7 @@ public partial class MainWindow
 
         var trimmedNote = nodes.Count > kept.Count ? $" (лимит {_settings.MaxTotalNodes}, отброшено {nodes.Count - kept.Count})" : string.Empty;
         var nodeSourceCount = _sources.Count(s => s.Enabled && !SourceKinds.IsProxy(s));
-        var summary = $"Загружено {kept.Count} узлов и {_mtprotoRows.Count} MTProto из {nodeSourceCount} источников узлов{trimmedNote}";
+        var summary = $"Загружено {kept.Count} серверов и {_mtprotoRows.Count} MTProto из {nodeSourceCount} источников серверов{trimmedNote}";
         StatusDetail.Text = summary;
         AppendLog(summary);
 
@@ -143,7 +143,12 @@ public partial class MainWindow
 
     private async void OnTestClick(object sender, RoutedEventArgs e)
     {
-        if (!BeginOperation("проверку партии узлов"))
+        if (!await TryTakeOverAutoAsync())
+        {
+            return;
+        }
+
+        if (!BeginOperation("проверку партии серверов"))
         {
             return;
         }
@@ -154,19 +159,19 @@ public partial class MainWindow
             var batch = SelectBatch(candidates);
             if (batch.Count == 0)
             {
-                SetStatus("Нет узлов", "Сначала обновите списки");
+                SetStatus("Нет серверов", "Сначала обновите списки");
                 return;
             }
 
-            await RunTestAsync(batch, "Проверка узлов");
+            await RunTestAsync(batch, "Проверка серверов");
         }
         catch (OperationCanceledException)
         {
-            SetStatus("Проверка отменена", "Результаты уже проверенных узлов сохранены");
+            SetStatus("Проверка отменена", "Результаты уже проверенных серверов сохранены");
         }
         catch (Exception exception)
         {
-            ReportError("Не удалось проверить узлы", exception);
+            ReportError("Не удалось проверить серверы", exception);
         }
         finally
         {
@@ -177,7 +182,12 @@ public partial class MainWindow
 
     private async void OnTestAllClick(object sender, RoutedEventArgs e)
     {
-        if (!BeginOperation("проверку всех узлов"))
+        if (!await TryTakeOverAutoAsync())
+        {
+            return;
+        }
+
+        if (!BeginOperation("проверку всех серверов"))
         {
             return;
         }
@@ -192,7 +202,7 @@ public partial class MainWindow
                 .ToList();
             if (all.Count == 0)
             {
-                SetStatus("Нет узлов", "Сначала обновите списки");
+                SetStatus("Нет серверов", "Сначала обновите списки");
                 return;
             }
 
@@ -202,11 +212,11 @@ public partial class MainWindow
             {
                 _operation!.Token.ThrowIfCancellationRequested();
                 var batch = all.Skip(index).Take(batchSize).ToList();
-                await RunTestAsync(batch, $"Проверка всех узлов ({tested + batch.Count} из {all.Count})");
+                await RunTestAsync(batch, $"Проверка всех серверов ({tested + batch.Count} из {all.Count})");
                 tested += batch.Count;
                 var working = AllRows.Count(row => NodeAvailability.IsUsable(
                     row.Node, NodeLimits.WorkingRecheckMinutes, _settings.ConnectOnlyMine, DateTime.UtcNow));
-                SetStatus("Проверка узлов", $"Готово {tested} из {all.Count}, рабочих {working}");
+                SetStatus("Проверка серверов", $"Готово {tested} из {all.Count}, рабочих {working}");
             }
         }
         catch (OperationCanceledException)
@@ -215,7 +225,7 @@ public partial class MainWindow
         }
         catch (Exception exception)
         {
-            ReportError("Не удалось проверить узлы", exception);
+            ReportError("Не удалось проверить серверы", exception);
         }
         finally
         {
@@ -226,29 +236,34 @@ public partial class MainWindow
 
     private async void OnTestSelectedClick(object sender, RoutedEventArgs e)
     {
-        var node = SelectedNode();
-        if (node is null)
+        if (!await TryTakeOverAutoAsync())
         {
-            MessageBox.Show(this, "Выберите узел в таблице.", "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
             return;
         }
 
-        if (!BeginOperation("проверку узла"))
+        var node = SelectedNode();
+        if (node is null)
+        {
+            MessageBox.Show(this, "Выберите сервер в таблице.", "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        if (!BeginOperation("проверку сервера"))
         {
             return;
         }
 
         try
         {
-            await RunTestAsync(new[] { node }, "Проверка узла");
+            await RunTestAsync(new[] { node }, "Проверка сервера");
         }
         catch (OperationCanceledException)
         {
-            SetStatus("Проверка узла отменена", string.Empty);
+            SetStatus("Проверка сервера отменена", string.Empty);
         }
         catch (Exception exception)
         {
-            ReportError("Не удалось проверить узел", exception);
+            ReportError("Не удалось проверить сервер", exception);
         }
         finally
         {
@@ -263,14 +278,14 @@ public partial class MainWindow
         var tunConnected = connected && _settings.TunnelMode == TunnelMode.Tun;
 
         // При активном TUN трафик скрытого ядра ушёл бы в туннель — проверяем
-        // только уже загруженные узлы. В системном прокси основное ядро не трогаем:
+        // только уже загруженные серверы. В системном прокси основное ядро не трогаем:
         // проверка идёт через скрытое ядро на отдельных портах.
         if (tunConnected)
         {
             var loaded = nodes.Where(node => _manager.IsNodeLoaded(node)).ToList();
             if (loaded.Count == 0)
             {
-                SetStatus("Проверка недоступна", "При активном TUN проверяются только загруженные узлы. Отключитесь, чтобы проверить остальные.");
+                SetStatus("Проверка недоступна", "При активном TUN проверяются только загруженные серверы. Отключитесь, чтобы проверить остальные.");
                 return;
             }
 
@@ -282,17 +297,17 @@ public partial class MainWindow
 
         // TUN-обход перехватывает весь трафик, включая скрытое ядро: на время ручной
         // проверки снимаем его и возвращаем после. zapret и свой обход DPI не трогаем —
-        // они ограничены целевыми доменами и соединения к серверам узлов не затрагивают.
+        // они ограничены целевыми доменами и соединения к серверам серверов не затрагивают.
         var tunBypassMode = !connected && _tunBypass.IsRunning ? _tunBypass.Mode : (StreamFragmentMode?)null;
         if (tunBypassMode is not null)
         {
             await _tunBypass.StopAsync();
             UpdateTunBypassUi();
-            AppendLog("TUN-обход приостановлен на время проверки узлов");
+            AppendLog("TUN-обход приостановлен на время проверки серверов");
         }
 
         // Проверка идёт в фоне, а списки трогаем только в UI-потоке:
-        // узел с провалами: рабочий остаётся с отметкой, непроверенный убирается сразу.
+        // сервер с провалами: рабочий остаётся с отметкой, непроверенный убирается сразу.
         void OnNodeTested(ProxyNode node) => Dispatcher.BeginInvoke(() => ApplyTestedNode(node));
 
         TestSummary summary;
@@ -341,11 +356,11 @@ public partial class MainWindow
         StatusDetail.Text = $"Последняя партия: проверено {summary.Total} · рабочих {working} · " +
                             $"лучший открывает доменов {summary.BestDomains}";
         FooterText.Text = working > 0
-            ? $"Рабочих узлов: {working}. Подключение — 127.0.0.1:{_manager.ActiveMixedPort}"
-            : "Рабочих узлов не найдено: нерабочие узлы удалены из списка";
+            ? $"Рабочих серверов: {working}. Подключение — 127.0.0.1:{_manager.ActiveMixedPort}"
+            : "Рабочих серверов не найдено: нерабочие серверы удалены из списка";
         if (working == 0)
         {
-            _tray?.ShowBalloon("Узлы не отвечают", "Среди проверенных узлов нет рабочих. Попробуйте обновить списки.", warning: true);
+            _tray?.ShowBalloon("Серверы не отвечают", "Среди проверенных серверов нет рабочих. Попробуйте обновить списки.", warning: true);
         }
     }
 

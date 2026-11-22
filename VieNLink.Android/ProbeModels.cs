@@ -2,10 +2,16 @@ using System.Text.Json;
 
 namespace VieNLink.Mobile;
 
-/// <summary>Запрос на проверку узлов отдельным процессом :probe.</summary>
+/// <summary>Запрос на проверку серверов отдельным процессом :probe.</summary>
 internal sealed class ProbeRequest
 {
     public List<ProbeRequestNode> Nodes { get; set; } = new();
+
+    /// <summary>
+    /// false — быстрая перепроверка: базовые адреса сервисов без обхода
+    /// 18 заблокированных доменов (для пятиминутного освежения счётчиков).
+    /// </summary>
+    public bool FullDomains { get; set; } = true;
 }
 
 internal sealed class ProbeRequestNode
@@ -41,7 +47,7 @@ internal sealed class ProbeResultNode
 
 /// <summary>
 /// Ход проверки: процесс :probe пишет его в файл, основной процесс показывает в интерфейсе.
-/// Так пользователь видит, что проверка идёт, сколько узлов уже пройдено и сколько рабочих.
+/// Так пользователь видит, что проверка идёт, сколько серверов уже пройдено и сколько рабочих.
 /// </summary>
 internal sealed class ProbeProgressFile
 {
@@ -62,6 +68,9 @@ internal sealed record ProbeProgress(string Stage, int Tested, int Total, int Wo
 internal static class ProbeProtocol
 {
     public const string ExtraRequest = "probeRequest";
+
+    /// <summary>Команда основного процесса: остановить текущую проверку и погасить :probe.</summary>
+    public const string StopAction = "com.vienlink.app.STOP_PROBE";
 
     public static string RequestPath => Path.Combine(AppPaths.DataDirectory, "probe-request.json");
 

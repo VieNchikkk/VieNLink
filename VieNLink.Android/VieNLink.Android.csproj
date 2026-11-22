@@ -1,5 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- Единая версия Windows и Android: build\Version.props. -->
+  <Import Project="..\build\Version.props" />
+
   <PropertyGroup>
     <TargetFramework>net10.0-android</TargetFramework>
     <SupportedOSPlatformVersion>26.0</SupportedOSPlatformVersion>
@@ -10,10 +13,13 @@
     <AssemblyName>VieNLink.Android</AssemblyName>
     <ApplicationId>com.vienlink.app</ApplicationId>
     <ApplicationTitle>VieNLink</ApplicationTitle>
-    <ApplicationVersion>3</ApplicationVersion>
-    <ApplicationDisplayVersion>1.1.1</ApplicationDisplayVersion>
-    <AndroidPackageFormat>apk</AndroidPackageFormat>
-    <Version>1.1.1</Version>
+    <ApplicationVersion>$(VieNLinkVersionCode)</ApplicationVersion>
+    <ApplicationDisplayVersion>$(VieNLinkVersion)</ApplicationDisplayVersion>
+    <Version>$(VieNLinkVersion)</Version>
+
+    <!-- StoreBuild — сборка для магазина: без REQUEST_INSTALL_PACKAGES и самообновления.
+         GitHub-APK собирается по умолчанию (StoreBuild=false) и сохраняет автообновление. -->
+    <StoreBuild Condition="'$(StoreBuild)' == ''">false</StoreBuild>
 
     <!-- Ядро (libbox.aar) кладётся в Libs: см. docs/android-design.md §4 и доку Android. -->
     <AndroidAarLibrariesDirectory>Libs</AndroidAarLibrariesDirectory>
@@ -23,10 +29,20 @@
     <EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(StoreBuild)' == 'true'">
+    <DefineConstants>$(DefineConstants);STORE_BUILD</DefineConstants>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\VieNLink.Core\VieNLink.Core.csproj" />
     <!-- Названия стран общие с Windows-версией: файл не зависит от WPF. -->
     <Compile Include="..\VieNLink\CountryNames.cs" Link="CountryNames.cs" />
+  </ItemGroup>
+
+  <!-- Самообновление APK разрешено только в GitHub-сборке. В магазинной сборке
+       разрешения нет: Play и RuStore запрещают приложению ставить обновления само. -->
+  <ItemGroup Condition="'$(StoreBuild)' != 'true'">
+    <AndroidManifestOverlay Include="Store\SideloadManifest.xml" />
   </ItemGroup>
 
   <ItemGroup>

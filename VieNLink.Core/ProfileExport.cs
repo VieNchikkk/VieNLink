@@ -3,7 +3,7 @@ using System.Text;
 namespace VieNLink;
 
 /// <summary>
-/// Экспорт выбранного узла для сторонних клиентов (SFA, Exclave, Karing) и для запуска
+/// Экспорт выбранного сервера для сторонних клиентов (SFA, Exclave, Karing) и для запуска
 /// sing-box на другом устройстве. Нужен потому, что на Android системный прокси недоступен,
 /// а полноценный клиент ещё не готов: телефон подключается через готовый клиент.
 /// </summary>
@@ -11,7 +11,7 @@ internal static class ProfileExport
 {
     /// <summary>
     /// Ссылка исходного формата (vless://, ss:// …) — самый совместимый способ:
-    /// её понимают все мобильные клиенты, и она несёт ровно те же параметры, что у узла.
+    /// её понимают все мобильные клиенты, и она несёт ровно те же параметры, что у сервера.
     /// </summary>
     public static string BuildShareLink(ProxyNode node) =>
         string.IsNullOrWhiteSpace(node.RawLink)
@@ -37,7 +37,7 @@ internal static class ProfileExport
     }
 
     /// <summary>
-    /// Готовый конфиг sing-box для одного узла.
+    /// Готовый конфиг sing-box для одного сервера.
     /// <paramref name="tunnel"/> = true — с TUN-инбаундом: подходит для `sing-box run`
     /// на телефоне или роутере (нужны права на TUN). false — только mixed-порт для проверки.
     /// </summary>

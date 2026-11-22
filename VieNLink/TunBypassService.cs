@@ -8,7 +8,7 @@ using System.Net.Sockets;
 namespace VieNLink;
 
 /// <summary>
-/// TUN-обход без прокси-узла и без WinDivert: sing-box поднимает TUN и отправляет
+/// TUN-обход без прокси-сервера и без WinDivert: sing-box поднимает TUN и отправляет
 /// TCP в локальный SOCKS5-форвардер, который открывает прямой канал и режет TLS.
 /// Нужны права администратора и wintun.dll.
 /// </summary>

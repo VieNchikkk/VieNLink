@@ -19,6 +19,7 @@ namespace VieNLink.Mobile;
 public sealed class SettingsActivity : BaseActivity
 {
     private TextView? _status;
+    private TextView? _updateStatus;
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
@@ -66,14 +67,57 @@ public sealed class SettingsActivity : BaseActivity
         };
         page.AddView(theme);
 
+        // -------------------------------------------------------------- обновления
+        page.AddView(Ui.Section(this, "Обновления", P));
+        if (StoreBuildInfo.IsStoreBuild)
+        {
+            page.AddView(Ui.Hint(this,
+                "Обновления устанавливаются через магазин приложений (Google Play или RuStore).", P));
+        }
+        else
+        {
+            _updateStatus = Ui.Hint(this,
+                "Проверка идёт автоматически при запуске. Кнопка проверяет вручную, скачивает новую версию и предлагает установку.", P);
+            var update = Ui.Pill(this, P, "Проверить обновление", UiButtonKind.Accent,
+                () => _ = CheckUpdateAsync(), Resource.Drawable.ic_download);
+            page.AddView(update);
+            page.AddView(_updateStatus);
+        }
+
         // -------------------------------------------------------------- уведомление
-        page.AddView(Ui.Section(this, "Плитка и уведомление", P));
+        page.AddView(Ui.Section(this, "Плитка, виджет и уведомление", P));
         var tile = Ui.Card(P, this,
-            Ui.Text(this, "Плитка VieNLink", 14.5f, P.TextStrong, bold: true),
+            Ui.Text(this, "Плитка и виджет VieNLink", 14.5f, P.TextStrong, bold: true),
             Ui.Hint(this,
                 "Плитка добавляется вручную: откройте редактор плиток Android и перетащите VieNLink. " +
-                "Уведомление туннеля содержит действия «Лучший», «Узлы» и «Отключить».", P));
+                "Виджет добавляется долгим нажатием на рабочем столе → «Виджеты» → VieNLink; " +
+                "он показывает состояние туннеля и кнопки «Лучший» и «Отключить». " +
+                "Уведомление туннеля содержит действия «Лучший», «Серверы» и «Отключить».", P));
         page.AddView(tile);
+
+        // -------------------------------------------------------------- автоматика
+        page.AddView(Ui.Section(this, "Автоматика", P));
+        var paused = SettingsStore.Current.AutomationPaused;
+        var automation = Ui.Pill(this, P, paused ? "Запустить все процессы" : "Остановить все процессы",
+            paused ? UiButtonKind.Primary : UiButtonKind.Danger,
+            ToggleAutomation, Resource.Drawable.ic_power);
+        page.AddView(automation);
+        page.AddView(Ui.Hint(this,
+            "Останавливает все фоновые процессы приложения: проверку серверов, сбор и проверку MTProto, " +
+            "обслуживание по будильнику и автообновления. Подключённый туннель и ручные кнопки продолжают работать.",
+            P));
+
+        // -------------------------------------------------------------- данные и VPN
+        page.AddView(Ui.Section(this, "Данные и VPN", P));
+        var clear = Ui.Pill(this, P, "Очистить кэш серверов", UiButtonKind.Danger, ConfirmClearNodes,
+            Resource.Drawable.ic_delete);
+        page.AddView(clear);
+        var vpnSettings = Ui.Pill(this, P, "Настройки VPN Android", UiButtonKind.Secondary,
+            OpenVpnSettings, Resource.Drawable.ic_settings);
+        Ui.Add(page, vpnSettings, 8);
+        page.AddView(Ui.Hint(this,
+            "Очистка удаляет серверы и результаты проверок, источники остаются. " +
+            "Настройки VPN Android открывают системный экран VPN (постоянная VPN, исключения).", P));
 
         // ------------------------------------------------------------------ прочее
         page.AddView(Ui.Section(this, "Прочее", P));
@@ -85,6 +129,55 @@ public sealed class SettingsActivity : BaseActivity
         Ui.Add(page, log, 8);
 
         SetPage(page);
+    }
+
+    private void ToggleAutomation()
+    {
+        var settings = SettingsStore.Current;
+        settings.AutomationPaused = !settings.AutomationPaused;
+        SettingsStore.Save();
+        Automation.Apply(this);
+        Recreate();
+    }
+
+    private async Task CheckUpdateAsync()
+    {
+        if (_updateStatus is null)
+        {
+            return;
+        }
+
+        _updateStatus.Text = "Проверяю GitHub…";
+        await UpdateCenter.CheckInteractiveAsync(this, text => _updateStatus.Text = text);
+    }
+
+    private void ConfirmClearNodes()
+    {
+        using var dialog = new AlertDialog.Builder(this)
+            .SetTitle("Очистить кэш серверов?")
+            .SetMessage("Источники останутся, но все серверы и результаты проверок будут удалены. " +
+                        "После этого нужно обновить источники и проверить серверы.")
+            .SetPositiveButton("Очистить", (_, _) =>
+            {
+                var removed = NodeStore.ClearCache();
+                SetStatus($"Удалено серверов: {removed}");
+                Ui.Toast(this, $"Удалено серверов: {removed}");
+            })
+            .SetNegativeButton("Отмена", (_, _) => { })
+            .Create();
+        dialog.Show();
+    }
+
+    private void OpenVpnSettings()
+    {
+        try
+        {
+            StartActivity(new Intent(Android.Provider.Settings.ActionVpnSettings));
+        }
+        catch (Exception exception)
+        {
+            Ui.Toast(this, "Не удалось открыть настройки: " + exception.Message);
+        }
     }
 
     private void SetStatus(string text) => RunOnUiThread(() =>

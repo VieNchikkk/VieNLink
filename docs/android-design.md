@@ -321,6 +321,7 @@ interface IAppCatalog       { Task<IReadOnlyList<AppEntry>> ListAsync(); }
 | MAUI даст плохой UX с таблицей на 6 000 строк | средняя | виртуализация + постраничная подгрузка; запасной вариант — Avalonia |
 | Doze/агрессивные прошивки убивают сервис | высокая | foreground service + исключение из оптимизации + инструкция |
 | Политика Play по `QUERY_ALL_PACKAGES` и VPN | средняя | распространение APK сайдлоадом |
+| Play Protect предупреждает, что APK «может быть вредоносным» | высокая (сайдлоад + VPN + `REQUEST_INSTALL_PACKAGES`) | инструкция в README: «Подробнее → Всё равно установить», временно отключить проверку Play Protect; в перспективе — RuStore/Google Play/F-Droid для репутации |
 | Две UI-кодовые базы навсегда | высокая | принять осознанно; максимум логики — в Core |
 
 ---
@@ -407,6 +408,24 @@ $dotnet = "$env:LOCALAPPDATA\dotnet\dotnet.exe"
 **Важно:** обычный `dotnet build VieNLink.slnx` системным SDK не соберёт Android —
 нужен локальный SDK с workload и явные пути `AndroidSdkDirectory`/`JavaSdkDirectory`.
 Windows-проекты при этом собираются и системным SDK.
+
+### Магазинная сборка (RuStore / Google Play)
+
+Play и RuStore запрещают приложению ставить обновления самостоятельно, поэтому сборок две:
+
+- `build\publish-android.ps1` — GitHub-APK с автообновлением и `REQUEST_INSTALL_PACKAGES`
+  (overlay `Store/SideloadManifest.xml`);
+- `build\publish-store.ps1` — `StoreBuild=true`: APK для RuStore и AAB для Play, без
+  `REQUEST_INSTALL_PACKAGES` и без проверки обновлений (`StoreBuildInfo.IsStoreBuild`).
+
+```powershell
+powershell -File build\publish-android.ps1   # GitHub: release\VieNLink-<версия>-android.apk
+powershell -File build\publish-store.ps1     # Магазины: *-store.apk и *-store.aab
+```
+
+Тексты карточки, Data safety и VPN-декларация — `docs/store-listing.md`; требования
+кабинетов и шаги публикации — `docs/store-publication.md`; политика конфиденциальности —
+`docs/privacy.md`; иконка и скриншоты — `store/`.
 
 ### Ядро libbox.aar — собрано 21.11.2026
 

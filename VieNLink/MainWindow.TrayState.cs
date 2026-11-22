@@ -20,6 +20,14 @@ public partial class MainWindow
 
         if (_busy)
         {
+            // Автообновление и фон не должны молча съедать нажатие пользователя:
+            // для ручных действий показываем, что именно сейчас выполняется.
+            if (action is not null &&
+                !action.StartsWith("авто", StringComparison.OrdinalIgnoreCase))
+            {
+                SetStatus("Дождитесь окончания", "Сейчас выполняется: " + _operationLabel);
+            }
+
             return false;
         }
 
@@ -27,6 +35,39 @@ public partial class MainWindow
         _operationLabel = action ?? "текущее действие";
         _operation = new CancellationTokenSource();
         SetBusy(true);
+        return true;
+    }
+
+    /// <summary>
+    /// Если сейчас идёт автообновление/автопоиск, останавливаем его и уступаем
+    /// место действию пользователя. Ручную операцию не трогаем.
+    /// </summary>
+    private async Task<bool> TryTakeOverAutoAsync()
+    {
+        if (!_busy)
+        {
+            return true;
+        }
+
+        if (!_operationLabel.StartsWith("авто", StringComparison.OrdinalIgnoreCase))
+        {
+            SetStatus("Дождитесь окончания", "Сейчас выполняется: " + _operationLabel);
+            return false;
+        }
+
+        SetStatus("Останавливаю автообновление", "Освобождаю место для выбранного действия…");
+        _operation?.Cancel();
+        for (var attempt = 0; attempt < 60 && _busy && !_closing; attempt++)
+        {
+            await Task.Delay(100);
+        }
+
+        if (_busy)
+        {
+            SetStatus("Не удалось остановить", "Автообновление ещё завершается — повторите через минуту");
+            return false;
+        }
+
         return true;
     }
 
@@ -38,10 +79,10 @@ public partial class MainWindow
         SetBusy(false);
         _operationLabel = "текущее действие";
 
-        // Сбой узла, замеченный во время проверки или другой операции, обрабатываем сейчас.
-        if (_pendingFailoverName is { } pending)
+        // Сбой сервера, замеченный во время проверки или другой операции, обрабатываем сейчас.
+        if (_pendingFailoverNode is { } pending)
         {
-            _pendingFailoverName = null;
+            _pendingFailoverNode = null;
             Dispatcher.BeginInvoke(new Action(() => _ = HandleUnhealthyNodeAsync(pending)));
         }
     }
@@ -59,8 +100,7 @@ public partial class MainWindow
         BlockDiagnoseButton.IsEnabled = !busy;
         CancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         Cursor = busy ? System.Windows.Input.Cursors.Wait : System.Windows.Input.Cursors.Arrow;
-        UpdateHeaderState();
-        ZapretStateChanged?.Invoke();
+        UpdateHeaderState();        ZapretStateChanged?.Invoke();
     }
 
     private void OnCancelClick(object sender, RoutedEventArgs e)
@@ -113,7 +153,7 @@ public partial class MainWindow
                 var node = PickBestNode();
                 if (node is null)
                 {
-                    _tray.ShowBalloon("Нет узлов", "Обновите списки в окне VieNLink.", warning: true);
+                    _tray.ShowBalloon("Нет серверов", "Обновите списки в окне VieNLink.", warning: true);
                     return;
                 }
 
@@ -260,6 +300,7 @@ public partial class MainWindow
 
         _closing = true;
         _autoTimer?.Stop();
+        _counterTimer?.Stop();
         _mtprotoCollectCts?.Cancel();
         _mtprotoCheckCts?.Cancel();
         base.OnClosing(e);

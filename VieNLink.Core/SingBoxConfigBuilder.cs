@@ -8,7 +8,7 @@ namespace VieNLink;
 
 /// <summary>
 /// Сборка конфига sing-box: mixed-порт для браузера, при необходимости TUN-адаптер,
-/// selector для переключения узла и правила маршрутизации по приложениям и доменам.
+/// selector для переключения сервера и правила маршрутизации по приложениям и доменам.
 /// </summary>
 internal static class SingBoxConfigBuilder
 {
@@ -39,7 +39,7 @@ internal static class SingBoxConfigBuilder
 
         if (included.Count == 0)
         {
-            throw new InvalidOperationException("Нет узлов для запуска прокси");
+            throw new InvalidOperationException("Нет серверов для запуска прокси");
         }
 
         var tags = included.Select(n => n.Tag).ToList();
@@ -63,7 +63,7 @@ internal static class SingBoxConfigBuilder
                 continue;
             }
 
-            // Маскировка SNI: узлам Reality/TLS без собственного server_name подставляем домен из настроек,
+            // Маскировка SNI: серверам Reality/TLS без собственного server_name подставляем домен из настроек,
             // чтобы вручную не прописывать sni= в каждой ссылке.
             if (!string.IsNullOrWhiteSpace(settings.DefaultSni) &&
                 outbound["tls"] is JsonObject tls &&
@@ -108,10 +108,10 @@ internal static class SingBoxConfigBuilder
         };
 
         // DNS нужен только TUN-режиму: без него запросы из адаптера некуда отправлять.
-        // В режиме системного прокси DNS не трогаем — иначе проверка узлов зависит от узла.
+        // В режиме системного прокси DNS не трогаем — иначе проверка серверов зависит от сервера.
         if (tunEnabled)
         {
-            // dnsThroughProxy: DNS по TCP через узел. Нужно там, где локальный UDP/53
+            // dnsThroughProxy: DNS по TCP через сервер. Нужно там, где локальный UDP/53
             // зарезан или подменяется (мобильные сети, Android без root).
             config["dns"] = dnsThroughProxy
                 ? new JsonObject
@@ -174,7 +174,7 @@ internal static class SingBoxConfigBuilder
     }
 
     /// <summary>
-    /// Конфиг TUN-обхода без прокси-узла: TUN забирает трафик, а исходящие TCP-соединения
+    /// Конфиг TUN-обхода без прокси-сервера: TUN забирает трафик, а исходящие TCP-соединения
     /// идут в локальный SOCKS5-форвардер, который режет TLS ClientHello. WinDivert не нужен.
     /// </summary>
     public static string BuildTunBypass(
@@ -399,7 +399,7 @@ internal static class SingBoxConfigBuilder
     /// <summary>
     /// «Быстрый» обход DPI: sing-box сам режет TLS-рукопожатие на части, и ТСПУ
     /// не видит SNI целиком. Работает без WinDivert и без внешних утилит, но только
-    /// для соединений через узел. QUIC/Hysteria2 не трогаем: там другой транспорт.
+    /// для соединений через сервер. QUIC/Hysteria2 не трогаем: там другой транспорт.
     /// </summary>
     private static void ApplyTlsFragment(JsonObject outbound, AppSettings settings)
     {

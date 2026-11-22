@@ -49,7 +49,7 @@ internal static class SystemProxy
         // Простая запись host:port понимается и WinINET, и .NET; схема = всё через один mixed-порт.
         key.SetValue("ProxyServer", $"127.0.0.1:{port}", RegistryValueKind.String);
 
-        // <local> оставляем всегда, остальное — из настроек; так служебные адреса не идут через узел.
+        // <local> оставляем всегда, остальное — из настроек; так служебные адреса не идут через сервер.
         var rules = string.IsNullOrWhiteSpace(bypass) ? "<local>" : "<local>;" + bypass.Trim();
         key.SetValue("ProxyOverride", rules, RegistryValueKind.String);
 

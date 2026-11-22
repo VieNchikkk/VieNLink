@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 
 namespace VieNLink;
 
-/// <summary>Строка таблицы узлов. Обёртка нужна, чтобы обновлять задержку без перезагрузки списка.</summary>
+/// <summary>Строка таблицы серверов. Обёртка нужна, чтобы обновлять задержку без перезагрузки списка.</summary>
 internal sealed class NodeRow : INotifyPropertyChanged
 {
     public NodeRow(ProxyNode node) => Node = node;
@@ -22,7 +22,7 @@ internal sealed class NodeRow : INotifyPropertyChanged
     /// <summary>Под какой домен маскируется рукопожатие: YouTube/Google, Yandex и т.д.</summary>
     public string CamouflageLabel => NodeRanking.CamouflageLabel(Node);
 
-    /// <summary>Маскированный узел подсвечивается в таблице жёлтым.</summary>
+    /// <summary>Маскированный сервер подсвечивается в таблице жёлтым.</summary>
     public bool IsMasked => NodeRanking.IsMasked(Node);
 
     /// <summary>Цвет строки: рабочий — зелёный, непроверенный — красный.</summary>
@@ -36,7 +36,7 @@ internal sealed class NodeRow : INotifyPropertyChanged
 
     public bool IsMine => Node.IsMine;
 
-    /// <summary>В таблице узлов личная подписка помечается звездой.</summary>
+    /// <summary>В таблице серверов личная подписка помечается звездой.</summary>
     public string SourceLabel => Node.IsMine ? "★ " + Node.SourceName : Node.SourceName;
 
     public int? DelayMs => Node.DelayMs;
@@ -44,7 +44,7 @@ internal sealed class NodeRow : INotifyPropertyChanged
     /// <summary>Числовое значение для сортировки по пингу; непроверенные — в конце.</summary>
     public int PingSortValue => Node.DelayMs ?? int.MaxValue;
 
-    /// <summary>Сколько проверок подряд узел не открыл ни один сервис.</summary>
+    /// <summary>Сколько проверок подряд сервер не открыл ни один сервис.</summary>
     public int FailCount => Node.FailCount;
 
     /// <summary>Колонка «Провалы»: сколько попыток израсходовано до удаления.</summary>
@@ -159,7 +159,11 @@ internal sealed class SourceRow : INotifyPropertyChanged
     }
 
     /// <summary>Заголовок группы в списке источников.</summary>
-    public string GroupName => Source.IsMine ? "Мои подписки" : "Публичные источники";
+    public string GroupName => SourceKinds.IsProxy(Source)
+        ? "Telegram-прокси (каналы и сайты)"
+        : Source.IsMine
+            ? "Источники серверов · мои подписки"
+            : "Источники серверов · публичные";
 
     public string OriginLabel => Source.IsMine ? "моя" : "публичный";
 

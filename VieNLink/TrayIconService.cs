@@ -7,7 +7,7 @@ using System.Windows.Forms;
 namespace VieNLink;
 
 /// <summary>
-/// Значок в трее: показать окно, подключиться/отключиться, выбрать узел, виджет и выход.
+/// Значок в трее: показать окно, подключиться/отключиться, выбрать сервер, виджет и выход.
 /// Цвет точки на значке показывает состояние: зелёная — подключено, серая — нет.
 /// </summary>
 internal sealed class TrayIconService : IDisposable
@@ -29,8 +29,8 @@ internal sealed class TrayIconService : IDisposable
         _blockedIcon = WithStatusDot(_baseIcon, Color.FromArgb(0xD9, 0x3A, 0x3A));
 
         _toggleItem = new ToolStripMenuItem("Подключиться", null, (_, _) => ToggleRequested?.Invoke());
-        _nodesItem = new ToolStripMenuItem("Автовыбор узла");
-        _nodesItem.DropDownItems.Add(new ToolStripMenuItem("Узлы ещё не проверены") { Enabled = false });
+        _nodesItem = new ToolStripMenuItem("Автовыбор сервера");
+        _nodesItem.DropDownItems.Add(new ToolStripMenuItem("Серверы ещё не проверены") { Enabled = false });
 
         var menu = new ContextMenuStrip();
         menu.Items.Add(new ToolStripMenuItem("Показать VieNLink", null, (_, _) => ShowRequested?.Invoke()));
@@ -59,7 +59,7 @@ internal sealed class TrayIconService : IDisposable
 
     public event Action? ExitRequested;
 
-    /// <summary>Выбран узел в подменю «Узлы»: передаётся Id узла.</summary>
+    /// <summary>Выбран сервер в подменю «Серверы»: передаётся Id сервера.</summary>
     public event Action<string>? NodeSelected;
 
     public void UpdateStatus(bool connected, string? nodeName, bool blocked = false)
@@ -74,13 +74,13 @@ internal sealed class TrayIconService : IDisposable
                 : AppInfo.DisplayName + " — отключено";
     }
 
-    /// <summary>Быстрое подключение без открытия окна: один лучший узел, без списка адресов.</summary>
+    /// <summary>Быстрое подключение без открытия окна: один лучший сервер, без списка адресов.</summary>
     public void UpdateNodes(IReadOnlyList<ProxyNode> nodes, string? currentId)
     {
         _nodesItem.DropDownItems.Clear();
         if (nodes.Count == 0)
         {
-            _nodesItem.DropDownItems.Add(new ToolStripMenuItem("Нет проверенных узлов") { Enabled = false });
+            _nodesItem.DropDownItems.Add(new ToolStripMenuItem("Нет проверенных серверов") { Enabled = false });
             return;
         }
 

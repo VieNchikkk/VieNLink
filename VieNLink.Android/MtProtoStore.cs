@@ -90,13 +90,15 @@ internal static class MtProtoStore
             NodeStore.EnsureLoaded();
             var sources = NodeStore.SnapshotSources()
                 .Where(source => source.Enabled)
-                .Where(source => source.Kind == SourceKind.Telegram ||
-                                 source.Url.Contains("t.me", StringComparison.OrdinalIgnoreCase))
+                .Where(SourceKinds.IsProxy)
+                // Сайты читаются первыми: они быстрые и не зависят от RSS-зеркал,
+                // поэтому прокси появляются даже если Telegram-каналы тормозят.
+                .OrderBy(source => source.Kind == SourceKind.Telegram ? 1 : 0)
                 .ToList();
 
             if (sources.Count == 0)
             {
-                return "Нет включённых Telegram-каналов: добавьте канал в «Источники»";
+                return "Нет включённых каналов/сайтов MTProto: добавьте их в «Источники»";
             }
 
             var collected = new List<MtProtoProxy>();
@@ -117,6 +119,7 @@ internal static class MtProtoStore
                 }
             }
 
+            var before = Snapshot().Count;
             var added = Merge(collected);
             AndroidSettingsStore.Current.LastMtProtoCollectUtc = DateTime.UtcNow;
             AndroidSettingsStore.Save();
@@ -130,7 +133,10 @@ internal static class MtProtoStore
 
             if (added > 0)
             {
-                await TestAsync(progress, cancellationToken, includeDead: false).ConfigureAwait(false);
+                // Первый запуск: проверяем сразу большую партию, иначе список
+                // остаётся «непроверенным» и рабочие прокси не появляются вовремя.
+                await TestAsync(progress, cancellationToken, includeDead: false,
+                    batchScale: before == 0 ? 4 : 1).ConfigureAwait(false);
             }
 
             return summary;
@@ -141,11 +147,12 @@ internal static class MtProtoStore
         }
     }
 
-    /// <summary>Проверяет рабочие и часть нерабочих прокси: TCP-доступность.</summary>
+    /// <summary>Проверяет рабочие и часть нерабочих прокси настоящим рукопожатием с Telegram.</summary>
     public static async Task<string> TestAsync(
         IProgress<string>? progress,
         CancellationToken cancellationToken,
-        bool includeDead = true)
+        bool includeDead = true,
+        int batchScale = 1)
     {
         if (Interlocked.CompareExchange(ref _testing, 1, 0) != 0)
         {
@@ -154,34 +161,60 @@ internal static class MtProtoStore
 
         try
         {
-            var snapshot = Snapshot();
-            var working = snapshot
-                .Where(proxy => proxy.Status != MtProtoStatus.Dead)
-                .Take(MtProtoSchedule.WorkingBatch)
-                .ToList();
+            string? summary = null;
 
-            if (includeDead)
+            // Пока рабочих прокси меньше пяти, проверяем партии подряд.
+            for (var round = 1; round <= 3; round++)
             {
-                working.AddRange(snapshot
-                    .Where(proxy => proxy.Status == MtProtoStatus.Dead)
-                    .OrderByDescending(proxy => proxy.DeadAtUtc ?? DateTime.MinValue)
-                    .Take(MtProtoSchedule.DeadBatch));
+                var snapshot = Snapshot();
+                var workingCount = snapshot.Count(proxy => proxy.Status == MtProtoStatus.Working);
+                if (round > 1 && workingCount >= MtProtoSchedule.MinWorking)
+                {
+                    break;
+                }
+
+                var scale = workingCount < MtProtoSchedule.MinWorking
+                    ? Math.Max(batchScale, 3)
+                    : Math.Max(1, batchScale);
+
+                var working = snapshot
+                    .Where(proxy => proxy.Status != MtProtoStatus.Dead)
+                    // Сначала давно не проверенные и новые: иначе свежие прокси ждали бы очереди.
+                    .OrderBy(proxy => proxy.CheckedAtUtc ?? DateTime.MinValue)
+                    .Take(MtProtoSchedule.WorkingBatch * scale)
+                    .ToList();
+
+                if (includeDead)
+                {
+                    working.AddRange(snapshot
+                        .Where(proxy => proxy.Status == MtProtoStatus.Dead)
+                        .OrderBy(proxy => proxy.CheckedAtUtc ?? DateTime.MinValue)
+                        .Take(MtProtoSchedule.DeadBatch * scale));
+                }
+
+                if (working.Count == 0)
+                {
+                    summary ??= "MTProto-прокси не собраны";
+                    break;
+                }
+
+                await MtProtoService.TestAsync(working, progress, null, cancellationToken).ConfigureAwait(false);
+                AndroidSettingsStore.Current.LastMtProtoTestUtc = DateTime.UtcNow;
+                AndroidSettingsStore.Save();
+                Save();
+
+                var alive = working.Count(proxy => proxy.Status == MtProtoStatus.Working);
+                summary = $"Проверено {working.Count}: рабочих {alive}";
+                progress?.Report(summary);
+
+                if (Snapshot().Count(proxy => proxy.Status == MtProtoStatus.Working) >=
+                    MtProtoSchedule.MinWorking)
+                {
+                    break;
+                }
             }
 
-            if (working.Count == 0)
-            {
-                return "MTProto-прокси не собраны";
-            }
-
-            await MtProtoService.TestAsync(working, progress, null, cancellationToken).ConfigureAwait(false);
-            AndroidSettingsStore.Current.LastMtProtoTestUtc = DateTime.UtcNow;
-            AndroidSettingsStore.Save();
-            Save();
-
-            var alive = working.Count(proxy => proxy.Status == MtProtoStatus.Working);
-            var summary = $"Проверено {working.Count}: рабочих {alive}";
-            progress?.Report(summary);
-            return summary;
+            return summary ?? "MTProto-прокси не собраны";
         }
         finally
         {

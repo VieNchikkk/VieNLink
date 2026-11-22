@@ -12,8 +12,11 @@ namespace VieNLink;
 
 public partial class MainWindow : Window
 {
-    /// <summary>Сколько узлов проверяем за один запуск: бесплатные списки большие, но проверка не бесконечная.</summary>
+    /// <summary>Сколько серверов проверяем за один запуск: бесплатные списки большие, но проверка не бесконечная.</summary>
     private const int TestBatchSize = 500;
+
+    /// <summary>Сколько серверов проверять сразу после первого заполнения списка.</summary>
+    private const int StartupProbeBatch = 150;
 
     private readonly AppSettings _settings = App.Settings;
     private readonly ProxyManager _manager;
@@ -35,12 +38,14 @@ public partial class MainWindow : Window
     private CancellationTokenSource? _idleCts;
     private bool _idleTesting;
     private DateTime? _lastIdleTestUtc;
+    private DateTime? _lastRecheckUtc;
     private CancellationTokenSource? _mtprotoCollectCts;
     private CancellationTokenSource? _mtprotoCheckCts;
     private bool _mtprotoCollecting;
     private bool _mtprotoChecking;
     private DateTime? _lastMtProtoCollectUtc;
     private DispatcherTimer? _autoTimer;
+    private DispatcherTimer? _counterTimer;
     private CancellationTokenSource? _operation;
     private bool _busy;
     private string _operationLabel = "текущее действие";
@@ -55,10 +60,14 @@ public partial class MainWindow : Window
     private bool _loadingSettings;
     private bool _trayHintShown;
     private readonly HashSet<string> _failedForSession = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Последний сервис, к которому подключались кнопкой: при смене сервиса
+    /// текущий сервер исключается из выбора, чтобы было реальное переподключение.</summary>
+    private string? _activeService;
     private readonly Dictionary<string, NodeRow> _rowIndex = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, ObservableCollection<NodeRow>> _rowOwner = new(StringComparer.OrdinalIgnoreCase);
 
-    /// <summary>Убранные из таблицы узлы: нужны, чтобы откат проверки вернул их обратно.</summary>
+    /// <summary>Убранные из таблицы серверы: нужны, чтобы откат проверки вернул их обратно.</summary>
     private readonly List<ProxyNode> _droppedNodes = new();
     private Task _initialLoad = Task.CompletedTask;
     private DateTime _lastTestedSummaryUtc;
@@ -68,13 +77,45 @@ public partial class MainWindow : Window
     private DateTime? _lastFailoverUtc;
     private string _lastFailoverNote = "—";
 
-    /// <summary>Сбой узла пришёл во время другой операции: переключимся сразу после неё.</summary>
-    private string? _pendingFailoverName;
+    /// <summary>Сбой сервера пришёл во время другой операции: переключимся сразу после неё.</summary>
+    private ProxyNode? _pendingFailoverNode;
+
+    /// <summary>Очередь кнопки «Дальше»: текущий сервер уходит в конец, следующий — из начала.</summary>
+    private readonly List<string> _nodeRotation = new();
+
+    /// <summary>
+    /// Возврат в окно после простоя: если свежих серверов нет, сразу запускаем
+    /// короткую перепроверку, не дожидаясь минутного такта.
+    /// </summary>
+    private void EnsureCountersFresh()
+    {
+        if (_closing || _busy || _idleTesting || !_settings.IdleTestEnabled ||
+            _settings.AutomationPaused || _workingRows.Count == 0 ||
+            FreshWorkingCount() >= NodeLimits.MinWorkingNodes)
+        {
+            return;
+        }
+
+        if (_lastRecheckUtc is { } last &&
+            DateTime.UtcNow - last < TimeSpan.FromSeconds(30))
+        {
+            return;
+        }
+
+        _ = RunIdleTestAsync(userIdle: false, searchNew: false);
+    }
 
     public MainWindow()
     {
         InitializeComponent();
+
+        // Текущая версия видна и в заголовке окна, и в шапке: пользователь сразу
+        // понимает, какая сборка установлена.
+        Title = $"{AppInfo.Name} {AppInfo.Version} — свободные серверы";
+        HeaderVersionText.Text = "v" + AppInfo.Version;
+
         SourceInitialized += (_, _) => WindowChromeTheme.Apply(this);
+        Activated += (_, _) => EnsureCountersFresh();
         InitializeWindowGeometry();
 
         // Если прошлый запуск завершился аварийно, снимаем оставшееся правило
@@ -115,7 +156,7 @@ public partial class MainWindow : Window
         BuildDesyncStrategyList();
         BuildTunBypassStrategyList();
         LoadSettingsToUi();
-        // Кэш на десятки тысяч узлов читается и разбирается в фоне: окно появляется сразу.
+        // Кэш на десятки тысяч серверов читается и разбирается в фоне: окно появляется сразу.
         _initialLoad = LoadSourcesAndCacheAsync();
         InitializeTray();
         _idleTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
@@ -126,7 +167,7 @@ public partial class MainWindow : Window
         UpdateZapretUi();
         UpdateDesyncUi();
         UpdateTunBypassUi();
-        AppendLog(AppInfo.DisplayName + " запущен. Обновите списки, проверьте узлы и подключитесь.");
+        AppendLog(AppInfo.DisplayName + " запущен. Обновите списки, проверьте серверы и подключитесь.");
         Loaded += async (_, _) =>
         {
             await _initialLoad;
@@ -148,12 +189,28 @@ public partial class MainWindow : Window
                 ToggleZapretWidget();
                 Hide();
             }
+            else if (_settings.WidgetVisible)
+            {
+                // Виджет включён по умолчанию: пользователь сразу видит переключатели
+                // обхода. Закрытие крестиком сохраняет выбор и больше его не открывает.
+                ToggleZapretWidget();
+            }
 
             await AutoRefreshIfStaleAsync();
             await AutoTickAsync();
 
+            // После запуска счётчики не должны висеть нулями до первой пятиминутной
+            // перепроверки: сразу проверяем ранее рабочие серверы.
+            if (_settings.IdleTestEnabled && !_settings.AutomationPaused &&
+                FreshWorkingCount() < NodeLimits.MinWorkingNodes)
+            {
+                SetStatus("Проверяю серверы", "После запуска обновляю счётчики…");
+                _ = RunIdleTestAsync(userIdle: false, searchNew: false);
+            }
+
             // Telegram-прокси собираются сами, без ручных кнопок: RSS не зависит от t.me.
-            _ = AutoCollectMtProtoAsync(force: true);
+            // При первом запуске сразу проверяем большую партию настоящим рукопожатием.
+            _ = CollectAndCheckMtProtoOnStartupAsync();
 
             // Запуск после повышения прав: включаем обход DPI, свой обход или подключаемся в TUN-режиме.
             if (arguments.Any(arg => arg.Equals("--store-loopback", StringComparison.OrdinalIgnoreCase)))
@@ -192,7 +249,7 @@ public partial class MainWindow : Window
                 var node = PickBestNode();
                 if (node is null)
                 {
-                    SetStatus("Нет узлов для TUN", "Обновите списки и проверьте узлы");
+                    SetStatus("Нет серверов для TUN", "Обновите списки и проверьте серверы");
                 }
                 else
                 {
@@ -209,23 +266,69 @@ public partial class MainWindow : Window
         _autoTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
         _autoTimer.Tick += async (_, _) => await AutoTickAsync();
         _autoTimer.Start();
+
+        // Автоматика могла быть выключена пользователем в прошлый раз.
+        if (_settings.AutomationPaused)
+        {
+            _idleTimer.Stop();
+            _autoTimer.Stop();
+        }
+
+        // Счётчики в шапке и на вкладке «Серверы» живут отдельно от проверок: сервер,
+        // у которого истекло окно свежести (5 минут), должен исчезнуть из числа
+        // сам, даже если в этот момент ничего не проверяется.
+        _counterTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
+        _counterTimer.Tick += (_, _) =>
+        {
+            if (!_closing)
+            {
+                UpdateSummary();
+            }
+        };
+        _counterTimer.Start();
     }
 
     /// <summary>Раз в минуту проверяем, не пора ли обновить списки и поискать новые источники.</summary>
     private async Task AutoTickAsync()
     {
-        if (_busy || _closing)
+        if (_busy || _closing || _settings.AutomationPaused)
         {
             return;
         }
 
         var now = DateTime.UtcNow;
+        var emptyList = NodeCount == 0;
+
+        // Живых серверов мало (квота не набрана) — списки обновляем чаще: бесплатные
+        // серверы вымирают, и старый список уже не даёт рабочих адресов.
+        var poorList = !emptyList &&
+                       (FreshWorkingCount() < NodeLimits.MinWorkingNodes ||
+                        MissingServiceQuota().Count > 0);
+
         var refreshDue = _settings.AutoRefreshMinutes > 0 &&
                          now - _settings.LastAutoRefreshUtc >= TimeSpan.FromMinutes(_settings.AutoRefreshMinutes);
+        if (!refreshDue && poorList && _settings.AutoRefreshMinutes > 0 &&
+            now - _settings.LastAutoRefreshUtc >= TimeSpan.FromMinutes(30))
+        {
+            refreshDue = true;
+        }
+
+        if (!refreshDue && emptyList && _settings.AutoRefreshMinutes > 0 &&
+            now - _settings.LastAutoRefreshUtc >= TimeSpan.FromMinutes(15))
+        {
+            // Пустой список — повторяем чаще: источник мог быть временно недоступен.
+            refreshDue = true;
+        }
+
         var discoveryDue = _settings.AutoDiscoverSources &&
                            now - _settings.LastDiscoveryUtc >= TimeSpan.FromHours(Math.Max(1, _settings.AutoDiscoverHours));
+        if (!discoveryDue && emptyList && _settings.AutoDiscoverSources &&
+            now - _settings.LastDiscoveryUtc >= TimeSpan.FromMinutes(30))
+        {
+            discoveryDue = true;
+        }
 
-        // Список заполнен: не тянем новые узлы и не ищем источники, пока накопленные не проверены.
+        // Список заполнен: не тянем новые серверы и не ищем источники, пока накопленные не проверены.
         if ((refreshDue || discoveryDue) && AtNodeLimit)
         {
             NotifyNodeLimit();
@@ -245,7 +348,7 @@ public partial class MainWindow : Window
                 SaveSettings();
                 AppendLog("Автообновление списков…");
                 var count = await RefreshSourcesCoreAsync(testAfter: _settings.TestAfterRefresh, testLimit: 150);
-                AppendLog($"Автообновление: узлов {count}");
+                AppendLog($"Автообновление: серверов {count}");
             }
 
             if (discoveryDue && !_operation!.IsCancellationRequested)
@@ -275,8 +378,8 @@ public partial class MainWindow : Window
         if (AtNodeLimit)
         {
             NotifyNodeLimit();
-            SetStatus("Достигнут лимит узлов",
-                $"В списке {NodeCount} из {_settings.MaxTotalNodes}. Сначала проверьте накопленные: «Узлы» → «Все узлы»");
+            SetStatus("Достигнут лимит серверов",
+                $"В списке {NodeCount} из {_settings.MaxTotalNodes}. Сначала проверьте накопленные: «Серверы» → «Все серверы»");
             return;
         }
 
@@ -314,7 +417,7 @@ public partial class MainWindow : Window
             return;
         }
 
-        SetStatus("Ищу новые источники", "GitHub и публичные сайты: свежие списки узлов…");
+        SetStatus("Ищу новые источники", "GitHub и публичные сайты: свежие списки серверов…");
         var progress = new Progress<string>(line =>
         {
             StatusDetail.Text = line;
@@ -333,12 +436,12 @@ public partial class MainWindow : Window
             MergeNodes(result.Nodes);
             var removed = PruneAutoSources();
             NodeSourceService.SaveSources(_sources);
-            AppendLog($"Найдено источников: {result.Sources.Count}, узлов {result.Nodes.Count}" +
+            AppendLog($"Найдено источников: {result.Sources.Count}, серверов {result.Nodes.Count}" +
                       (removed > 0 ? $", старых автоисточников удалено: {removed}" : string.Empty));
-            SetStatus("Найдены новые источники", $"Добавлено {result.Sources.Count}, узлов {result.Nodes.Count}");
+            SetStatus("Найдены новые источники", $"Добавлено {result.Sources.Count}, серверов {result.Nodes.Count}");
             _tray?.ShowBalloon(
                 "Найдены новые источники",
-                string.Join(Environment.NewLine, result.Sources.Select(s => s.Name)) + Environment.NewLine + $"Узлов: {result.Nodes.Count}");
+                string.Join(Environment.NewLine, result.Sources.Select(s => s.Name)) + Environment.NewLine + $"Серверов: {result.Nodes.Count}");
         }
         else
         {
@@ -408,7 +511,15 @@ public partial class MainWindow : Window
     /// <summary>При запуске подтягиваем устаревшие подписки, чтобы список не был «вчерашним».</summary>
     private async Task AutoRefreshIfStaleAsync()
     {
-        if (!_settings.AutoUpdateSubscriptions || _busy || _sources.Count == 0)
+        if (_busy || _sources.Count == 0 || _settings.AutomationPaused)
+        {
+            return;
+        }
+
+        // Пустой список — это первый запуск или данные вычистили: обновляем без
+        // ожидания интервала, иначе пользователь видит пустое приложение.
+        var empty = NodeCount == 0;
+        if (!_settings.AutoUpdateSubscriptions && !empty)
         {
             return;
         }
@@ -420,7 +531,8 @@ public partial class MainWindow : Window
         }
 
         var threshold = TimeSpan.FromHours(Math.Clamp(_settings.AutoUpdateHours, 1, 168));
-        var stale = _sources.Any(s => s.Enabled && (s.LastCheckedUtc is null || DateTime.UtcNow - s.LastCheckedUtc.Value > threshold));
+        var stale = empty ||
+                    _sources.Any(s => s.Enabled && (s.LastCheckedUtc is null || DateTime.UtcNow - s.LastCheckedUtc.Value > threshold));
         if (!stale || !BeginOperation("автообновление подписок"))
         {
             return;
@@ -431,7 +543,17 @@ public partial class MainWindow : Window
             var count = await RefreshSourcesCoreAsync(testAfter: false, testLimit: 0);
             _settings.LastAutoRefreshUtc = DateTime.UtcNow;
             SaveSettings();
-            SetStatus("Подписки обновлены", $"Узлов: {count}, MTProto: {_mtprotoRows.Count}");
+
+            if (empty && NodeCount > 0)
+            {
+                // Сразу проверяем партию скрытым ядром: без этого «Рабочие» остаются
+                // пустыми до первого пятиминутного тика.
+                AppendLog($"Первый запуск: проверяю {Math.Min(NodeCount, StartupProbeBatch)} серверов");
+                var batch = SelectBatch(AllRows.Select(row => row.Node)).Take(StartupProbeBatch).ToList();
+                await RunTestAsync(batch, "Стартовая проверка серверов");
+            }
+
+            SetStatus("Подписки обновлены", $"Серверов: {NodeCount}, MTProto: {_mtprotoRows.Count}");
         }
         catch (OperationCanceledException)
         {

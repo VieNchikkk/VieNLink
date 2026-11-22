@@ -79,6 +79,27 @@ internal static class Ui
         return states;
     }
 
+    /// <summary>Кнопка с градиентом: нажатое состояние тоже градиентное.</summary>
+    public static StateListDrawable PressableGradient(
+        Context context,
+        Color from,
+        Color to,
+        Color pressedFrom,
+        Color pressedTo,
+        float radiusDp,
+        Color? border = null,
+        float borderDp = 1f)
+    {
+        var normal = Gradient(from, to, radiusDp, context, border, borderDp);
+        var down = Gradient(pressedFrom, pressedTo, radiusDp, context, border, borderDp);
+        var states = new StateListDrawable();
+        states.AddState(new[] { Android.Resource.Attribute.StatePressed }, down);
+        states.AddState(new[] { Android.Resource.Attribute.StateEnabled }, normal);
+        // Неактивная кнопка тоже должна быть видна, просто без подсветки.
+        states.AddState(Array.Empty<int>(), normal);
+        return states;
+    }
+
     public static TextView Text(Context context, string text, float size, Color color, bool bold = false)
     {
         var view = new TextView(context)
@@ -143,7 +164,7 @@ internal static class Ui
     public static LinearLayout HeaderCard(Palette palette, Context context, params View[] children)
     {
         var card = Column(context);
-        card.SetPadding(Dp(context, 16), Dp(context, 14), Dp(context, 16), Dp(context, 14));
+        card.SetPadding(Dp(context, 16), Dp(context, 16), Dp(context, 16), Dp(context, 18));
         card.Background = Gradient(palette.Card, palette.Panel, 18, context, palette.AccentBorder, 0.7f);
         foreach (var child in children)
         {
@@ -239,7 +260,8 @@ internal static class Ui
         int icon,
         Color tone,
         Color surface,
-        Action click)
+        Action click,
+        bool tintIcon = true)
     {
         var layout = Row(context);
         layout.SetPadding(Dp(context, 12), Dp(context, 10), Dp(context, 12), Dp(context, 10));
@@ -253,7 +275,11 @@ internal static class Ui
         var drawable = Icon(context, icon);
         if (drawable is not null)
         {
-            drawable.SetTint(tone);
+            if (tintIcon)
+            {
+                drawable.SetTint(tone);
+            }
+
             image.SetImageDrawable(drawable);
         }
 

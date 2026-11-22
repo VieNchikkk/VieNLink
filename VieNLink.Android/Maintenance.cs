@@ -12,8 +12,11 @@ internal static class Maintenance
 {
     private const int RequestCode = 4101;
 
-    /// <summary>Сколько партий по 150 узлов проверять за проход, пока нет узла для YouTube.</summary>
-    private const int MaintenanceYouTubeBatches = 4;
+    /// <summary>Сколько партий по 150 серверов проверять за проход, пока нет сервера для YouTube.</summary>
+    private const int MaintenanceYouTubeBatches = 3;
+
+    /// <summary>Сколько серверов проверять сразу после первого заполнения списка.</summary>
+    private const int StartupProbeBatch = 150;
 
     private static readonly SemaphoreSlim Gate = new(1, 1);
 
@@ -21,6 +24,11 @@ internal static class Maintenance
     {
         try
         {
+            if (SettingsStore.Current.AutomationPaused)
+            {
+                return;
+            }
+
             var alarm = (AlarmManager?)context.GetSystemService(Context.AlarmService);
             if (alarm is null)
             {
@@ -36,12 +44,13 @@ internal static class Maintenance
                 return;
             }
 
-            alarm.SetInexactRepeating(
-                AlarmType.RtcWakeup,
-                Java.Lang.JavaSystem.CurrentTimeMillis() + 60_000,
-                30 * 60_000,
-                pending);
-            AppLog.Write("maintenance", "Фоновое обслуживание запланировано (каждые 30 минут)");
+            // Один будильник на 30 минут вместо SetInexactRepeating: SetAndAllowWhileIdle
+            // срабатывает и в Doze (ColorOS иначе откладывал обслуживание на часы),
+            // а следующий ставится при каждом запуске приёмника — цепочка не рвётся,
+            // даже если процесс убьют посередине работы.
+            var trigger = Java.Lang.JavaSystem.CurrentTimeMillis() + 30 * 60_000;
+            alarm.SetAndAllowWhileIdle(AlarmType.RtcWakeup, trigger, pending);
+            AppLog.Write("maintenance", "Следующее фоновое обслуживание через 30 минут");
         }
         catch (Exception exception)
         {
@@ -72,6 +81,11 @@ internal static class Maintenance
     /// <summary>Один проход обслуживания. Ошибки журналируются, но не прерывают остальные шаги.</summary>
     public static async Task RunAsync(Context context, CancellationToken cancellationToken = default)
     {
+        if (SettingsStore.Current.AutomationPaused)
+        {
+            return;
+        }
+
         if (!await Gate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
         {
             return;
@@ -80,6 +94,10 @@ internal static class Maintenance
         try
         {
             await Task.Run(NodeStore.EnsureLoaded, cancellationToken).ConfigureAwait(false);
+
+            // Сначала применяем результаты, которые :probe успел записать до прошлой
+            // остановки процесса — иначе работа в фоне пропадала бы молча.
+            await Task.Run(ProbeClient.ApplyPendingResults, cancellationToken).ConfigureAwait(false);
 
             // Проверка новой версии на GitHub: раз в 6 часов, без загрузки APK.
             try
@@ -94,13 +112,27 @@ internal static class Maintenance
             var settings = NodeStore.Settings;
             var android = AndroidSettingsStore.Current;
             var now = DateTime.UtcNow;
+            var emptyList = NodeStore.Nodes.Count == 0;
+            var counts = NodeStore.Summary();
+            // Живых серверов мало (не набрана квота) — списки обновляем чаще: бесплатные
+            // серверы вымирают, и старый список уже не даёт рабочих адресов.
+            var poorList = !emptyList &&
+                           (counts.Working < NodeLimits.MinWorkingNodes ||
+                            counts.Youtube < NodeLimits.MinWorkingPerService ||
+                            counts.Telegram < NodeLimits.MinWorkingPerService ||
+                            counts.Discord < NodeLimits.MinWorkingPerService ||
+                            counts.Universal < NodeLimits.MinWorkingPerService);
 
             var sourceInterval = settings.AutoRefreshMinutes > 0
                 ? TimeSpan.FromMinutes(Math.Clamp(settings.AutoRefreshMinutes, 15, 1440))
                 : TimeSpan.FromHours(Math.Clamp(settings.AutoUpdateHours, 1, 168));
+            if (poorList)
+            {
+                sourceInterval = TimeSpan.FromMinutes(30);
+            }
 
             if (settings.AutoUpdateSubscriptions &&
-                now - android.LastSourceRefreshUtc >= sourceInterval)
+                (emptyList || now - android.LastSourceRefreshUtc >= sourceInterval))
             {
                 try
                 {
@@ -114,8 +146,35 @@ internal static class Maintenance
                 }
             }
 
-            if (settings.AutoDiscoverSources &&
-                now - settings.LastDiscoveryUtc >= TimeSpan.FromHours(Math.Clamp(settings.AutoDiscoverHours, 1, 168)))
+            // Первый запуск (или список вычистили): не ждём двухминутного тика,
+            // сразу проверяем партии, пока не наберём минимум рабочих серверов.
+            if (emptyList && settings.IdleTestEnabled && android.AutoProbe &&
+                !TunnelService.IsBypassMode && NodeStore.Nodes.Count > 0)
+            {
+                try
+                {
+                    var working = await ProbeClient
+                        .EnsureWorkingQuotaAsync(3, StartupProbeBatch, cancellationToken)
+                        .ConfigureAwait(false);
+                    AppLog.Write("maintenance",
+                        $"Стартовая проверка: рабочих {working} из {NodeLimits.MinWorkingNodes}");
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    AppLog.Write("maintenance", "Стартовая проверка серверов не удалась", exception);
+                }
+            }
+
+            var discoveryDue = now - settings.LastDiscoveryUtc >=
+                TimeSpan.FromHours(Math.Clamp(settings.AutoDiscoverHours, 1, 168));
+            if (!discoveryDue && emptyList &&
+                now - settings.LastDiscoveryUtc >= TimeSpan.FromMinutes(30))
+            {
+                // Пустой список: пробуем искать источники чаще, чем раз в сутки.
+                discoveryDue = true;
+            }
+
+            if (settings.AutoDiscoverSources && discoveryDue)
             {
                 try
                 {
@@ -126,7 +185,7 @@ internal static class Maintenance
                     settings.LastDiscoveryUtc = DateTime.UtcNow;
                     SettingsStore.Save();
                     AppLog.Write("maintenance",
-                        $"Автопоиск источников: новых {added}, узлов {discovery.Nodes.Count}, MTProto {mtproto}");
+                        $"Автопоиск источников: новых {added}, серверов {discovery.Nodes.Count}, MTProto {mtproto}");
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
@@ -134,20 +193,31 @@ internal static class Maintenance
                 }
             }
 
-            if (android.AutoMtProto && now - android.LastMtProtoCollectUtc >=
-                TimeSpan.FromMinutes(MtProtoSchedule.CollectMinutes))
+            if (android.AutoMtProto)
             {
-                try
+                var shouldCollect = now - android.LastMtProtoCollectUtc >=
+                                    TimeSpan.FromMinutes(
+                                        MtProtoStore.WorkingCount < MtProtoSchedule.MinWorking
+                                            ? MtProtoSchedule.CollectMinutesWhenFew
+                                            : MtProtoSchedule.CollectMinutes) ||
+                                    MtProtoStore.Snapshot().Count == 0;
+                if (shouldCollect)
                 {
-                    await MtProtoStore.CollectAsync(null, cancellationToken).ConfigureAwait(false);
-                }
-                catch (Exception exception) when (exception is not OperationCanceledException)
-                {
-                    AppLog.Write("maintenance", "Фоновый сбор MTProto не удался", exception);
+                    try
+                    {
+                        await MtProtoStore.CollectAsync(null, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (Exception exception) when (exception is not OperationCanceledException)
+                    {
+                        AppLog.Write("maintenance", "Фоновый сбор MTProto не удался", exception);
+                    }
                 }
 
-                if (now - android.LastMtProtoTestUtc >=
-                    TimeSpan.FromMinutes(MtProtoSchedule.WorkingRecheckMinutes))
+                // Нет ни одного проверенного прокси — проверяем, не дожидаясь интервала.
+                var needTest = now - android.LastMtProtoTestUtc >=
+                                   TimeSpan.FromMinutes(MtProtoSchedule.WorkingRecheckMinutes) ||
+                               MtProtoStore.WorkingCount == 0;
+                if (needTest)
                 {
                     try
                     {
@@ -162,28 +232,25 @@ internal static class Maintenance
 
             MtProtoStore.Prune();
 
-            if (android.AutoProbe && settings.IdleTestEnabled && !TunnelService.IsBypassMode)
+            if (android.AutoProbe && settings.IdleTestEnabled && !TunnelService.IsBypassMode &&
+                !ProbeClient.IsPaused)
             {
                 try
                 {
-                    var tested = await ProbeClient.RunBatchAsync(10, cancellationToken).ConfigureAwait(false);
-                    if (tested.Tested > 0)
-                    {
-                        AppLog.Write("maintenance",
-                            $"Фоновая проверка: рабочих {tested.Working} из {tested.Tested}");
-                    }
-                    else if (tested.Error is not null)
-                    {
-                        AppLog.Write("maintenance", "Фоновая проверка: " + tested.Error);
-                    }
+                    // Минимум десять рабочих серверов: пока их меньше, проверяем партии подряд.
+                    var working = await ProbeClient
+                        .EnsureWorkingQuotaAsync(3, NodeTester.MaxBatch, cancellationToken)
+                        .ConfigureAwait(false);
+                    AppLog.Write("maintenance",
+                        $"Фоновая проверка: рабочих {working} из {NodeLimits.MinWorkingNodes}");
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
-                    AppLog.Write("maintenance", "Фоновая проверка узлов не удалась", exception);
+                    AppLog.Write("maintenance", "Фоновая проверка серверов не удалась", exception);
                 }
 
-                // YouTube-узла нет — проверяем партии дальше, чтобы кнопка YouTube
-                // не осталась без живого узла. Основная причина: бесплатные узлы умирают.
+                // YouTube-сервера нет — проверяем партии дальше, чтобы кнопка YouTube
+                // не осталась без живого сервера. Основная причина: бесплатные серверы умирают.
                 if (NodeStore.PickForService(NodeStore.QuickService.YouTube) is null)
                 {
                     try
@@ -193,12 +260,12 @@ internal static class Maintenance
                                 cancellationToken)
                             .ConfigureAwait(false);
                         AppLog.Write("maintenance", youtube is null
-                            ? "YouTube: рабочего узла пока нет, проверка продолжится в фоне"
-                            : "YouTube: рабочий узел найден автоматически");
+                            ? "YouTube: рабочего сервера пока нет, проверка продолжится в фоне"
+                            : "YouTube: рабочий сервер найден автоматически");
                     }
                     catch (Exception exception) when (exception is not OperationCanceledException)
                     {
-                        AppLog.Write("maintenance", "Автопоиск узла для YouTube не удался", exception);
+                        AppLog.Write("maintenance", "Автопоиск сервера для YouTube не удался", exception);
                     }
                 }
             }
@@ -219,6 +286,17 @@ public sealed class MaintenanceReceiver : BroadcastReceiver
         {
             return;
         }
+
+        if (SettingsStore.Current.AutomationPaused)
+        {
+            // Автоматика выключена пользователем: не будим процесс и не ставим
+            // следующий будильник (его поставит кнопка «Запустить автоматику»).
+            return;
+        }
+
+        // Следующий будильник ставим сразу: если процесс убьют во время долгой
+        // проверки, цепочка обслуживания всё равно продолжится.
+        Maintenance.EnsureScheduled(context);
 
         var pending = GoAsync();
         _ = Task.Run(async () =>

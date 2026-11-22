@@ -1,4 +1,4 @@
-﻿using System.Buffers.Binary;
+using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
@@ -1281,7 +1281,7 @@ internal sealed class DesyncService : IDisposable
         }
     }
 
-    /// <summary>Проверка прямого доступа через запущенный движок (без прокси-узла).</summary>
+    /// <summary>Проверка прямого доступа через запущенный движок (без прокси-сервера).</summary>
     public static async Task<DesyncProbeResult> ProbeAsync(
         int index,
         string name,
@@ -1492,7 +1492,7 @@ internal sealed class DesyncService : IDisposable
     /// <summary>
     /// Скачивает начало видео-потока. <paramref name="resolveIp"/> подменяет адрес
     /// видео-хоста, сохраняя SNI и Host: так можно уйти с заблокированного
-    /// локального GGC на другой узел Google.
+    /// локального GGC на другой сервер Google.
     /// </summary>
     internal static async Task<(int Code, long Bytes)> CurlRangeResolvedAsync(
         string url,

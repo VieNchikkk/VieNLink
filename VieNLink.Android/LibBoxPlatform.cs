@@ -15,7 +15,7 @@ internal sealed class LibBoxPlatform : Java.Lang.Object, IPlatformInterface
 
     /// <summary>
     /// Платформа одна на процесс. TUN и protect берутся у текущей службы
-    /// (<see cref="TunnelService.Active"/>): в режиме проверки узлов её нет, TUN не запрашивается.
+    /// (<see cref="TunnelService.Active"/>): в режиме проверки серверов её нет, TUN не запрашивается.
     /// </summary>
     public LibBoxPlatform()
     {

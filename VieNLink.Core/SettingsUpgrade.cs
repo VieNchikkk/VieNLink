@@ -19,13 +19,28 @@ internal static class SettingsUpgrade
             changed = true;
         }
 
-        // Будущие миграции добавлять так:
-        // if (settings.SchemaVersion < 2)
-        // {
-        //     ...
-        //     settings.SchemaVersion = 2;
-        //     changed = true;
-        // }
+        if (settings.SchemaVersion < 2)
+        {
+            // Партия 40 в простое не успевала за мёртвыми бесплатными серверами:
+            // на ПК можно смело проверять 200 за проход.
+            if (settings.IdleTestBatch < 200)
+            {
+                settings.IdleTestBatch = 200;
+            }
+        }
+
+        if (settings.SchemaVersion < 3)
+        {
+            // Все источники по умолчанию включены (и ПК, и телефон): разово включаем
+            // и те, что старые версии держали выключенными.
+            NodeSourceService.EnableAllSourcesOnce = true;
+        }
+
+        if (settings.SchemaVersion < 3)
+        {
+            settings.SchemaVersion = 3;
+            changed = true;
+        }
 
         if (settings.SchemaVersion > SchemaVersions.Settings)
         {

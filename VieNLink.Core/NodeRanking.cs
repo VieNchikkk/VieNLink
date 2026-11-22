@@ -1,12 +1,12 @@
 namespace VieNLink;
 
 /// <summary>
-/// Оценка того, насколько трафик узла похож на обычный HTTPS.
+/// Оценка того, насколько трафик сервера похож на обычный HTTPS.
 /// Чем выше оценка, тем сложнее ТСПУ отличить подключение от визита на популярный сайт.
 /// </summary>
 internal static class NodeRanking
 {
-    /// <summary>Чем больше, тем предпочтительнее узел при выборе и попадании в конфиг.</summary>
+    /// <summary>Чем больше, тем предпочтительнее сервер при выборе и попадании в конфиг.</summary>
     public static int Score(ProxyNode node)
     {
         var json = node.OutboundJson;
@@ -57,7 +57,7 @@ internal static class NodeRanking
             score -= 50;
         }
 
-        // Отключённая проверка сертификата — риск перехвата: такой узел выбираем последним.
+        // Отключённая проверка сертификата — риск перехвата: такой сервер выбираем последним.
         if (node.AllowInsecure)
         {
             score -= 40;
@@ -66,7 +66,7 @@ internal static class NodeRanking
         return score;
     }
 
-    /// <summary>Узел маскирует трафик под обычный HTTPS/CDN — его и оставляет фильтр «только маскированные».</summary>
+    /// <summary>Сервер маскирует трафик под обычный HTTPS/CDN — его и оставляет фильтр «только маскированные».</summary>
     public static bool IsMasked(ProxyNode node)
     {
         var json = node.OutboundJson;
@@ -138,7 +138,7 @@ internal static class NodeRanking
     }
 
     /// <summary>
-    /// Семейство камуфляжа. Позволяет не ставить подряд узлы с одним и тем же
+    /// Семейство камуфляжа. Позволяет не ставить подряд серверы с одним и тем же
     /// заблокированным шаблоном: умер YouTube-SNI — пробуем Yandex-SNI.
     /// </summary>
     public static string Family(ProxyNode node)

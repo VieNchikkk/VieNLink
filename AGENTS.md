@@ -1,4 +1,4 @@
-﻿# AGENTS.md — VieNLink
+# AGENTS.md — VieNLink
 
 ## Статус
 Бета-версия: основные режимы проверены, но возможны сбои. Статус виден в интерфейсе
@@ -26,7 +26,7 @@
 
 ## Карта файлов
 - `VieNLink.Core/` — общее ядро (`net10.0`, без Windows): `Models`, `LinkParser`, `SubscriptionParser`, `NodeSources`, `NodeRanking`, `SingBoxConfigBuilder`, `ClashApiClient`, `TlsHello`, `TlsFragmentForwarder`, `MtProtoService`, `SourceDiscoveryService`, `JsonFileStore`, `AppLog`, `AppPaths`, `SecretProtector`. Используется Windows- и Android-версиями.
-- `VieNLink.Android/` — Android-клиент (`net10.0-android`, без MAUI): `MainActivity` (+ `MainActivity.Pages`) — шапка и вкладки «Подключение / Обход / Инструменты / Журнал / Общие»; `ThemeManager` + `Ui` — палитра Windows, карточки и кнопки; `TelegramActivity` + `MtProtoStore` — MTProto через RSS; `TunnelActivity` — «Туннелирование», только маршрутизация по доменам; `NodesActivity` (сводка узлов без списка), `SourcesActivity` (подписки и ссылки), `SettingsActivity`, `AppPickerActivity` (список приложений с иконками), `LogActivity`, `AboutActivity`, `LicenseActivity` (тексты GPL-3.0 и сторонних компонентов из assets), `ForwarderHost`, `BypassActivity`, `TunnelService : VpnService` (автопереключение, действия уведомления «Лучший»/«Узлы»/«Отключить»), `TunnelWidget` (виджет), `Maintenance` + `MaintenanceReceiver` (фон каждые 30 минут), `MtProtoScheduler` (сбор/проверка MTProto каждые 2 минуты в процессе), `NetworkProbe` (выход/скорость), `AndroidUpdate` (поиск релиза с APK, загрузка и SHA-256), `UpdateCenter` (автопроверка, диалог установки), `UpdateNotifier` (уведомления), `ApkInstaller` + `UpdateInstallReceiver` (`PackageInstaller`), `LogReader`, `CoreRuntime` (единый `CommandServer` на процесс), `ProbeService` (проверка узлов в отдельном процессе `:probe`), `ProbeClient`, `ProbeScheduler`, `ProbeModels` (схемы запроса/результата/хода `:probe`), `NodeStore` (в т.ч. `PickVerifiedAsync`), `NodeTester` (Clash API 20801), `AndroidSettings`, `BootReceiver`, `TunnelTileService`, `VpnStarter`, `SettingsStore`, `UiMetrics`, `VieNLinkApp` (точка входа Application: регистрация Keystore, перенаправление stderr ядра, запуск планировщиков), `LibBoxPlatform`, `LibBoxServerHandler`, `LocalDnsTransport`, `DefaultNetworkCallback` + `NetworkInterfaceIterator` (смена сети и список интерфейсов для ядра), `KeystoreSecretStore`; ресурсы — `Resources/values`, `Resources/drawable`, `Resources/mipmap-*`, `Resources/layout/widget.xml`, `Resources/xml/widget_info.xml`; ядро подключается как `Libs\libbox.aar`.
+- `VieNLink.Android/` — Android-клиент (`net10.0-android`, без MAUI): `MainActivity` (+ `MainActivity.Pages`) — шапка и вкладки «Подключение / Обход / Инструменты / Журнал»; `ThemeManager` + `Ui` — палитра Windows, карточки и кнопки; `TelegramActivity` + `MtProtoStore` — MTProto через RSS; `TunnelActivity` — «Туннелирование», только маршрутизация по доменам; `NodesActivity` (сводка узлов без списка), `SourcesActivity` (подписки и ссылки), `SettingsActivity`, `AppPickerActivity` (список приложений с иконками), `LogActivity`, `AboutActivity`, `LicenseActivity` (тексты GPL-3.0 и сторонних компонентов из assets), `ForwarderHost`, `BypassActivity`, `TunnelService : VpnService` (автопереключение, действия уведомления «Лучший»/«Узлы»/«Отключить»), `TunnelWidget` (виджет), `Maintenance` + `MaintenanceReceiver` (фон каждые 30 минут), `MtProtoScheduler` (сбор/проверка MTProto каждые 2 минуты в процессе), `NetworkProbe` (выход/скорость), `AndroidUpdate` (поиск релиза с APK, загрузка и SHA-256), `UpdateCenter` (автопроверка, диалог установки), `UpdateNotifier` (уведомления), `ApkInstaller` + `UpdateInstallReceiver` (`PackageInstaller`), `LogReader`, `CoreRuntime` (единый `CommandServer` на процесс), `ProbeService` (проверка узлов в отдельном процессе `:probe`), `ProbeClient`, `ProbeScheduler`, `ProbeModels` (схемы запроса/результата/хода `:probe`), `NodeStore` (в т.ч. `PickVerifiedAsync`), `NodeTester` (Clash API 20801), `AndroidSettings`, `BootReceiver`, `TunnelTileService`, `VpnStarter`, `SettingsStore`, `UiMetrics`, `VieNLinkApp` (точка входа Application: регистрация Keystore, перенаправление stderr ядра, запуск планировщиков), `LibBoxPlatform`, `LibBoxServerHandler`, `LocalDnsTransport`, `DefaultNetworkCallback` + `NetworkInterfaceIterator` (смена сети и список интерфейсов для ядра), `KeystoreSecretStore`; ресурсы — `Resources/values`, `Resources/drawable`, `Resources/mipmap-*`, `Resources/layout/widget.xml`, `Resources/xml/widget_info.xml`; ядро подключается как `Libs\libbox.aar`.
 - `VieNLink.slnx` — решение: `VieNLink.Core`, `VieNLink`, `VieNLink.SelfTest`, `VieNLink.Android`.
 - `VieNLink/App.xaml(.cs)` — запуск, один экземпляр, тема, журнал, перехват ошибок.
 - `VieNLink/app.manifest` — запуск без прав администратора, Windows 10/11, длинные пути.
@@ -60,7 +60,7 @@
 - `VieNLink/ProxyManager.cs` — оркестрация: проверка узлов по списку заблокированных доменов (`TlsHello.TargetDomains`) и `OpenDomains`, выбор узла, системный прокси, health-check. Есть `TestLoadedNodesAsync` — проверка только уже загруженных узлов без перезапуска ядра (для простоя).
 - `VieNLink/SystemProxy.cs` — включение/восстановление системного прокси и список исключений.
 - `VieNLink/TrayIconService.cs` — значок в трее; в меню только «Подключить лучший» без списка адресов.
-- `VieNLink/ZapretWidget.xaml(.cs)` — плавающий виджет с тремя способами: «Zapret», «Свой обход DPI» (WinDivert) и «Видео YouTube» (через узел). Работающий режим подсвечен, ниже мелко подписаны режим и стратегия; в свёрнутом виде — точка состояния (зелёная/красная) и название включённого режима. Место и свёрнутое состояние запоминаются в `settings.json`. Виджет по умолчанию **поверх всех окон**; закреп «📌» в шапке и галочка «Виджет поверх всех окон» в «Общих» переключают `AppSettings.WidgetTopmost` (по умолчанию `true`).
+- `VieNLink/ZapretWidget.xaml(.cs)` — плавающий виджет с тремя способами: «Zapret», «Свой обход DPI» (WinDivert) и «Видео YouTube» (через узел). Работающий режим подсвечен, ниже мелко подписаны режим и стратегия; в свёрнутом виде — точка состояния (зелёная/красная) и название включённого режима. Место и свёрнутое состояние запоминаются в `settings.json`. Виджет по умолчанию **поверх всех окон**; закреп «📌» в шапке и галочка «Виджет поверх всех окон» в «Общих» переключают `AppSettings.WidgetTopmost` (по умолчанию `true`). Сам виджет показывается при каждом запуске (`AppSettings.WidgetVisible`, по умолчанию `true`); закрытие крестиком выключает его до следующего включения вручную.
 - `VieNLink/WindowChromeTheme.cs` — цвет системного заголовка окна под текущую тему через `DwmSetWindowAttribute` (Windows 10/11).
 - `VieNLink/TaskbarIdentity.cs` — единый `AppUserModelID` (`VieN.VieNLink`) для панели задач: закреплённый ярлык и ярлык с рабочего стола открывают одну кнопку; тот же ID прописан в ярлыках `build/installer.iss`.
 - `VieNLink/ProcessPickerWindow.xaml(.cs)` — выбор приложений из запущенных процессов для правила «только для приложений из списка».
@@ -72,6 +72,10 @@
   `ApkInstaller` (`PackageInstaller`, `REQUEST_INSTALL_PACKAGES`). `UpdateCenter` проверяет
   при запуске (не чаще 6 ч) и в фоне, `UpdateNotifier` показывает ход/готовность. Совсем
   без подтверждения Android APK не ставит — системное окно установки обязательно.
+  Если JSON API GitHub не ответил (блокировка/лимит), читается atom-лента релизов; APK
+  скачивается с GitHub, затем с зеркал `ghfast.top`/`gh-proxy.com`. Неудачная проверка
+  **не** записывает время последней проверки — иначе одна ошибка сети откладывала бы
+  обновление на 6 часов (это и выглядело как «новая версия не скачивается»).
 - Магазины: Play и RuStore запрещают приложению ставить обновления самому. Поэтому версии
   две: GitHub-APK (`publish-android.ps1`) с автообновлением и `REQUEST_INSTALL_PACKAGES`,
   и магазинная (`publish-store.ps1`, `StoreBuild=true`) без этого разрешения и без
@@ -194,7 +198,8 @@ YouTube открывается без узла, видео требует узе
   ни в списке, ни в уведомлении — только задержка.
 - Android-проверка узлов изолирована в процессе `:probe` (`ProbeService`): у него свой
   libbox, порты 21800+ и папка `files/probe`, поэтому VPN и основное ядро не перезапускаются.
-  `ProbeScheduler` раз в 2 минуты запускает партию 10 узлов; ручная проверка — до 150.
+  `ProbeScheduler` такт раз в минуту: перепроверка рабочих с истекающим окном свежести
+  (5 минут, партия 20), а поиск новых — раз в 2–5 минут; ручная проверка — до 150.
   Результаты пишутся в `probe-results.json`, основной процесс применяет их к `NodeStore`.
   При TUN-обходе проверка недоступна (он перехватывает весь трафик).
 - Android: поиск можно остановить — кнопка шапки во время проверки называется
@@ -202,7 +207,28 @@ YouTube открывается без узла, видео требует узе
   команду `STOP_PROBE` (процесс сразу завершается и не тратит трафик) и приостанавливает
   фоновый поиск до явного действия. `ProbeClient.Resume` вызывают «Проверить узлы»,
   «Проверить» на экране «Узлы» и кнопки сервисов. «Отключить» во время поиска узла
-  тоже гасит `:probe`.
+  тоже гасит `:probe`. Пока идёт подключение кнопка в шапке называется «Отмена»;
+  на экране «Узлы» кнопка проверки становится «Остановить поиск»; в Telegram
+  «Подключить Telegram через узел» превращается в «Отменить подключение» (повторное
+  нажатие отменяет `PickVerifiedAsync` и гасит `:probe`). На ПК это `CancelButton`
+  («Отменить») — он есть у любой операции `BeginOperation`, включая «Сменить сервер» и проверки.
+- Android-шапка: три равные кнопки в один ряд — «Проверить серверы», «Сменить сервер»,
+  «Поделиться»; отдельной кнопки «Скорость» нет (скорость всегда в строке метрик). При
+  отключённом VPN пинг, скорость, выход и трафик не показываются («Сервер не подключён»,
+  «—»). Большая кнопка Telegram MTProtoProxies — синяя в цвет Telegram. В пользовательском
+  тексте слово «узел» заменено на «сервер» (интерфейс, подсказки, сообщения ядра);
+  в коде остаются `ProxyNode`/`NodeStore`.
+- Android: нижних вкладок четыре — «Подключение / Обход / Инструменты / Журнал».
+  Вкладка «Общие» удалена: «Проверить обновление» — в «Настройках» → «Обновления»,
+  «Очистить кэш серверов» и «Настройки VPN Android» — в «Данные и VPN», памятка о
+  виджете — к плитке; версия, лицензии, документы и пути остались в «О программе»
+  без дубликатов. Deep-link `tab` ограничен 0..3.
+- Счётчики после простоя не висят нулями: Android `ProbeScheduler` делает первый такт
+  через 2 секунды, а `MainActivity.OnResume` вызывает `EnsureFreshCountersAsync`
+  (перепроверка до 20 ранее рабочих серверов, `workingOnly`); Windows после загрузки
+  кэша и при `Activated` запускает `RunIdleTestAsync(searchNew:false)`, если свежих
+  серверов меньше `MinWorkingNodes`. Полная пятиминутная перепроверка остаётся, но
+  первые числа появляются через секунды.
 - Windows проверяет узлы так же: базовые YouTube/Telegram, затем полный список
   `TlsHello.TargetDomains` (18 заблокированных доменов) плюс универсальный Cloudflare.
   `ProxyNode.OpenDomains` — сколько доменов открылось; узел считается лучше по числу
@@ -332,8 +358,13 @@ YouTube открывается без узла, видео требует узе
   не реже раза в 5 минут, при работе — маленькие партии (до 10–30) каждые 1–2 минуты.
   Пока не набрана квота (10 рабочих и по 2 на каждый сервис), такт сокращается до
   1 минуты в простое и 2 минут при работе. Рабочие узлы перепроверяются каждые
-  `NodeLimits.WorkingRecheckMinutes` (30 минут), а не раз в `IdleRecheckHours`: иначе
-  «рабочий» из кэша висел в значках часами.
+  `NodeLimits.WorkingRecheckMinutes` (5 минут), а не раз в `IdleRecheckHours`: иначе
+  «рабочий» из кэша висел в значках часами. Помимо поиска новых узлов такт раз в минуту
+  делает отдельный маленький проход только по рабочим, у которых истекает окно свежести
+  (`NodeAvailability.RecheckCutoffUtc`, за `RecheckLeadMinutes` = 1 мин до истечения);
+  поэтому счётчики не «мигают» между редкими проходами поиска. Сами счётчики в шапке
+  и на вкладке «Узлы» обновляются таймером раз в минуту (`_counterTimer`), даже когда
+  ничего не проверяется.
   При активном TUN скрытое ядро не используется (его трафик ушёл бы в туннель) — проверяются
   только уже загруженные узлы. При zapret/своём обходе DPI проверка идёт: оба ограничены
   целевыми доменами и не трогают соединения к серверам узлов, а партия уменьшается до 5 узлов
@@ -388,12 +419,16 @@ YouTube открывается без узла, видео требует узе
   во время `BeginOperation` и прерывает текущее действие, `HeaderDisconnectButton`
   («Отключить», красная) видна, когда что-то активно, и снимает узел, kill switch, zapret,
   свой обход DPI и TUN-обход (`DisconnectEverythingAsync`). Рядом — `HeaderNextNodeButton`
-  («Дальше»): следующий свежий проверенный узел по пингу, тёплое переключение через
-  Clash selector без перезапуска ядра. Обе скрыты по умолчанию,
+  («Сменить сервер»): очередь свежих проверенных серверов, текущий сервер уходит в конец,
+  следующий берётся из начала (круговая ротация, `_nodeRotation`), тёплое переключение через
+  Clash selector без перезапуска ядра. Ручное переключение не регистрирует провал сервера
+  (`ConnectAsync(..., markFailures: false)`), поэтому рабочий сервер не выпадает из списка
+  и счётчиков. Рядом `HeaderShareNodeButton` («Поделиться») — копирует `RawLink`
+  подключённого сервера в буфер обмена. Обе скрыты по умолчанию,
   подсказки обновляет `UpdateHeaderState`. Постоянная строка `HeaderNodesText` показывает
-  загруженные узлы и счётчики проверенных по сервисам (YouTube, Discord, Telegram,
+  загруженные серверы и счётчики проверенных по сервисам (YouTube, Discord, Telegram,
   Универсальные); её обновляет `UpdateNodesSummary`, ход операций выводится отдельной строкой
-  `StatusDetail`. Трей дублирует быстрый выбор из восьми лучших узлов.
+  `StatusDetail`. Трей дублирует быстрый выбор из восьми лучших серверов.
 - Все окна сообщений — `AppDialog` через класс `VieNLink.MessageBox`: тёмная/светлая тема,
   скруглённое окно, иконка, кнопки Да/Нет/ОК. Системный `System.Windows.MessageBox` в UI не используется.
 - Удачные конфиги обходов хранятся в `%LOCALAPPDATA%\VieNLink\bypass-profiles.json`
@@ -441,11 +476,59 @@ YouTube открывается без узла, видео требует узе
 - Источники хранятся в `sources.dat`, зашифрованном DPAPI (`SecretStore`, `JsonFileStore.WriteProtected`):
   ссылки подписок содержат токены. Старый открытый `sources.json` читается один раз и удаляется
   после успешной записи зашифрованного.
+- **Все источники по умолчанию включены** (и ПК, и телефон): `DefaultSources` больше не
+  выключает крупные агрегаторы и `@v2rayng_config`. Разовая миграция схемы настроек 3
+  (`SettingsUpgrade` → `NodeSourceService.EnableAllSourcesOnce`) включает и те источники,
+  которые старые установки держали выключенными; новые источники из обновлений добавляются
+  включёнными.
+- Надёжность фона. Android: будильник обслуживания — одноразовый `SetAndAllowWhileIdle`
+  (+ перестановка при каждом срабатывании), а не `SetInexactRepeating`, который ColorOS/Doze
+  откладывал на часы; результаты `:probe`, оставшиеся после убийства основного процесса,
+  применяются при следующем запуске (`ProbeClient.ApplyPendingResults`); такт `ProbeScheduler`
+  не наслаивается (`_busy`); полный провал партии при отсутствии прямого интернета
+  откатывает статусы (`NodeTester.HasDirectInternetAsync`), иначе обрыв сети в метро
+  вычищал непроверенные узлы. ПК: фоновый такт `OnIdleTick` обёрнут в try/catch; откат
+  партии при недоступном прямом интернете работает для любого размера партии
+  (`ProxyManager.TestWithApiAsync`), а не только для 20+.
+- Кэш узлов (`nodes.json`) хранит и разобранные поля (`Protocol/Name/Server/Port/Tag/Identity/OutboundJson`):
+  холодный старт не разбирает заново 12 000 ссылок (раньше это выглядело как «приложение
+  долго грузится»), старый кэш читается прежним путём. Пустым списком кэш не перезаписывается
+  (`SaveCache` проверяет существующий файл), а при пустом/битом `nodes.json` узлы
+  восстанавливаются из `nodes.json.bak`. Явная очистка удаляет оба файла.
+- Производительность: `ProxyNode.RankScore` кэширует `NodeRanking.Score` (сортировка
+  12 000 узлов больше не ищет подстроки в outbound-JSON сотни тысяч раз); кэш узлов
+  пишется компактно (`JsonFileStore.WriteCompact`) — файл примерно вдвое меньше и быстрее.
+  На Android тяжёлые операции вынесены с UI-потока (`Task.Run`): отбор узлов для «Дальше»
+  и кнопок сервисов, `ProbeClient.RunBatchAsync`, холодная сборка конфига — это устранило
+  ANR, из-за которого ColorOS закрывал приложение при втором нажатии «Дальше». Сводки
+  считаются одним проходом без копии списка (`NodeStore.DetailedSummary`,
+  `UpdateNodesSummary`), `NodeStore.Selected` кэширует ссылку. Поиск новых узлов в
+  стабильном состоянии — раз в 10 минут; рабочие всё равно перепроверяются каждые 5 минут.
+- `ShareLink.Build` собирает нормальную `vless://`/`vmess://`/`trojan://`/`ss://`/`hysteria2://`
+  ссылку из `OutboundJson`, если `RawLink` — это JSON из sing-box/Xray-подписки
+  (иначе «Поделиться» копировало JSON-объект). Используется кнопкой «Поделиться сервером»
+  на Android (системный лист) и на ПК (буфер обмена).
+- Глобальный выключатель автоматики — `AppSettings.AutomationPaused` и кнопка
+  «Остановить все процессы»/«Запустить все процессы» в «Настройках» (Android) и
+  на вкладке настроек ПК. Останавливает проверку серверов, MTProto, обслуживание по
+  будильнику, автообновления и автопереключение; туннель и ручные кнопки продолжают
+  работать. Android: `Automation.Apply` гасит `ProbeScheduler`/`MtProtoScheduler`,
+  снимает будильник `Maintenance` и процесс `:probe`; ПК: останавливает `_idleTimer`,
+  `_autoTimer`, `_probe` и проверки обновлений.
 - Конфиг ядра (`runtime\sing-box-config.json`) с UUID удаляется после отключения и выхода.
 - `NodeSourceService.FetchRawAsync` при ошибке прокси повторяет запрос напрямую (`HttpDirect`):
   иначе включённый прокси на мёртвом узле блокировал обновление GitHub-списков.
 - Событие сбоя узла не теряется во время проверки: `OnNodeUnhealthy` запоминает узел в
   `_pendingFailoverName`, а `EndOperation` запускает переключение сразу после операции.
+- Android-автопереключение (`TunnelService.HealthTickAsync`) проверяет выбранный узел раз в
+  20 с и после двух провалов переключается на загруженный. Перед проверкой `NodeStore`
+  догружается, а если выбранный узел не входит в работающий конфиг (его могла выбрать
+  фоновая проверка) — сразу берётся загруженный, не дожидаясь двух провалов. Провал
+  регистрируется в `NodeHealth`, поэтому счётчики сразу перестают показывать мёртвый узел.
+  Если у устройства нет Wi-Fi/мобильной сети (Doze, экран выключен), проверка пропускается —
+  иначе приложение меняло бы живые узлы из-за отсутствия сети. При перезапуске службы
+  системой (`START_STICKY` без intent) восстанавливается последний режим (`LastRunWasBypass`):
+  TUN-обход по сохранённой стратегии или прокси-узел из кэша, а не прямой TUN без прокси.
 - `NodeRanking.Score` штрафует узлы с `tls.insecure` (−40) и помечает их «⚠»: такой узел видит
   трафик посредника, поэтому автоматически первым не выбирается.
 - `AppLog.Write` пишет стек исключения, а не только текст: без него разбор падений у пользователя

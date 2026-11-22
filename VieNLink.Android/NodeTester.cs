@@ -1,6 +1,6 @@
 namespace VieNLink.Mobile;
 
-/// <summary>Итог проверки узлов для интерфейса.</summary>
+/// <summary>Итог проверки серверов для интерфейса.</summary>
 internal sealed record NodeTestSummary(
     int Tested,
     int Working,
@@ -13,15 +13,15 @@ internal sealed record NodeTestSummary(
     int BestDomains = 0);
 
 /// <summary>
-/// Проверка задержки узлов через Clash API внутри libbox (127.0.0.1:20801).
-/// Если туннель уже поднят — опрашиваются только узлы его конфига, ядро не перезапускается.
+/// Проверка задержки серверов через Clash API внутри libbox (127.0.0.1:20801).
+/// Если туннель уже поднят — опрашиваются только серверы его конфига, ядро не перезапускается.
 /// Если нет — поднимается временный конфиг без TUN, и после проверки ядро останавливается.
 /// </summary>
 internal static class NodeTester
 {
     /// <summary>
     /// За один прогон проверяем не весь список: мобильный канал слабее, а каждый запрос
-    /// идёт через узел и тратит его трафик.
+    /// идёт через сервер и тратит его трафик.
     /// </summary>
     public const int MaxBatch = 150;
 
@@ -30,10 +30,10 @@ internal static class NodeTester
 
     /// <summary>
     /// Проверочные адреса по сервисам. Универсальный (Cloudflare) — приоритетный:
-    /// именно его задержка показывается и учитывается при выборе лучшего узла.
-    /// YouTube и Telegram отмечены отдельно, Discord нужен, чтобы не браковать узел
+    /// именно его задержка показывается и учитывается при выборе лучшего сервера.
+    /// YouTube и Telegram отмечены отдельно, Discord нужен, чтобы не браковать сервер
     /// из-за блокировки одного домена. Несколько адресов на сервис — чтобы блокировка
-    /// одного домена не прятала рабочий узел.
+    /// одного домена не прятала рабочий сервер.
     /// </summary>
     private static readonly (string Service, string Url)[] ProbeUrls =
     {
@@ -47,7 +47,7 @@ internal static class NodeTester
 
     /// <summary>
     /// Полный список заблокированных доменов (тот же, что у zapret/десинка).
-    /// Прогоняется только для узлов, которые прошли базовую проверку: у мёртвых узлов
+    /// Прогоняется только для серверов, которые прошли базовую проверку: у мёртвых серверов
     /// это была бы пустая трата времени и трафика.
     /// </summary>
     private static readonly (string Service, string Url)[] FullProbes = BuildFullProbes();
@@ -80,7 +80,7 @@ internal static class NodeTester
             var ordered = NodeStore.OrderForConfig(NodeStore.Nodes);
             if (ordered.Count == 0)
             {
-                return new NodeTestSummary(0, 0, 0, "Список узлов пуст: обновите источники");
+                return new NodeTestSummary(0, 0, 0, "Список серверов пуст: обновите источники");
             }
 
             List<ProxyNode> candidates;
@@ -92,10 +92,10 @@ internal static class NodeTester
                 if (candidates.Count == 0)
                 {
                     return new NodeTestSummary(0, 0, 0,
-                        "Туннель запущен с другим конфигом — сначала выберите узел в списке");
+                        "Туннель запущен с другим конфигом — сначала выберите сервер в списке");
                 }
 
-                progress?.Report($"Проверяю узлы работающего туннеля: {candidates.Count}");
+                progress?.Report($"Проверяю серверы работающего туннеля: {candidates.Count}");
             }
             else
             {
@@ -105,7 +105,7 @@ internal static class NodeTester
                 }
 
                 candidates = ordered.Take(MaxBatch).ToList();
-                progress?.Report($"Поднимаю ядро для проверки: {candidates.Count} узлов");
+                progress?.Report($"Поднимаю ядро для проверки: {candidates.Count} серверов");
 
                 var testSettings = new AppSettings
                 {
@@ -139,7 +139,7 @@ internal static class NodeTester
                 candidates = candidates.Where(node => loaded.Contains(node.Tag)).ToList();
                 if (candidates.Count == 0)
                 {
-                    return new NodeTestSummary(0, 0, 0, "Ядро не приняло ни одного узла");
+                    return new NodeTestSummary(0, 0, 0, "Ядро не приняло ни одного сервера");
                 }
             }
 
@@ -149,8 +149,8 @@ internal static class NodeTester
                 return new NodeTestSummary(0, 0, 0, "Clash API не ответил: ядро не поднялось");
             }
 
-            // Снимок: если не открылся ни один узел из большой партии, это проблема сети,
-            // а не узлов — статусы не меняем, иначе можно вычистить весь список.
+            // Снимок: если не открылся ни один сервер из большой партии, это проблема сети,
+            // а не серверов — статусы не меняем, иначе можно вычистить весь список.
             var snapshot = candidates.ToDictionary(
                 node => node,
                 node => (node.Status, node.DelayMs, node.CheckedAtUtc,
@@ -170,7 +170,7 @@ internal static class NodeTester
                 await limiter.WaitAsync(cancellationToken).ConfigureAwait(false);
                 try
                 {
-                    // Все адреса проверяем параллельно: у мёртвого узла это одна
+                    // Все адреса проверяем параллельно: у мёртвого сервера это одна
                     // задержка по таймауту, а не шесть подряд.
                     var results = await Task.WhenAll(ProbeUrls.Select(async probe =>
                     {
@@ -182,7 +182,7 @@ internal static class NodeTester
                     var anyOpened = results.Any(result => result.delay is not null);
 
                     // Приоритет — универсальный адрес: его задержка идёт в список и в выбор
-                    // лучшего узла. Если он не открылся, узел может быть рабочим для
+                    // лучшего сервера. Если он не открылся, сервер может быть рабочим для
                     // отдельных сервисов, но автоматически первым не выбирается.
                     var universalDelay = results
                         .FirstOrDefault(result => result.Service == "Cloudflare").delay;
@@ -196,7 +196,7 @@ internal static class NodeTester
                     node.DiscordOk = Opened(results, "Discord");
 
                     // Сколько всего заблокированных доменов открывается: главный показатель
-                    // качества узла. Считаем только у живых, иначе это 18 таймаутов впустую.
+                    // качества сервера. Считаем только у живых, иначе это 18 таймаутов впустую.
                     node.OpenDomains = anyOpened
                         ? await CountOpenDomainsAsync(api, node.Tag, cancellationToken).ConfigureAwait(false)
                         : 0;
@@ -263,15 +263,15 @@ internal static class NodeTester
 
                 MarkTried(candidates);
                 NodeStore.SaveNodes();
-                AppLog.Write("test", $"Откат проверки: ни один из {candidates.Count} узлов не открылся");
+                AppLog.Write("test", $"Откат проверки: ни один из {candidates.Count} серверов не открылся");
                 return new NodeTestSummary(candidates.Count, 0, 0,
-                    "Ни один узел не открылся — проверьте сеть. Статусы узлов не изменены.");
+                    "Ни один сервер не открылся — проверьте сеть. Статусы серверов не изменены.");
             }
 
             var removed = NodeStore.DropDeadNodes(candidates);
             NodeStore.SaveNodes();
 
-            // Лучший узел выбираем сами и запоминаем: кнопка «Лучший» больше не нужна,
+            // Лучший сервер выбираем сами и запоминаем: кнопка «Лучший» больше не нужна,
             // а прежний выбор мог умереть, пока шла проверка.
             var best = NodeStore.SelectBestWorking();
 
@@ -279,9 +279,9 @@ internal static class NodeTester
                            $"Telegram {telegram}, Discord {discord}";
             var bestDomains = candidates.Count == 0 ? 0 : candidates.Max(node => node.OpenDomains);
             AppLog.Write("test",
-                $"Проверка узлов: рабочих {working} из {candidates.Count} ({services}), " +
+                $"Проверка серверов: рабочих {working} из {candidates.Count} ({services}), " +
                 $"лучший открывает доменов {bestDomains}, удалено {removed}" +
-                (best is null ? ", живых узлов нет" : ", выбран " + best.Name));
+                (best is null ? ", живых серверов нет" : ", выбран " + best.Name));
             progress?.Report($"Готово: рабочих {working} из {candidates.Count} ({services}), " +
                              $"лучший открывает доменов {bestDomains}, удалено {removed}" +
                              (best is null ? "" : "; выбран " + best.Name + " · " + best.DisplayDelay));
@@ -295,8 +295,8 @@ internal static class NodeTester
         }
         catch (Exception exception)
         {
-            AppLog.Write("test", "Не удалось проверить узлы", exception);
-            Android.Util.Log.Error("VieNLink", "Проверка узлов: " + exception);
+            AppLog.Write("test", "Не удалось проверить серверы", exception);
+            Android.Util.Log.Error("VieNLink", "Проверка серверов: " + exception);
             return new NodeTestSummary(0, 0, 0, "Ошибка проверки: " + exception.Message);
         }
         finally
@@ -323,7 +323,8 @@ internal static class NodeTester
         Action<ProxyNode>? onTested,
         CancellationToken cancellationToken,
         int concurrency = 12,
-        int timeoutMs = TimeoutMs)
+        int timeoutMs = TimeoutMs,
+        bool fullDomains = true)
     {
         if (candidates.Count == 0)
         {
@@ -367,9 +368,18 @@ internal static class NodeTester
                 node.YoutubeOk = Opened(results, "YouTube");
                 node.TelegramOk = Opened(results, "Telegram");
                 node.DiscordOk = Opened(results, "Discord");
-                node.OpenDomains = anyOpened
-                    ? await CountOpenDomainsAsync(api, node.Tag, cancellationToken, timeoutMs).ConfigureAwait(false)
-                    : 0;
+                if (fullDomains)
+                {
+                    node.OpenDomains = anyOpened
+                        ? await CountOpenDomainsAsync(api, node.Tag, cancellationToken, timeoutMs)
+                            .ConfigureAwait(false)
+                        : 0;
+                }
+                else if (!anyOpened)
+                {
+                    // Быстрая перепроверка не меряет домены, но мёртвый сервер их теряет.
+                    node.OpenDomains = 0;
+                }
 
                 if (anyOpened)
                 {
@@ -416,24 +426,38 @@ internal static class NodeTester
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
 
-        if (working == 0 && candidates.Count >= 20)
+        if (working == 0 && candidates.Count > 0)
         {
-            foreach (var (node, state) in snapshot)
+            // Полный провал партии при отсутствии интернета — это не мёртвые серверы.
+            // Без этой проверки фоновая проверка в метро/при обрыве сети вычищала
+            // непроверенные серверы после первого же провала.
+            var network = await HasDirectInternetAsync(cancellationToken).ConfigureAwait(false);
+            if (network && candidates.Count < 20)
             {
-                node.Status = state.Status;
-                node.DelayMs = state.DelayMs;
-                node.CheckedAtUtc = state.CheckedAtUtc;
-                node.YoutubeOk = state.YoutubeOk;
-                node.TelegramOk = state.TelegramOk;
-                node.UniversalOk = state.UniversalOk;
-                node.DiscordOk = state.DiscordOk;
-                node.OpenDomains = state.OpenDomains;
-                node.FailCount = state.FailCount;
+                // Сеть есть, серверы честно не открылись — обрабатываем как обычно:
+                // партия маленькая, массового вычищения не будет.
             }
+            else
+            {
+                foreach (var (node, state) in snapshot)
+                {
+                    node.Status = state.Status;
+                    node.DelayMs = state.DelayMs;
+                    node.CheckedAtUtc = state.CheckedAtUtc;
+                    node.YoutubeOk = state.YoutubeOk;
+                    node.TelegramOk = state.TelegramOk;
+                    node.UniversalOk = state.UniversalOk;
+                    node.DiscordOk = state.DiscordOk;
+                    node.OpenDomains = state.OpenDomains;
+                    node.FailCount = state.FailCount;
+                }
 
-            MarkTried(candidates);
-            return new NodeTestSummary(candidates.Count, 0, 0,
-                "Ни один узел не открылся — статусы не изменены.");
+                MarkTried(candidates);
+                return new NodeTestSummary(candidates.Count, 0, 0,
+                    network
+                        ? "Ни один сервер не открылся — статусы не изменены."
+                        : "Нет сети: статусы серверов не изменены.");
+            }
         }
 
         var services = $"универсальных {universal}, YouTube {youtube}, " +
@@ -449,10 +473,38 @@ internal static class NodeTester
     private static bool Opened(IEnumerable<(string Service, int? delay)> results, string service) =>
         results.Any(result => result.Service == service && result.delay is not null);
 
+    /// <summary>Есть ли прямой интернет (без сервера): отличает обрыв сети от мёртвых серверов.</summary>
+    private static async Task<bool> HasDirectInternetAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var handler = new System.Net.Http.SocketsHttpHandler
+            {
+                UseProxy = false,
+                ConnectTimeout = TimeSpan.FromSeconds(4),
+            };
+            using var client = new System.Net.Http.HttpClient(handler)
+            {
+                Timeout = TimeSpan.FromSeconds(6),
+            };
+            using var response = await client.GetAsync(
+                "https://cp.cloudflare.com/generate_204",
+                System.Net.Http.HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken).ConfigureAwait(false);
+            return response.IsSuccessStatusCode;
+        }
+        catch (Exception exception) when (
+            exception is System.Net.Http.HttpRequestException or System.OperationCanceledException
+                or TaskCanceledException)
+        {
+            return false;
+        }
+    }
+
     /// <summary>
     /// Отмечает попытку проверки, не меняя статус и счётчик провалов. Без этого партия,
-    /// где не открылся ни один узел, откатывалась бы и следующая проверка снова брала
-    /// бы ровно те же узлы — список не двигался бы с места никогда.
+    /// где не открылся ни один сервер, откатывалась бы и следующая проверка снова брала
+    /// бы ровно те же серверы — список не двигался бы с места никогда.
     /// </summary>
     private static void MarkTried(IEnumerable<ProxyNode> nodes)
     {
@@ -463,15 +515,15 @@ internal static class NodeTester
         }
     }
 
-    /// <summary>Сколько доменов из списка заблокированных открывает узел.</summary>
+    /// <summary>Сколько доменов из списка заблокированных открывает сервер.</summary>
     private static async Task<int> CountOpenDomainsAsync(
         ClashApiClient api,
         string tag,
         CancellationToken cancellationToken,
         int timeoutMs = TimeoutMs)
     {
-        // Не больше четырёх запросов одновременно на узел: 18 параллельных соединений
-        // перегружают слабый бесплатный узел, и он ложно показывает ноль доменов.
+        // Не больше четырёх запросов одновременно на сервер: 18 параллельных соединений
+        // перегружают слабый бесплатный сервер, и он ложно показывает ноль доменов.
         using var limiter = new SemaphoreSlim(4);
         var tasks = FullProbes.Select(async probe =>
         {

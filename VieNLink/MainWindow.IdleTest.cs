@@ -12,26 +12,28 @@ namespace VieNLink;
 
 public partial class MainWindow
 {
-    // ---------- проверка узлов в фоне ----------
+    // ---------- проверка серверов в фоне ----------
 
     private readonly HiddenProbeService _probe = new();
 
     /// <summary>
-    /// Фоновая проверка: работает и в простое, и во время работы. Узлы проверяются
+    /// Фоновая проверка: работает и в простое, и во время работы. Серверы проверяются
     /// через скрытое ядро на отдельных портах, поэтому не мешают текущему подключению.
     /// </summary>
     private async void OnIdleTick(object? sender, EventArgs e)
     {
-        if (_closing)
+        if (_closing || _settings.AutomationPaused)
         {
             return;
         }
 
-        // MTProto обслуживается автономно: чистка старых, проверка и сбор через RSS.
-        // Проверка идёт первой, чтобы сбор каналов не откладывал её.
-        PruneExpiredMtProto();
-        await AutoCheckMtProtoAsync();
-        await AutoCollectMtProtoAsync();
+        try
+        {
+            // MTProto обслуживается автономно: чистка старых, проверка и сбор через RSS.
+            // Проверка идёт первой, чтобы сбор каналов не откладывал её.
+            PruneExpiredMtProto();
+            await AutoCheckMtProtoAsync();
+            await AutoCollectMtProtoAsync();
 
         if (_idleTesting || !_settings.IdleTestEnabled)
         {
@@ -41,9 +43,9 @@ public partial class MainWindow
         var idleMinutes = Math.Max(1, _settings.IdleTestMinutes);
         var userIdle = GetSystemIdleTime() >= TimeSpan.FromMinutes(idleMinutes);
 
-        // Пока не набрана квота — 10 рабочих узлов и по 2 на каждый сервис — ищем чаще:
+        // Пока не набрана квота — 10 рабочих серверов и по 2 на каждый сервис — ищем чаще:
         // в простое раз в минуту, при работе раз в две. Иначе поиск мог ждать
-        // до пяти минут, и кнопки сервисов оставались без живых узлов.
+        // до пяти минут, и кнопки сервисов оставались без живых серверов.
         var quotaMissing = MissingServiceQuota().Count > 0 ||
                            FreshWorkingCount() < NodeLimits.MinWorkingNodes;
 
@@ -54,30 +56,58 @@ public partial class MainWindow
             : userIdle
                 ? Math.Clamp(_settings.IdleTestIntervalMinutes, 1, 5)
                 : Math.Clamp(_settings.IdleTestIntervalMinutes / 5, 1, 2);
-        if (_lastIdleTestUtc is { } last &&
-            DateTime.UtcNow - last < TimeSpan.FromMinutes(interval))
+        var searchDue = _lastIdleTestUtc is not { } lastSearch ||
+                        DateTime.UtcNow - lastSearch >= TimeSpan.FromMinutes(interval);
+        // Рабочие серверы перепроверяем отдельно от поиска новых: раз в минуту смотрим,
+        // у кого истекает окно свежести, и берём их в работу на минуту раньше срока.
+        // Так счётчик не «мигает» между редкими проходами поиска.
+        var recheckDue = HasWorkingNodesDue(DateTime.UtcNow) &&
+                         (_lastRecheckUtc is not { } lastRecheck ||
+                          DateTime.UtcNow - lastRecheck >= TimeSpan.FromSeconds(45));
+        if (!searchDue && !recheckDue)
         {
             return;
         }
 
-        await RunIdleTestAsync(userIdle);
+        await RunIdleTestAsync(userIdle, searchNew: searchDue);
+        }
+        catch (Exception exception)
+        {
+            // Фоновый такт не должен ронять приложение: любая ошибка источника,
+            // MTProto или проверки серверов просто переносится на следующий такт.
+            AppLog.Write("probe", "Фоновый такт не удался", exception);
+        }
     }
 
-    private async Task RunIdleTestAsync(bool userIdle)
+    /// <summary>Есть ли рабочий сервер, у которого заканчивается окно свежести.</summary>
+    private bool HasWorkingNodesDue(DateTime nowUtc)
     {
+        var cutoff = NodeAvailability.RecheckCutoffUtc(nowUtc);
+        return _workingRows.Any(row =>
+            row.Node.Status == NodeStatus.Working &&
+            (row.Node.CheckedAtUtc is null || row.Node.CheckedAtUtc < cutoff));
+    }
+
+    private async Task RunIdleTestAsync(bool userIdle, bool searchNew = true)
+    {
+        if (_settings.AutomationPaused)
+        {
+            return;
+        }
+
         var connected = _manager.IsConnected;
 
         // TUN-обход перехватывает весь трафик, включая скрытое ядро, — в этом режиме
-        // проверяем только загруженные узлы. zapret и свой обход DPI ограничены целевыми
+        // проверяем только загруженные серверы. zapret и свой обход DPI ограничены целевыми
         // доменами (zapret — hostlist, десинк — TlsHello), поэтому соединения к серверам
-        // узлов они не трогают и проверке не мешают.
+        // серверов они не трогают и проверке не мешают.
         if (_tunBypass.IsRunning)
         {
             return;
         }
 
         // При активном TUN трафик скрытого ядра тоже уйдёт в туннель, поэтому
-        // в этом случае проверяем только уже загруженные узлы основным ядром.
+        // в этом случае проверяем только уже загруженные серверы основным ядром.
         var hidden = !(connected && _settings.TunnelMode == TunnelMode.Tun);
 
         var baseBatch = Math.Clamp(_settings.IdleTestBatch, 5, 500);
@@ -96,21 +126,28 @@ public partial class MainWindow
             batchSize = Math.Min(batchSize, 5);
         }
 
-        // Рабочих узлов должно быть не меньше десяти, а для YouTube, Telegram, Discord
+        // Рабочих серверов должно быть не меньше десяти, а для YouTube, Telegram, Discord
         // и универсального доступа — не меньше двух на каждый сервис. Считаем только
-        // свежие проверки: устаревшая запись в кэше не должна изображать готовый узел.
+        // свежие проверки: устаревшая запись в кэше не должна изображать готовый сервер.
         // Пока этого нет, не ждём следующего такта, а проверяем несколько партий подряд.
         var missing = MissingServiceQuota();
-        var needQuota = FreshWorkingCount() < NodeLimits.MinWorkingNodes || missing.Count > 0;
+        var needQuota = searchNew &&
+                        (FreshWorkingCount() < NodeLimits.MinWorkingNodes || missing.Count > 0);
         var maxRounds = needQuota ? 8 : 1;
 
-        // Рабочие узлы перепроверяем чаще, чем раз в IdleRecheckHours — по
-        // NodeLimits.WorkingRecheckMinutes (15 мин): бесплатный узел живёт минуты,
-        // и «рабочий» из кэша без перепроверки — главная причина, почему значок
-        // сервиса обещал узел, которого нет.
-        var recheckCutoff = DateTime.UtcNow.AddMinutes(-NodeLimits.WorkingRecheckMinutes);
+        // Рабочие серверы перепроверяем чаще окна свежести — по
+        // NodeLimits.WorkingRecheckMinutes (5 мин), начиная за пару минут до истечения.
+        // Бесплатный сервер живёт минуты, и «рабочий» из кэша без перепроверки — главная
+        // причина, почему значок сервиса обещал сервер, которого нет.
+        var recheckCutoff = NodeAvailability.RecheckCutoffUtc(DateTime.UtcNow);
         static bool NeedsCheck(ProxyNode node, DateTime threshold) =>
             node.CheckedAtUtc is null || node.CheckedAtUtc < threshold;
+
+        // Проход только для перепроверки: партия меньше, ищем не новые серверы, а живые.
+        if (!searchNew)
+        {
+            batchSize = Math.Min(batchSize, 20);
+        }
 
         _idleTesting = true;
         _idleCts = new CancellationTokenSource();
@@ -119,7 +156,7 @@ public partial class MainWindow
         {
             for (var round = 1; round <= maxRounds; round++)
             {
-                // Если какого-то сервиса не хватает, сначала проверяем узлы из источников,
+                // Если какого-то сервиса не хватает, сначала проверяем серверы из источников,
                 // которые уже давали доступ именно к нему. Фокус меняется по кругу:
                 // иначе первый недостающий сервис забирал все раунды, а остальные ждали.
                 var focusService = missing.Count == 0 ? null : missing[(round - 1) % missing.Count];
@@ -138,8 +175,10 @@ public partial class MainWindow
                 {
                     candidates = AllRows
                         .Select(row => row.Node)
-                        .Where(node => node.Status == NodeStatus.Unknown ||
-                                       (node.Status == NodeStatus.Working && NeedsCheck(node, recheckCutoff)))
+                        .Where(node => searchNew
+                            ? node.Status == NodeStatus.Unknown ||
+                              (node.Status == NodeStatus.Working && NeedsCheck(node, recheckCutoff))
+                            : node.Status == NodeStatus.Working && NeedsCheck(node, recheckCutoff))
                         .Distinct()
                         // Сначала перепроверяем тех, кто прямо сейчас показан в счётчиках:
                         // их смерть важнее, чем поиск среди ещё не проверенных. Иначе
@@ -157,7 +196,8 @@ public partial class MainWindow
                 else
                 {
                     candidates = _manager.LoadedNodes
-                        .Where(node => NeedsCheck(node, recheckCutoff))
+                        .Where(node => NeedsCheck(node, recheckCutoff) &&
+                                       (!searchNew || node.Status != NodeStatus.Dead))
                         .Take(batchSize)
                         .ToList();
                 }
@@ -176,10 +216,10 @@ public partial class MainWindow
                       (missing.Count > 0 ? $", нет по {NodeLimits.MinWorkingPerService} для: {string.Join(", ", missing.Select(ServiceLabel))}" : string.Empty) +
                       (focusName is not null ? $", ищу под {focusName}" : string.Empty)
                     : string.Empty;
-                AppendLog($"Фон: узлов {candidates.Count} ({mode}{quotaNote})");
-                // В шапке — только суть: что идёт проверка и сколько узлов.
+                AppendLog($"Фон: серверов {candidates.Count} ({mode}{quotaNote})");
+                // В шапке — только суть: что идёт проверка и сколько серверов.
                 // Разбивка по сервисам и квоты остаются в журнале.
-                ShowBackgroundDetail($"Проверяю узлы: {candidates.Count} ({mode})");
+                ShowBackgroundDetail($"Проверяю серверы: {candidates.Count} ({mode})");
                 void OnTested(ProxyNode node) => Dispatcher.BeginInvoke(() => ApplyTestedNode(node));
                 var progress = new Progress<string>(line =>
                 {
@@ -203,9 +243,9 @@ public partial class MainWindow
                 }
 
                 await RepartitionAndSaveAsync();
-                AppendLog($"Фон: узлов проверено {summary.Total}, рабочих {summary.Working}, " +
+                AppendLog($"Фон: серверов проверено {summary.Total}, рабочих {summary.Working}, " +
                           $"лучший открывает доменов {summary.BestDomains}");
-                ShowBackgroundDetail($"Фон: проверено {summary.Total} узлов, свежих рабочих " +
+                ShowBackgroundDetail($"Фон: проверено {summary.Total} серверов, свежих рабочих " +
                                      $"{summary.Working} (всего {FreshWorkingCount()})");
 
                 missing = MissingServiceQuota();
@@ -233,7 +273,11 @@ public partial class MainWindow
                                       " — поиск продолжится в фоне");
             }
 
-            _lastIdleTestUtc = DateTime.UtcNow;
+            _lastRecheckUtc = DateTime.UtcNow;
+            if (searchNew)
+            {
+                _lastIdleTestUtc = DateTime.UtcNow;
+            }
         }
         catch (OperationCanceledException)
         {
@@ -242,9 +286,9 @@ public partial class MainWindow
         }
         catch (Exception exception)
         {
-            // Если сработал откат (ни один узел не открылся), отметки могли разъехаться с таблицей.
+            // Если сработал откат (ни один сервер не открылся), отметки могли разъехаться с таблицей.
             await RepartitionAndSaveAsync();
-            AppLog.Write("probe", "Фоновая проверка узлов не удалась", exception);
+            AppLog.Write("probe", "Фоновая проверка серверов не удалась", exception);
         }
         finally
         {
@@ -278,7 +322,7 @@ public partial class MainWindow
     private static extern bool GetLastInputInfo(ref LastInputInfo plii);
 
     /// <summary>
-    /// Узел проверен: рабочий переносим на подвкладку «Рабочие», не открывший
+    /// Сервер проверен: рабочий переносим на подвкладку «Рабочие», не открывший
     /// ни один адрес остаётся в «Непроверенных», пока не наберёт
     /// <see cref="NodeLimits.RemoveAfterFailures"/> провалов подряд, — тогда удаляется.
     /// </summary>
@@ -309,7 +353,7 @@ public partial class MainWindow
         UpdateTestedSummary();
     }
 
-    /// <summary>Удаляет строку из таблицы: нерабочие узлы не держим в списке.</summary>
+    /// <summary>Удаляет строку из таблицы: нерабочие серверы не держим в списке.</summary>
     private void DropNode(NodeRow row)
     {
         if (_rowOwner.TryGetValue(row.Id, out var owner))
@@ -323,7 +367,7 @@ public partial class MainWindow
         UpdateTestedSummary();
     }
 
-    /// <summary>Счётчики в заголовках обновляем не чаще 4 раз в секунду: иначе проверка 500 узлов тормозит UI.</summary>
+    /// <summary>Счётчики в заголовках обновляем не чаще 4 раз в секунду: иначе проверка 500 серверов тормозит UI.</summary>
     private void UpdateTestedSummary()
     {
         var now = DateTime.UtcNow;
@@ -336,10 +380,10 @@ public partial class MainWindow
         UpdateSummary();
     }
 
-    /// <summary>Проверяем сначала непроверенные и давно проверенные узлы.</summary>
+    /// <summary>Проверяем сначала непроверенные и давно проверенные серверы.</summary>
     /// <summary>
-    /// Партия для кнопки «Партия 500»: ровно <see cref="TestBatchSize"/> узлов, независимо от
-    /// лимита конфига. Лимит «узлов в конфиге» ограничивает только список для sing-box.
+    /// Партия для кнопки «Партия 500»: ровно <see cref="TestBatchSize"/> серверов, независимо от
+    /// лимита конфига. Лимит «серверов в конфиге» ограничивает только список для sing-box.
     /// </summary>
     private List<ProxyNode> SelectBatch(IEnumerable<ProxyNode> nodes)
     {
@@ -351,9 +395,9 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Сколько узлов с доступом к сервису можно взять прямо сейчас: только свежая
+    /// Сколько серверов с доступом к сервису можно взять прямо сейчас: только свежая
     /// проверка. Устаревшее «рабочий» из кэша не считается — иначе квота выглядела бы
-    /// набранной, а кнопка не находила узел.
+    /// набранной, а кнопка не находила сервер.
     /// </summary>
     private int CountVerifiedFor(string service)
     {
@@ -364,7 +408,7 @@ public partial class MainWindow
             NodeAvailability.OpenedFor(row.Node, service));
     }
 
-    /// <summary>Рабочие узлы со свежей проверкой — те же, что видят счётчики в шапке.</summary>
+    /// <summary>Рабочие серверы со свежей проверкой — те же, что видят счётчики в шапке.</summary>
     private int FreshWorkingCount()
     {
         var now = DateTime.UtcNow;
@@ -373,7 +417,7 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Ход фоновой проверки в строке состояния: пользователь должен видеть, что узлы
+    /// Ход фоновой проверки в строке состояния: пользователь должен видеть, что серверы
     /// проверяются, а не думать, что приложение зависло. Операции пользователя важнее —
     /// их строку не перетираем.
     /// </summary>
@@ -396,7 +440,7 @@ public partial class MainWindow
     };
 
     /// <summary>
-    /// Доля узлов источника, которые открывают нужный сервис (0–1000). Проверяем
+    /// Доля серверов источника, которые открывают нужный сервис (0–1000). Проверяем
     /// сначала источники, которые уже давали доступ к этому сервису.
     /// </summary>
     private Dictionary<string, int> BuildServiceSourceScores(string service)
@@ -416,7 +460,7 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Сервисы, для которых проверенных рабочих узлов меньше
+    /// Сервисы, для которых проверенных рабочих серверов меньше
     /// <see cref="NodeLimits.MinWorkingPerService"/>: их надо искать дальше.
     /// Ключи — строчные, как в <see cref="ServiceOpened"/>.
     /// </summary>

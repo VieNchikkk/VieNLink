@@ -21,13 +21,19 @@ internal sealed class CollectResult
 }
 
 /// <summary>
-/// Загрузка публичных списков узлов: raw-файлы GitHub, base64-подписки и публичные каналы Telegram.
+/// Загрузка публичных списков серверов: raw-файлы GitHub, base64-подписки и публичные каналы Telegram.
 /// Сайты и каналы часто недоступны напрямую, поэтому ошибка источника не роняет остальные.
 /// </summary>
 internal static class NodeSourceService
 {
     private static readonly HttpClient Http = CreateClient();
     private static readonly HttpClient HttpDirect = CreateClient(useProxy: false);
+
+    /// <summary>
+    /// Разовая миграция: включить все ранее выключенные источники. Ставится
+    /// <see cref="SettingsUpgrade"/> для схем ниже 3 и сбрасывается после применения.
+    /// </summary>
+    public static bool EnableAllSourcesOnce { get; set; }
 
     public static List<SourceDefinition> DefaultSources() => new()
     {
@@ -38,21 +44,27 @@ internal static class NodeSourceService
         new() { Name = "Free-servers (подписка)", Url = "https://raw.githubusercontent.com/Pawdroid/Free-servers/main/sub", Kind = SourceKind.Subscription },
         new() { Name = "freenode (подписка)", Url = "https://raw.githubusercontent.com/ripaojiedian/freenode/main/sub", Kind = SourceKind.Subscription },
 
-        // Небольшие списки с более высокой долей живых узлов.
+        // Небольшие списки с более высокой долей живых серверов.
         new() { Name = "openproxylist V2RAY (GitHub)", Url = "https://raw.githubusercontent.com/roosterkid/openproxylist/main/V2RAY_RAW.txt", Kind = SourceKind.PlainList },
         new() { Name = "Kwinshadow mix (GitHub)", Url = "https://raw.githubusercontent.com/Kwinshadow/TelegramV2rayCollector/main/sublinks/mix.txt", Kind = SourceKind.PlainList },
 
-        // Крупные агрегаторы: узлов много, живых мало — по умолчанию выключены, чтобы не тормозить обновление.
-        new() { Name = "barry-far vless (GitHub)", Url = "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vless.txt", Kind = SourceKind.PlainList, Enabled = false },
-        new() { Name = "MhdiTaheri mix (GitHub)", Url = "https://raw.githubusercontent.com/MhdiTaheri/V2rayCollector/main/sub/mix", Kind = SourceKind.PlainList, Enabled = false },
-        new() { Name = "Mineral nodes (GitHub)", Url = "https://raw.githubusercontent.com/LalatinaHub/Mineral/master/result/nodes", Kind = SourceKind.PlainList, Enabled = false },
+        // Крупные агрегаторы: серверов много, но и пользы больше — по умолчанию включены.
+        new() { Name = "barry-far vless (GitHub)", Url = "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vless.txt", Kind = SourceKind.PlainList },
+        new() { Name = "MhdiTaheri mix (GitHub)", Url = "https://raw.githubusercontent.com/MhdiTaheri/V2rayCollector/main/sub/mix", Kind = SourceKind.PlainList },
+        new() { Name = "Mineral nodes (GitHub)", Url = "https://raw.githubusercontent.com/LalatinaHub/Mineral/master/result/nodes", Kind = SourceKind.PlainList },
 
         // Каналы Telegram открываются только при уже работающем обходе блокировок.
         // @proxy_mtproto включён: после первого успешного подключения приложение само прочитает его.
         new() { Name = "Telegram: @proxy_mtproto", Url = "https://t.me/s/proxy_mtproto", Kind = SourceKind.Telegram },
         new() { Name = "Telegram: @ProxyMTProto", Url = "https://t.me/s/ProxyMTProto", Kind = SourceKind.Telegram },
         new() { Name = "Telegram: @MTProtoProxies", Url = "https://t.me/s/MTProtoProxies", Kind = SourceKind.Telegram },
-        new() { Name = "Telegram: @v2rayng_config", Url = "https://t.me/s/v2rayng_config", Kind = SourceKind.Telegram, Enabled = false },
+        new() { Name = "Telegram: @v2rayng_config", Url = "https://t.me/s/v2rayng_config", Kind = SourceKind.Telegram },
+
+        // Сайты и GitHub-списки MTProto: не требуют t.me и часто доступны напрямую.
+        new() { Name = "MTProto: tgmtproxy (GitHub)", Url = "https://raw.githubusercontent.com/tgmtproxy/telegram-mtproto-proxy-list/main/proxies.txt", Kind = SourceKind.MtProto },
+        new() { Name = "MTProto: SoliSpirit (GitHub)", Url = "https://raw.githubusercontent.com/SoliSpirit/mtproto/master/all_proxies.txt", Kind = SourceKind.MtProto },
+        new() { Name = "MTProto: suryadev-sm (GitHub)", Url = "https://raw.githubusercontent.com/suryadev-sm/free-mtproto-proxy-list/main/proxies.txt", Kind = SourceKind.MtProto },
+        new() { Name = "MTProto: Airuop JSON (GitHub)", Url = "https://raw.githubusercontent.com/Airuop/MTProtoCollector/refs/heads/main/proxy/mtproto.json", Kind = SourceKind.MtProto },
     };
 
     public static List<SourceDefinition> LoadSources()
@@ -80,14 +92,27 @@ internal static class NodeSourceService
             DeletePlainSources();
         }
 
-        // Новые источники из обновлений добавляются, но пользовательские настройки не трогаются.
+        // Новые источники из обновлений добавляются включёнными: пользователь просил
+        // держать все источники включёнными по умолчанию (и на ПК, и на телефоне).
         foreach (var defaultSource in DefaultSources())
         {
             if (saved.All(s => !s.Url.Equals(defaultSource.Url, StringComparison.OrdinalIgnoreCase)))
             {
-                defaultSource.Enabled = false;
                 saved.Add(defaultSource);
             }
+        }
+
+        // Разовая миграция со старых версий: включить и те источники, которые раньше
+        // были выключены «по умолчанию» (крупные агрегаторы и один Telegram-канал).
+        if (EnableAllSourcesOnce)
+        {
+            EnableAllSourcesOnce = false;
+            foreach (var source in saved)
+            {
+                source.Enabled = true;
+            }
+
+            SaveSources(saved);
         }
 
         if (fromPlain)
@@ -134,7 +159,12 @@ internal static class NodeSourceService
         CancellationToken cancellationToken,
         Action<FetchOutcome>? onSource = null)
     {
-        var enabled = sources.Where(s => s.Enabled && !string.IsNullOrWhiteSpace(s.Url)).ToList();
+        // Каналы Telegram — источники MTProto-прокси, а не серверов: их читает
+        // MtProtoService, и в общий сбор серверов они не попадают.
+        var enabled = sources
+            .Where(s => s.Enabled && !string.IsNullOrWhiteSpace(s.Url))
+            .Where(s => !SourceKinds.IsProxy(s))
+            .ToList();
         var batches = await Task.WhenAll(enabled.Select(async source =>
         {
             FetchOutcome outcome;
@@ -156,7 +186,7 @@ internal static class NodeSourceService
             source.LastError = outcome.Error;
             source.LastNodeCount = outcome.Nodes.Count;
             progress?.Report(outcome.Error is null
-                ? $"{source.Name}: {outcome.Nodes.Count} узлов"
+                ? $"{source.Name}: {outcome.Nodes.Count} серверов"
                 : $"{source.Name}: ошибка — {outcome.Error}");
             onSource?.Invoke(outcome);
             return outcome;
@@ -169,14 +199,14 @@ internal static class NodeSourceService
         {
             foreach (var node in outcome.Nodes)
             {
-                // Узел пришёл из источника сейчас — значит, он свежий.
+                // Сервер пришёл из источника сейчас — значит, он свежий.
                 node.LastSeenUtc = now;
                 if (unique.TryAdd(node.Id, node))
                 {
                     continue;
                 }
 
-                // Дубликат из другого источника: оставляем первый, но помним, что узел популярен.
+                // Дубликат из другого источника: оставляем первый, но помним, что сервер популярен.
                 var existing = unique[node.Id];
                 NodeDedup.MergeSource(existing, node.SourceName);
             }
@@ -204,7 +234,7 @@ internal static class NodeSourceService
 
             if (imported.Count == 0)
             {
-                return new FetchOutcome { Source = source, Error = "Не удалось разобрать ссылку на узел" };
+                return new FetchOutcome { Source = source, Error = "Не удалось разобрать ссылку на сервер" };
             }
 
             foreach (var node in imported)
@@ -226,7 +256,7 @@ internal static class NodeSourceService
             : rawText;
         var parsed = SubscriptionParser.Parse(text, source.Name);
 
-        // Заглушки вида «Приложение не поддерживается» и группы с 127.0.0.1:1 — не узлы.
+        // Заглушки вида «Приложение не поддерживается» и группы с 127.0.0.1:1 — не серверы.
         var nodes = parsed.Where(node => !IsPlaceholderNode(node)).ToList();
         foreach (var node in nodes)
         {
@@ -236,7 +266,7 @@ internal static class NodeSourceService
         string? error = null;
         if (nodes.Count == 0 && parsed.Count > 0)
         {
-            error = "Провайдер отдаёт только заглушки — узлы доступны лишь в его клиенте (Happ). " +
+            error = "Провайдер отдаёт только заглушки — серверы доступны лишь в его клиенте (Happ). " +
                     "Нужна универсальная подписка или ссылки на серверы.";
         }
 
@@ -244,11 +274,11 @@ internal static class NodeSourceService
         return new FetchOutcome { Source = source, Nodes = nodes, MtProto = mtproto, Error = error };
     }
 
-    /// <summary>Служебные «узлы»-маркеры: группы и сообщения провайдера.</summary>
+    /// <summary>Служебные «серверы»-маркеры: группы и сообщения провайдера.</summary>
     private static bool IsPlaceholderNode(ProxyNode node) =>
         node.Port == 1 && (node.Server is "0.0.0.0" or "127.0.0.1" or "::1" or "localhost");
 
-    /// <summary>Сырой ответ источника: используется и для узлов, и для MTProto-прокси.</summary>
+    /// <summary>Сырой ответ источника: используется и для серверов, и для MTProto-прокси.</summary>
     public static async Task<(string Text, string? SubscriptionInfo)> FetchRawAsync(
         SourceDefinition source,
         CancellationToken cancellationToken,
@@ -263,7 +293,7 @@ internal static class NodeSourceService
         }
         catch (Exception exception) when (retryDirect && exception is HttpRequestException or TimeoutException)
         {
-            // Системный прокси мог указывать на мёртвый узел: прямой запрос часто проходит.
+            // Системный прокси мог указывать на мёртвый сервер: прямой запрос часто проходит.
             AppLog.Write("sources", $"Источник «{source.Name}»: повтор без прокси", exception);
             return await FetchOnceAsync(HttpDirect, source, timeout, cancellationToken).ConfigureAwait(false);
         }
@@ -300,7 +330,7 @@ internal static class NodeSourceService
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             var hint = source.Kind == SourceKind.Telegram
-                ? " Канал t.me открывается только через работающий обход — подключитесь к узлу и повторите."
+                ? " Канал t.me открывается только через работающий обход — подключитесь к серверу и повторите."
                 : string.Empty;
             throw new TimeoutException($"Источник не ответил за {timeout.TotalSeconds:0} с.{hint}");
         }
@@ -308,19 +338,43 @@ internal static class NodeSourceService
 
     public static List<string> ExtractLinks(string text) => SubscriptionParser.ExtractLinks(text);
 
-    /// <summary>Кэш узлов, чтобы список не пропадал между запусками.</summary>
-    public static void SaveCache(IEnumerable<ProxyNode> nodes)
+    /// <summary>
+    /// Кэш серверов, чтобы список не пропадал между запусками.
+    /// Пустым списком кэш не затирается: если чтение кэша или источников разово не удалось,
+    /// следующее сохранение не должно стереть уже найденные серверы (это выглядело как
+    /// «после обновления версии всё сбросилось»). Очистка — только явная.
+    /// </summary>
+    public static void SaveCache(IEnumerable<ProxyNode> nodes, bool allowEmpty = false)
     {
-        // Даже если узел пришёл из старого кэша без отметки, при сохранении она появится.
+        var list = nodes as IList<ProxyNode> ?? nodes.ToList();
+        if (list.Count == 0 && !allowEmpty)
+        {
+            var existing = JsonFileStore.Read<NodeCache>(AppPaths.NodesPath);
+            if (existing is { Items.Count: > 0 })
+            {
+                AppLog.Write("cache",
+                    $"Пустой список серверов не сохраняю: в кэше {existing.Items.Count} записей");
+                return;
+            }
+        }
+
+        // Даже если сервер пришёл из старого кэша без отметки, при сохранении она появится.
         var now = DateTime.UtcNow;
-        JsonFileStore.Write(AppPaths.NodesPath, new NodeCache
+        JsonFileStore.WriteCompact(AppPaths.NodesPath, new NodeCache
         {
             SchemaVersion = SchemaVersions.NodeCache,
             SavedAtUtc = now,
-            Items = nodes.Select(n => new CachedNode
+            Items = list.Select(n => new CachedNode
             {
                 RawLink = n.RawLink,
                 SourceName = n.SourceName,
+                Protocol = n.Protocol,
+                Name = n.Name,
+                Server = n.Server,
+                Port = n.Port,
+                Tag = n.Tag,
+                Identity = n.Identity,
+                OutboundJson = n.OutboundJson,
                 DelayMs = n.DelayMs,
                 CheckedAtUtc = n.CheckedAtUtc,
                 TriedAtUtc = n.TriedAtUtc,
@@ -344,7 +398,7 @@ internal static class NodeSourceService
     public static List<ProxyNode> LoadCache(out int dropped) => LoadCache(out dropped, out _);
 
     /// <summary>
-    /// Читает кэш и оставляет только свежие узлы: не встречавшиеся в источниках дольше
+    /// Читает кэш и оставляет только свежие серверы: не встречавшиеся в источниках дольше
     /// <paramref name="freshAfterUtc"/> выбрасываются, повторы «один сервер:порт» склеиваются.
     /// </summary>
     public static List<ProxyNode> LoadCache(out int dropped, out int duplicates, DateTime? freshAfterUtc = null)
@@ -352,6 +406,20 @@ internal static class NodeSourceService
         dropped = 0;
         duplicates = 0;
         var cache = JsonFileStore.Read<NodeCache>(AppPaths.NodesPath);
+        // Пустой или нечитаемый основной файл не должен означать «серверов нет»: рядом
+        // лежит копия, которую JsonFileStore делает перед каждой перезаписью. Это
+        // страховка от сброса списка после сбоя записи или обновления версии.
+        if (cache is null || cache.Items.Count == 0)
+        {
+            var backup = JsonFileStore.Read<NodeCache>(AppPaths.NodesPath + ".bak");
+            if (backup is { Items.Count: > 0 })
+            {
+                AppLog.Write("cache",
+                    $"Основной кэш пуст — восстанавливаю {backup.Items.Count} серверов из резервной копии");
+                cache = backup;
+            }
+        }
+
         if (cache is null)
         {
             return new List<ProxyNode>();
@@ -360,7 +428,7 @@ internal static class NodeSourceService
         if (cache.SchemaVersion > SchemaVersions.NodeCache)
         {
             AppLog.Write("cache",
-                $"Кэш узлов новее приложения (схема {cache.SchemaVersion}, поддерживается {SchemaVersions.NodeCache}). " +
+                $"Кэш серверов новее приложения (схема {cache.SchemaVersion}, поддерживается {SchemaVersions.NodeCache}). " +
                 "Читаю известные поля; полная перезапись произойдёт после следующей проверки.");
         }
 
@@ -376,8 +444,8 @@ internal static class NodeSourceService
                 continue;
             }
 
-            // Старые версии хранили нерабочие узлы в статусе, номер которого совпал
-            // с новым Working. Рабочий узел обязан иметь успешную проверку.
+            // Старые версии хранили нерабочие серверы в статусе, номер которого совпал
+            // с новым Working. Рабочий сервер обязан иметь успешную проверку.
             if (item.Status == NodeStatus.Working &&
                 item.DelayMs is null && item.YoutubeOk != true && item.TelegramOk != true &&
                 item.UniversalOk != true && item.DiscordOk != true)
@@ -387,7 +455,7 @@ internal static class NodeSourceService
             }
 
             // В старом кэше нет отметки LastSeen: возраст считаем от времени сохранения,
-            // иначе первый запуск после обновления выбросил бы разом все узлы.
+            // иначе первый запуск после обновления выбросил бы разом все серверы.
             var lastSeen = item.LastSeenUtc ?? cacheSavedAt;
             if (freshAfterUtc is { } cutoff && lastSeen < cutoff)
             {
@@ -395,9 +463,36 @@ internal static class NodeSourceService
                 continue;
             }
 
-            // Обычные ссылки разбирает LinkParser; sing-box JSON-узлы — SubscriptionParser.
-            var node = LinkParser.Parse(item.RawLink, item.SourceName)
+            // Новый кэш хранит разобранный сервер: холодный старт не тратит время на разбор
+            // и хеширование каждой ссылки. Старый кэш читается прежним путём.
+            ProxyNode? node;
+            if (!string.IsNullOrWhiteSpace(item.OutboundJson) &&
+                !string.IsNullOrWhiteSpace(item.Tag) &&
+                !string.IsNullOrWhiteSpace(item.Identity) &&
+                !string.IsNullOrWhiteSpace(item.Server) &&
+                item.Port is > 0 and <= 65535)
+            {
+                node = new ProxyNode
+                {
+                    RawLink = item.RawLink,
+                    Protocol = item.Protocol,
+                    Name = string.IsNullOrWhiteSpace(item.Name) ? item.Server : item.Name,
+                    Server = item.Server,
+                    Port = item.Port,
+                    Tag = item.Tag,
+                    Identity = item.Identity,
+                    OutboundJson = item.OutboundJson,
+                    AllowInsecure = item.AllowInsecure,
+                    SourceName = item.SourceName,
+                };
+            }
+            else
+            {
+                // Обычные ссылки разбирает LinkParser; sing-box JSON-серверы — SubscriptionParser.
+                node = LinkParser.Parse(item.RawLink, item.SourceName)
                        ?? SubscriptionParser.Parse(item.RawLink, item.SourceName).FirstOrDefault();
+            }
+
             if (node is null)
             {
                 dropped++;

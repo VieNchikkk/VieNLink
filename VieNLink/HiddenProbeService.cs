@@ -3,9 +3,9 @@ using System.IO;
 namespace VieNLink;
 
 /// <summary>
-/// Скрытая проверка узлов: отдельный процесс sing-box на своих локальных портах,
+/// Скрытая проверка серверов: отдельный процесс sing-box на своих локальных портах,
 /// без TUN и без системного прокси. Он не трогает текущее подключение пользователя,
-/// поэтому проверять узлы можно и во время работы, и когда туннель уже поднят.
+/// поэтому проверять серверы можно и во время работы, и когда туннель уже поднят.
 /// </summary>
 internal sealed class HiddenProbeService : IAsyncDisposable
 {
@@ -16,7 +16,7 @@ internal sealed class HiddenProbeService : IAsyncDisposable
     public bool IsRunning => _running;
 
     /// <summary>
-    /// Проверяет узлы через скрытое ядро. Возвращает итог; параллельный вызов
+    /// Проверяет серверы через скрытое ядро. Возвращает итог; параллельный вызов
     /// не запускается — возвращается пустой итог.
     /// </summary>
     public async Task<TestSummary> TestAsync(
@@ -84,7 +84,7 @@ internal sealed class HiddenProbeService : IAsyncDisposable
             SingBoxConfigBuilder.WriteToFile(configPath, json);
             await SingBoxRunner.CheckConfigAsync(configPath, cancellationToken).ConfigureAwait(false);
 
-            AppLog.Write("probe", $"Скрытая проверка: узлов {ordered.Count}, mixed {mixedPort}, API {apiPort}");
+            AppLog.Write("probe", $"Скрытая проверка: серверов {ordered.Count}, mixed {mixedPort}, API {apiPort}");
             await _runner.StartAsync(configPath, apiPort, TimeSpan.FromSeconds(20), cancellationToken)
                 .ConfigureAwait(false);
 

@@ -1,6 +1,5 @@
-using System.Diagnostics;
 using System.Net;
-using System.Net.Sockets;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace VieNLink;
@@ -71,7 +70,7 @@ internal static class MtProtoService
         }
 
         // Посты в виде «IP: … Port: … Secret: …» (часто приходят через RSS-зеркала).
-        // Сначала ищем слово «Secret» в исходном тексте: на многомегабайтных списках узлов
+        // Сначала ищем слово «Secret» в исходном тексте: на многомегабайтных списках серверов
         // его нет, и тогда не тратим память на копию текста без HTML-тегов.
         if (text.IndexOf("Secret", StringComparison.OrdinalIgnoreCase) < 0)
         {
@@ -81,7 +80,7 @@ internal static class MtProtoService
         var plain = TagRegex.Replace(WebUtility.HtmlDecode(text), " ");
 
         // Если слова «Secret:» в тексте нет, блоков быть не может — не запускаем регекс
-        // на многомегабайтных списках узлов вообще.
+        // на многомегабайтных списках серверов вообще.
         if (plain.IndexOf("Secret:", StringComparison.OrdinalIgnoreCase) < 0)
         {
             return result;
@@ -112,6 +111,98 @@ internal static class MtProtoService
         return result;
     }
 
+    /// <summary>
+    /// Разбор любого ответа: ссылки tg://proxy, блоки «Server/Port/Secret» и JSON-списки
+    /// (сайты и GitHub-агрегаторы). JSON часто экранирует слэши как <c>\/</c>.
+    /// </summary>
+    public static List<MtProtoProxy> ExtractAll(string text, string sourceName)
+    {
+        var normalized = text.Replace("\\/", "/", StringComparison.Ordinal);
+        var result = Extract(normalized, sourceName);
+        var trimmed = normalized.TrimStart();
+        if (!trimmed.StartsWith('[') && !trimmed.StartsWith('{'))
+        {
+            return result;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(trimmed);
+            var seen = new HashSet<string>(
+                result.Select(proxy => proxy.Id), StringComparer.OrdinalIgnoreCase);
+            CollectJson(document.RootElement, sourceName, result, seen);
+        }
+        catch (JsonException)
+        {
+            // Не JSON — значит, ссылок в тексте действительно нет.
+        }
+
+        return result;
+    }
+
+    private static void CollectJson(
+        JsonElement element,
+        string sourceName,
+        List<MtProtoProxy> result,
+        HashSet<string> seen)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                {
+                    CollectJson(item, sourceName, result, seen);
+                }
+
+                break;
+
+            case JsonValueKind.Object:
+                var server = ReadString(element, "server") ?? ReadString(element, "host") ?? ReadString(element, "ip");
+                var portText = ReadString(element, "port");
+                var secret = ReadString(element, "secret");
+                if (!string.IsNullOrWhiteSpace(server) &&
+                    !string.IsNullOrWhiteSpace(portText) &&
+                    !string.IsNullOrWhiteSpace(secret) &&
+                    int.TryParse(portText, out var port) &&
+                    port is > 0 and <= 65535 &&
+                    !server.Contains('/') &&
+                    !server.Contains(' '))
+                {
+                    Add(result, seen, server.Trim(), port, secret.Trim(), sourceName);
+                }
+
+                foreach (var property in element.EnumerateObject())
+                {
+                    if (property.Value.ValueKind is JsonValueKind.Object or JsonValueKind.Array)
+                    {
+                        CollectJson(property.Value, sourceName, result, seen);
+                    }
+                }
+
+                break;
+        }
+    }
+
+    private static string? ReadString(JsonElement element, string name)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (!property.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            return property.Value.ValueKind switch
+            {
+                JsonValueKind.String => property.Value.GetString(),
+                JsonValueKind.Number => property.Value.GetRawText(),
+                _ => null,
+            };
+        }
+
+        return null;
+    }
+
     /// <summary>Каналы публикуют заглушки вроде «Server: Unknown» или «— YOUR PROXY HERE —».</summary>
     private static bool IsPlaceholderServer(string server) =>
         server.Contains("unknown", StringComparison.OrdinalIgnoreCase) ||
@@ -127,6 +218,14 @@ internal static class MtProtoService
         string secret,
         string sourceName)
     {
+        // Некоторые каналы публикуют «подписи» прокси с испорченным доменом фронтинга
+        // (cdns.g]oogle.com и подобные). С таким секретом Telegram прокси не примет,
+        // поэтому такие записи не попадают в список вовсе.
+        if (MtProtoSecret.TryParse(secret) is null)
+        {
+            return;
+        }
+
         // У некоторых каналов сервер записан как FQDN с точкой на конце.
         server = server.TrimEnd('.');
         if (server.Length == 0)
@@ -179,7 +278,7 @@ internal static class MtProtoService
         }
 
         var (rawText, _) = await NodeSourceService.FetchRawAsync(source, cancellationToken).ConfigureAwait(false);
-        return Extract(rawText, source.Name);
+        return ExtractAll(rawText, source.Name);
     }
 
     /// <summary>Резервный способ: RSS-зеркала читают канал на своей стороне, VPN не нужен.</summary>
@@ -244,14 +343,18 @@ internal static class MtProtoService
             : parts[0];
     }
 
-    /// <summary>Проверка TCP-доступности: MTProto-хендшейк без секрета не проверить, но мёртвые серверы отсеиваются.</summary>
+    /// <summary>
+    /// Проверка «как в Telegram»: FakeTLS-рукопожатие и настоящий запрос к серверам Telegram
+    /// (<see cref="MtProtoProbe"/>). Простой TCP-коннект не годится — открытый порт отвечает
+    /// и у мёртвого прокси, поэтому в списке оказывались нерабочие.
+    /// </summary>
     public static async Task TestAsync(
         IReadOnlyList<MtProtoProxy> proxies,
         IProgress<string>? progress,
         Action<MtProtoProxy>? onTested,
         CancellationToken cancellationToken,
-        int concurrency = 32,
-        int timeoutMs = 3000)
+        int concurrency = 12,
+        int timeoutMs = MtProtoProbe.DefaultTimeoutMs)
     {
         if (proxies.Count == 0)
         {
@@ -259,51 +362,75 @@ internal static class MtProtoService
         }
 
         var done = 0;
-        using var limiter = new SemaphoreSlim(concurrency);
+        using var limiter = new SemaphoreSlim(Math.Max(1, concurrency));
+
+        // Пинг меряем отдельно и почти без нагрузки: параллельные рукопожатия
+        // завышают TCP-задержку, и она перестаёт совпадать с Telegram.
+        using var pingLimiter = new SemaphoreSlim(2);
         var tasks = proxies.Select(async proxy =>
         {
+            MtProtoProbeResult result;
             await limiter.WaitAsync(cancellationToken);
             try
             {
-                var alive = false;
-                try
+                result = await MtProtoProbe.CheckAsync(
+                        proxy.Server, proxy.Port, proxy.Secret, timeoutMs, cancellationToken)
+                    .ConfigureAwait(false);
+
+                // Прокси ответил на TCP, но не успел рукопожатием, или недавно работал:
+                // одна сетевая заминка не должна выбрасывать его из списка. Повторяем.
+                if (!result.Alive && !cancellationToken.IsCancellationRequested &&
+                    (result.TcpConnected || proxy.Status == MtProtoStatus.Working))
                 {
-                    using var client = new TcpClient();
-                    using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    timeout.CancelAfter(timeoutMs);
-                    var stopwatch = Stopwatch.StartNew();
-                    await client.ConnectAsync(proxy.Server, proxy.Port, timeout.Token);
-                    proxy.DelayMs = (int)stopwatch.ElapsedMilliseconds;
-                    alive = true;
-                }
-                catch (Exception exception) when (exception is SocketException or OperationCanceledException)
-                {
-                    proxy.DelayMs = null;
-                }
-                finally
-                {
-                    if (alive)
-                    {
-                        proxy.Status = MtProtoStatus.Working;
-                        proxy.DeadAtUtc = null;
-                    }
-                    else
-                    {
-                        proxy.Status = MtProtoStatus.Dead;
-                        proxy.DeadAtUtc ??= DateTime.UtcNow;
-                    }
+                    result = await MtProtoProbe.CheckAsync(
+                            proxy.Server, proxy.Port, proxy.Secret, timeoutMs, cancellationToken)
+                        .ConfigureAwait(false);
                 }
             }
             finally
             {
-                proxy.CheckedAtUtc = DateTime.UtcNow;
                 limiter.Release();
-                onTested?.Invoke(proxy);
-                var finished = Interlocked.Increment(ref done);
-                if (finished % 20 == 0 || finished == proxies.Count)
+            }
+
+            if (result.Alive)
+            {
+                await pingLimiter.WaitAsync(cancellationToken);
+                try
                 {
-                    progress?.Report($"Проверено {finished} из {proxies.Count}");
+                    var ping = await MtProtoProbe.MeasurePingAsync(
+                            proxy.Server, proxy.Port, Math.Min(3000, timeoutMs), cancellationToken)
+                        .ConfigureAwait(false);
+                    proxy.DelayMs = ping ?? result.DelayMs;
                 }
+                finally
+                {
+                    pingLimiter.Release();
+                }
+            }
+            else
+            {
+                proxy.DelayMs = null;
+            }
+
+            if (result.Alive)
+            {
+                proxy.Status = MtProtoStatus.Working;
+                proxy.FailCount = 0;
+                proxy.DeadAtUtc = null;
+            }
+            else
+            {
+                proxy.Status = MtProtoStatus.Dead;
+                proxy.FailCount++;
+                proxy.DeadAtUtc ??= DateTime.UtcNow;
+            }
+
+            proxy.CheckedAtUtc = DateTime.UtcNow;
+            onTested?.Invoke(proxy);
+            var finished = Interlocked.Increment(ref done);
+            if (finished % 20 == 0 || finished == proxies.Count)
+            {
+                progress?.Report($"Проверено {finished} из {proxies.Count}");
             }
         });
 

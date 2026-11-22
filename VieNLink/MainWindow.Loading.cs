@@ -57,6 +57,7 @@ public partial class MainWindow
             IdleRecheckBox.Text = _settings.IdleRecheckHours.ToString();
             MinimizeTrayCheck.IsChecked = _settings.MinimizeToTray;
             WidgetTopmostCheck.IsChecked = _settings.WidgetTopmost;
+            UpdateAutomationUi();
             LightThemeCheck.IsChecked = string.Equals(_settings.Theme, "Light", StringComparison.OrdinalIgnoreCase);
             // Автозапуск читаем из реестра: это фактическое состояние, а не пожелание.
             AutostartCheck.IsChecked = AutostartService.IsEnabled;
@@ -233,7 +234,7 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Чтение источников и кэша узлов. Разбор десятков мегабайт JSON и ссылок идёт
+    /// Чтение источников и кэша серверов. Разбор десятков мегабайт JSON и ссылок идёт
     /// в фоновом потоке, а коллекции UI заполняются уже в диспетчере.
     /// </summary>
     private async Task LoadSourcesAndCacheAsync()
@@ -266,17 +267,17 @@ public partial class MainWindow
 
         if (snapshot.DroppedNodes > 0)
         {
-            AppendLog($"Из кэша удалено {snapshot.DroppedNodes} нерабочих/старых узлов — они не хранятся");
+            AppendLog($"Из кэша удалено {snapshot.DroppedNodes} нерабочих/старых серверов — они не хранятся");
         }
 
         if (snapshot.DuplicateNodes > 0)
         {
-            AppendLog($"Склеено повторов: {snapshot.DuplicateNodes} — одинаковые узлы оставлены одной строкой");
+            AppendLog($"Склеено повторов: {snapshot.DuplicateNodes} — одинаковые серверы оставлены одной строкой");
         }
 
         if (snapshot.TrimmedNodes > 0)
         {
-            AppendLog($"Список ограничен {_settings.MaxTotalNodes} узлами: из кэша убрано {snapshot.TrimmedNodes} лишних. " +
+            AppendLog($"Список ограничен {_settings.MaxTotalNodes} серверами: из кэша убрано {snapshot.TrimmedNodes} лишних. " +
                       "Новые появятся после проверки накопленных");
         }
 
@@ -294,7 +295,7 @@ public partial class MainWindow
 
         if (snapshot.Nodes.Count > 0)
         {
-            StatusDetail.Text = "Кэш прочитан — можно проверять узлы";
+            StatusDetail.Text = "Кэш прочитан — можно проверять серверы";
             FooterText.Text = $"Кэш от {snapshot.CacheTime:dd.MM HH:mm}";
         }
 
@@ -321,12 +322,12 @@ public partial class MainWindow
         var nodes = NodeSourceService.LoadCache(out var droppedNodes, out var duplicateNodes, freshAfter);
 
         // Кэш мог вырасти до десятков тысяч: жёстко ограничиваем список и оставляем
-        // личные и проверенные узлы, а не первые попавшиеся.
+        // личные и проверенные серверы, а не первые попавшиеся.
         var (keptNodes, trimmedNodes) = NodeLimits.Trim(nodes, settings.MaxTotalNodes);
         nodes = keptNodes;
         if (droppedNodes > 0 || duplicateNodes > 0 || trimmedNodes > 0)
         {
-            // «Мусор», устаревшие узлы, повторы и лишнее сверх лимита сразу убираем из кэша.
+            // «Мусор», устаревшие серверы, повторы и лишнее сверх лимита сразу убираем из кэша.
             NodeSourceService.SaveCache(nodes);
         }
 
@@ -350,7 +351,7 @@ public partial class MainWindow
 
     private int NodeCount => _rows.Count + _workingRows.Count;
 
-    /// <summary>Список заполнен: новые узлы не добавляем, пока накопленные не проверены.</summary>
+    /// <summary>Список заполнен: новые серверы не добавляем, пока накопленные не проверены.</summary>
     private bool AtNodeLimit => NodeCount >= Math.Max(1000, _settings.MaxTotalNodes);
 
     private DateTime _limitNoticeUtc;
@@ -363,7 +364,7 @@ public partial class MainWindow
         }
 
         _limitNoticeUtc = DateTime.UtcNow;
-        AppendLog($"Достигнут лимит {_settings.MaxTotalNodes} узлов: новые не добавляются, источники не ищутся. " +
+        AppendLog($"Достигнут лимит {_settings.MaxTotalNodes} серверов: новые не добавляются, источники не ищутся. " +
                   "Проверьте накопленные — нерабочие удалятся, и место освободится");
     }
 
@@ -376,8 +377,8 @@ public partial class MainWindow
         unique = kept;
         if (trimmed > 0)
         {
-            AppLog.Write("nodes", $"Список ограничен {_settings.MaxTotalNodes} узлами: отброшено {trimmed}");
-            AppendLog($"Список ограничен {_settings.MaxTotalNodes} узлами: отброшено {trimmed} лишних. " +
+            AppLog.Write("nodes", $"Список ограничен {_settings.MaxTotalNodes} серверами: отброшено {trimmed}");
+            AppendLog($"Список ограничен {_settings.MaxTotalNodes} серверами: отброшено {trimmed} лишних. " +
                       "Новые появятся после проверки накопленных");
         }
         _rows.Clear();
@@ -408,10 +409,10 @@ public partial class MainWindow
         UpdateTrayNodes();
     }
 
-    /// <summary>Пересобрать вкладки по текущим статусам узлов и сохранить кэш.</summary>
+    /// <summary>Пересобрать вкладки по текущим статусам серверов и сохранить кэш.</summary>
     private async Task RepartitionAndSaveAsync()
     {
-        // Удалённые (10 провалов) узлы в кэш не попадают: их просто выбрасываем.
+        // Удалённые (10 провалов) серверы в кэш не попадают: их просто выбрасываем.
         var all = AllRows.Select(r => r.Node)
             .Concat(_droppedNodes.Where(n => n.Status != NodeStatus.Dead))
             .ToList();
@@ -425,8 +426,8 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Сводка вместо списка узлов: сколько всего, рабочих и с доступом к сервисам.
-    /// Сам список скрыт, сортировка и выбор узла идут внутри.
+    /// Сводка вместо списка серверов: сколько всего, рабочих и с доступом к сервисам.
+    /// Сам список скрыт, сортировка и выбор сервера идут внутри.
     /// </summary>
     private void UpdateNodesSummary()
     {
@@ -435,29 +436,70 @@ public partial class MainWindow
             return;
         }
 
-        var nodes = AllRows.Select(row => row.Node).ToList();
         var now = DateTime.UtcNow;
         var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
+        var onlyMine = _settings.ConnectOnlyMine;
+        var total = 0;
+        var working = 0;
+        var fresh = 0;
+        var universal = 0;
+        var youtube = 0;
+        var telegram = 0;
+        var discord = 0;
+        var bestDomains = 0;
 
-        // Значки сервисов показывают только то, что реально возьмёт кнопка: рабочий узел
-        // со свежей проверкой и тем же фильтром «только мои». Устаревшая запись из кэша
-        // иначе обещает узел, который уже не отвечает.
-        bool Usable(ProxyNode node) => NodeAvailability.IsUsable(
-            node, recheckMinutes, _settings.ConnectOnlyMine, now);
-        var universal = nodes.Count(node => Usable(node) && NodeAvailability.OpenedFor(node, "universal"));
-        var youtube = nodes.Count(node => Usable(node) && NodeAvailability.OpenedFor(node, "youtube"));
-        var telegram = nodes.Count(node => Usable(node) && NodeAvailability.OpenedFor(node, "telegram"));
-        var discord = nodes.Count(node => Usable(node) && NodeAvailability.OpenedFor(node, "discord"));
-        var fresh = nodes.Count(Usable);
-        var working = nodes.Count(node => node.Status == NodeStatus.Working);
+        // Один проход без копии списка: сводка обновляется каждые 250 мс во время
+        // проверки 200+ серверов, и аллокация List на 12 000 строк была лишней.
+        foreach (var row in AllRows)
+        {
+            var node = row.Node;
+            total++;
+            if (node.Status == NodeStatus.Working)
+            {
+                working++;
+            }
+
+            // Значки сервисов показывают только то, что реально возьмёт кнопка: рабочий
+            // сервер со свежей проверкой и тем же фильтром «только мои». Устаревшая запись
+            // из кэша иначе обещает сервер, который уже не отвечает.
+            if (!NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now))
+            {
+                continue;
+            }
+
+            fresh++;
+            if (node.OpenDomains > bestDomains)
+            {
+                bestDomains = node.OpenDomains;
+            }
+
+            if (NodeAvailability.OpenedFor(node, "universal"))
+            {
+                universal++;
+            }
+
+            if (NodeAvailability.OpenedFor(node, "youtube"))
+            {
+                youtube++;
+            }
+
+            if (NodeAvailability.OpenedFor(node, "telegram"))
+            {
+                telegram++;
+            }
+
+            if (NodeAvailability.OpenedFor(node, "discord"))
+            {
+                discord++;
+            }
+        }
 
         UniversalNodeCount = universal;
         YoutubeNodeCount = youtube;
         TelegramNodeCount = telegram;
         DiscordNodeCount = discord;
-        var bestDomains = nodes.Where(Usable).Select(node => node.OpenDomains).DefaultIfEmpty(0).Max();
 
-        NodesSummaryText.Text = $"В списке: {nodes.Count} узлов · рабочих: {working} · " +
+        NodesSummaryText.Text = $"В списке: {total} серверов · рабочих: {working} · " +
                                 $"свежих: {fresh} (проверены за {recheckMinutes} мин)";
         if (NodesAccessText is not null)
         {
@@ -467,10 +509,10 @@ public partial class MainWindow
         }
 
         // Постоянная строка в шапке: её не перетирают ход проверки и сообщения операций.
-        // Числа под иконками сервисов — проверенные рабочие узлы с доступом к каждому.
+        // Числа под иконками сервисов — проверенные рабочие серверы с доступом к каждому.
         if (HeaderNodesText is not null)
         {
-            HeaderNodesText.Text = $"Узлы: {nodes.Count}";
+            HeaderNodesText.Text = $"Серверы: {total}";
         }
 
         if (HeaderYoutubeText is not null)
@@ -496,7 +538,7 @@ public partial class MainWindow
 
     private void UpdateSummary()
     {
-        // Количество узлов показываем прямо в заголовках подвкладок.
+        // Количество серверов показываем прямо в заголовках подвкладок.
         // IsEmpty дешевле полного перебора 30 000 строк с фильтром при каждой проверке.
         var hasVisible = _view is null ? _rows.Count > 0 : !_view.IsEmpty;
         NodesUntestedTab.Header = $"Непроверенные ({_rows.Count})";
@@ -520,13 +562,13 @@ public partial class MainWindow
         {
             if (_workingRows.Count > 0)
             {
-                EmptyTitle.Text = "Непроверенных узлов нет";
-                EmptyText.Text = "Проверенные узлы — на подвкладке «Рабочие». Обновите списки, чтобы добавить новые.";
+                EmptyTitle.Text = "Непроверенных серверов нет";
+                EmptyText.Text = "Проверенные серверы — на подвкладке «Рабочие». Обновите списки, чтобы добавить новые.";
             }
             else
             {
                 EmptyTitle.Text = "Список пуст";
-                EmptyText.Text = "Нажмите «Обновить списки» — приложение соберёт узлы из открытых источников";
+                EmptyText.Text = "Нажмите «Обновить списки» — приложение соберёт серверы из открытых источников";
             }
         }
         else

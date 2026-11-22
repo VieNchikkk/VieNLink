@@ -34,13 +34,13 @@ public sealed class TunnelService : VpnService
     public const string ActionStart = "com.vienlink.app.START";
     public const string ActionStop = "com.vienlink.app.STOP";
 
-    /// <summary>Выбрать лучший проверенный узел и переключиться без пересоздания TUN.</summary>
+    /// <summary>Выбрать лучший проверенный сервер и переключиться без пересоздания TUN.</summary>
     public const string ActionBest = "com.vienlink.app.BEST";
 
     /// <summary>Автозапуск (загрузка, плитка, восстановление): конфиг собирается внутри службы.</summary>
     public const string ActionAuto = "com.vienlink.app.AUTO";
 
-    /// <summary>TUN-обход без узла: TUN → встроенный форвардер с фрагментацией TLS.</summary>
+    /// <summary>TUN-обход без сервера: TUN → встроенный форвардер с фрагментацией TLS.</summary>
     public const string ActionBypass = "com.vienlink.app.BYPASS";
 
     /// <summary>Стратегия фрагментации TUN-обхода (имя <see cref="StreamFragmentMode"/>).</summary>
@@ -53,7 +53,7 @@ public sealed class TunnelService : VpnService
     private const string DefaultTunAddress = "172.19.0.1";
 
     /// <summary>
-    /// Временный конфиг для проверки связки: TUN + прямой выход без узла.
+    /// Временный конфиг для проверки связки: TUN + прямой выход без сервера.
     /// Если туннель поднялся и интернет работает — ядро, fd и маршруты связаны верно.
     /// Сюда же будет подставляться конфиг из <c>SingBoxConfigBuilder</c>.
     /// </summary>
@@ -85,7 +85,7 @@ public sealed class TunnelService : VpnService
 
     /// <summary>
     /// Текущая служба для платформы libbox: из неё берутся TUN и protect.
-    /// null — ядро работает в режиме проверки узлов, TUN не нужен.
+    /// null — ядро работает в режиме проверки серверов, TUN не нужен.
     /// </summary>
     public static TunnelService? Active { get; private set; }
 
@@ -97,7 +97,7 @@ public sealed class TunnelService : VpnService
     private static Timer? _healthTimer;
     private static int _healthFailures;
 
-    /// <summary>Служба поднимает TUN-обход: проверка узлов в отдельном процессе недоступна.</summary>
+    /// <summary>Служба поднимает TUN-обход: проверка серверов в отдельном процессе недоступна.</summary>
     public static bool IsBypassMode { get; private set; }
 
     public override StartCommandResult OnStartCommand(Intent? intent, StartCommandFlags flags, int startId)
@@ -114,7 +114,18 @@ public sealed class TunnelService : VpnService
         // Уведомление обязательно: без foreground-службы Android убивает туннель в фоне.
         StartForegroundNotification();
 
-        if (intent?.Action == ActionBest)
+        // Система перезапустила службу после остановки процесса: intent пустой.
+        // Раньше в этом случае поднимался прямой TUN без сервера (интернет «есть»,
+        // а прокси нет), а health-check не мог ничего переключить. Восстанавливаем
+        // последний режим: TUN-обход или прокси-сервер.
+        if (intent is null)
+        {
+            return RestoreAfterSystemRestart()
+                ? StartCommandResult.Sticky
+                : StartCommandResult.NotSticky;
+        }
+
+        if (intent.Action == ActionBest)
         {
             _ = SwitchToBestAsync();
             return StartCommandResult.Sticky;
@@ -133,10 +144,15 @@ public sealed class TunnelService : VpnService
         }
 
         _bypassMode = false; IsBypassMode = false;
+        if (AndroidSettingsStore.Current.LastRunWasBypass)
+        {
+            AndroidSettingsStore.Current.LastRunWasBypass = false;
+            AndroidSettingsStore.Save();
+        }
 
         if (intent?.Action == ActionAuto)
         {
-            // После загрузки человека нет: нельзя поднимать туннель на узле, который
+            // После загрузки человека нет: нельзя поднимать туннель на сервере, который
             // умер, пока телефон был выключен. BuildTunnelConfig выберет рабочий.
             var autoConfig = NodeStore.BuildTunnelConfig(out var autoError, preferWorking: true);
             if (autoConfig is null)
@@ -157,13 +173,64 @@ public sealed class TunnelService : VpnService
     }
 
     /// <summary>
-    /// TUN-обход без прокси-узла: TUN → встроенный SOCKS5-форвардер, который режет
+    /// Восстанавливает режим после перезапуска службы системой: TUN-обход по сохранённой
+    /// стратегии или прокси-сервер из кэша (с проверкой живости). Возвращает false, если
+    /// поднимать нечего.
+    /// </summary>
+    private bool RestoreAfterSystemRestart()
+    {
+        try
+        {
+            NodeStore.EnsureLoaded();
+            var settings = AndroidSettingsStore.Current;
+            if (settings.LastRunWasBypass)
+            {
+                // Был включён TUN-обход — возвращаем его с сохранённой стратегией,
+                // а не поднимаем прокси-сервер, которого в этом режиме не было.
+                var mode = Enum.TryParse<StreamFragmentMode>(settings.TunBypassStrategy, out var parsed)
+                    ? parsed
+                    : StreamFragmentMode.RecordSplit;
+                AppLog.Write("android", "Служба перезапущена системой: восстанавливаю TUN-обход");
+                StartBypass(mode);
+                return true;
+            }
+
+            settings.LastRunWasBypass = false;
+            AndroidSettingsStore.Save();
+
+            var config = NodeStore.BuildTunnelConfig(out var error, preferWorking: true);
+            if (config is null)
+            {
+                AppLog.Write("android", "Служба перезапущена системой, но подключать нечего: " + error);
+                StopTunnel();
+                StopSelf();
+                return false;
+            }
+
+            AppLog.Write("android", "Служба перезапущена системой: восстанавливаю прокси-сервер");
+            StartCore(config);
+            return true;
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("android", "Не удалось восстановить туннель после перезапуска службы", exception);
+            StopTunnel();
+            StopSelf();
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// TUN-обход без прокси-сервера: TUN → встроенный SOCKS5-форвардер, который режет
     /// TLS ClientHello. Сокеты форвардера идут мимо VPN, потому что процесс исключён
     /// из туннеля на уровне <c>VpnService</c>.
     /// </summary>
     private void StartBypass(StreamFragmentMode mode)
     {
         _bypassMode = true; IsBypassMode = true;
+        AndroidSettingsStore.Current.LastRunWasBypass = true;
+        AndroidSettingsStore.Current.TunBypassStrategy = mode.ToString();
+        AndroidSettingsStore.Save();
         var strategy = TlsFragmentForwarder.Strategies.FirstOrDefault(item => item.Mode == mode)
                        ?? TlsFragmentForwarder.Strategies[0];
 
@@ -259,8 +326,8 @@ public sealed class TunnelService : VpnService
     }
 
     /// <summary>
-    /// Уведомление: текущий узел, переход к списку узлов и отключение в один тап.
-    /// Обновляется при смене узла (<see cref="UpdateNodeLabel"/>).
+    /// Уведомление: текущий сервер, переход к списку серверов и отключение в один тап.
+    /// Обновляется при смене сервера (<see cref="UpdateNodeLabel"/>).
     /// </summary>
     private Notification BuildNotification()
     {
@@ -300,7 +367,7 @@ public sealed class TunnelService : VpnService
             PendingIntentFlags.Immutable | PendingIntentFlags.UpdateCurrent);
         if (nodes is not null)
         {
-            builder.AddAction(0, "Узлы", nodes);
+            builder.AddAction(0, "Серверы", nodes);
         }
 
         var stop = PendingIntent.GetService(
@@ -327,7 +394,7 @@ public sealed class TunnelService : VpnService
         }
     }
 
-    /// <summary>Показывает в уведомлении выбранный узел (вызывается при подключении и переключении).</summary>
+    /// <summary>Показывает в уведомлении выбранный сервер (вызывается при подключении и переключении).</summary>
     public static void UpdateNodeLabel(string? label)
     {
         _nodeLabel = label;
@@ -336,7 +403,7 @@ public sealed class TunnelService : VpnService
         TunnelWidget.Update(Android.App.Application.Context);
     }
 
-    /// <summary>Действие «Лучший» в уведомлении: проверенный узел с максимальным доступом.</summary>
+    /// <summary>Действие «Лучший» в уведомлении: проверенный сервер с максимальным доступом.</summary>
     private async Task SwitchToBestAsync()
     {
         try
@@ -345,7 +412,7 @@ public sealed class TunnelService : VpnService
             var best = NodeStore.SelectBestWorking();
             if (best is null)
             {
-                AppLog.Write("health", "Кнопка «Лучший»: живых проверенных узлов нет");
+                AppLog.Write("health", "Кнопка «Лучший»: живых проверенных серверов нет");
                 return;
             }
 
@@ -356,7 +423,7 @@ public sealed class TunnelService : VpnService
                 await api.SelectAsync(SingBoxConfigBuilder.SelectorTag, best.Tag, CancellationToken.None)
                     .ConfigureAwait(false);
                 UpdateNodeLabel(best.DisplayDelay);
-                AppLog.Write("health", "Уведомление: выбран лучший узел " + best.Name);
+                AppLog.Write("health", "Уведомление: выбран лучший сервер " + best.Name);
                 return;
             }
 
@@ -369,7 +436,7 @@ public sealed class TunnelService : VpnService
 
             StartCore(config);
             UpdateNodeLabel(NodeStore.Selected?.DisplayDelay);
-            AppLog.Write("health", "Уведомление: туннель пересобран на лучший узел");
+            AppLog.Write("health", "Уведомление: туннель пересобран на лучший сервер");
         }
         catch (Exception exception)
         {
@@ -378,8 +445,8 @@ public sealed class TunnelService : VpnService
     }
 
     /// <summary>
-    /// Проверка живости выбранного узла раз в 90 секунд. После двух провалов подряд
-    /// при включённом автопереключении выбирается другой узел, уже загруженный в ядро.
+    /// Проверка живости выбранного сервера раз в 90 секунд. После двух провалов подряд
+    /// при включённом автопереключении выбирается другой сервер, уже загруженный в ядро.
     /// </summary>
     private void StartHealthMonitor()
     {
@@ -390,7 +457,7 @@ public sealed class TunnelService : VpnService
 
         _healthFailures = 0;
         _healthTimer = new System.Threading.Timer(_ => _ = HealthTickAsync(), null,
-            TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(45));
+            TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(20));
     }
 
     private void StopHealthMonitor()
@@ -416,8 +483,16 @@ public sealed class TunnelService : VpnService
                 return;
             }
 
+            NodeStore.EnsureLoaded();
             var settings = NodeStore.Settings;
-            if (!settings.AutoFailover)
+            if (!settings.AutoFailover || settings.AutomationPaused)
+            {
+                return;
+            }
+
+            // Нет ни Wi-Fi, ни мобильной сети — это не смерть сервера. Без проверки
+            // устройство в фоне (Doze, экран выключен) переключалось бы зря.
+            if (!HasUnderlyingNetwork())
             {
                 return;
             }
@@ -425,6 +500,29 @@ public sealed class TunnelService : VpnService
             var selected = NodeStore.Selected;
             if (selected is null)
             {
+                AppLog.Write("health", "Автопереключение: выбранный сервер неизвестен, беру загруженный");
+                if (await SwitchToLoadedNodeAsync(null).ConfigureAwait(false) is null)
+                {
+                    AppLog.Write("health", "Автопереключение: загруженных рабочих серверов нет");
+                }
+
+                return;
+            }
+
+            var loaded = CoreRuntime.LoadedTags;
+            if (!loaded.Contains(selected.Tag))
+            {
+                // Фоновая проверка могла выбрать сервер, которого нет в текущем конфиге.
+                // Проверять его тег бессмысленно — сразу переключаемся на загруженный.
+                var switched = await SwitchToLoadedNodeAsync(selected).ConfigureAwait(false);
+                AppLog.Write("health", switched is null
+                    ? "Автопереключение: выбранного сервера нет в конфиге, запасных нет"
+                    : "Автопереключение: выбранный сервер вне конфига, выбран загруженный");
+                if (switched is not null)
+                {
+                    _healthFailures = 0;
+                }
+
                 return;
             }
 
@@ -435,6 +533,13 @@ public sealed class TunnelService : VpnService
                     "https://cp.cloudflare.com/generate_204").ConfigureAwait(false);
             }
 
+            // Пока шёл запрос, пользователь мог нажать «Дальше» — сбой старого сервера
+            // не должен уменьшать счётчики или переключать только что выбранный.
+            if (NodeStore.Selected?.Id != selected.Id)
+            {
+                return;
+            }
+
             if (delay is not null)
             {
                 _healthFailures = 0;
@@ -442,30 +547,33 @@ public sealed class TunnelService : VpnService
             }
 
             _healthFailures++;
-            AppLog.Write("health", $"Узел не ответил ({_healthFailures}/2)");
+            AppLog.Write("health", $"Сервер не ответил ({_healthFailures}/2)");
             if (_healthFailures < 2)
             {
                 return;
             }
 
             _healthFailures = 0;
+
+            // Два провала подряд — сервер действительно перестал открывать сайт.
+            // Отмечаем это и в списке: счётчик сервисов сразу перестаёт его показывать.
+            NodeHealth.RegisterFailure(selected);
+            NodeStore.SaveNodes();
+
             var family = NodeRanking.Family(selected);
-            var loaded = CoreRuntime.LoadedTags;
             var replacement = NodeStore.Snapshot()
                 .Where(node => node.Id != selected.Id &&
                                node.Status == NodeStatus.Working &&
                                node.DelayMs is not null &&
                                loaded.Contains(node.Tag))
-                .OrderByDescending(node => NodeRanking.Family(node) != family)
+                .OrderBy(node => node.DelayMs)
+                .ThenByDescending(node => NodeRanking.Family(node) != family)
                 .ThenByDescending(node => node.OpenDomains)
-                .ThenBy(node => node.DelayMs)
                 .FirstOrDefault();
             if (replacement is null)
             {
-                // Запасного узла в текущем конфиге нет: отмечаем провал и пересобираем
-                // конфиг по тем же правилам, что и при обычном подключении.
-                NodeHealth.RegisterFailure(selected);
-                NodeStore.SaveNodes();
+                // Запасного сервера в текущем конфиге нет: пересобираем конфиг по тем же
+                // правилам, что и при обычном подключении.
                 var rebuilt = NodeStore.BuildTunnelConfig(out var error, preferWorking: true);
                 if (rebuilt is null)
                 {
@@ -489,7 +597,7 @@ public sealed class TunnelService : VpnService
         }
         catch (Exception exception)
         {
-            AppLog.Write("health", "Проверка живости узла не удалась", exception);
+            AppLog.Write("health", "Проверка живости сервера не удалась", exception);
         }
         finally
         {
@@ -497,12 +605,85 @@ public sealed class TunnelService : VpnService
         }
     }
 
+    /// <summary>
+    /// Переключает selector на рабочий сервер, который уже загружен в текущий конфиг.
+    /// null — подходящего нет. Нужен, когда выбранный сервер выпал из конфига
+    /// (например, его выбрала фоновая проверка) — иначе health-check тестирует
+    /// несуществующий тег и «не переключается».
+    /// </summary>
+    private static async Task<ProxyNode?> SwitchToLoadedNodeAsync(ProxyNode? avoid)
+    {
+        var loaded = CoreRuntime.LoadedTags;
+        var candidate = NodeStore.Snapshot()
+            .Where(node => node.Status == NodeStatus.Working &&
+                           node.DelayMs is not null &&
+                           loaded.Contains(node.Tag) &&
+                           (avoid is null || node.Id != avoid.Id))
+            .OrderBy(node => node.DelayMs)
+            .ThenByDescending(node => node.OpenDomains)
+            .FirstOrDefault();
+        if (candidate is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var api = new ClashApiClient(CoreRuntime.ApiPort, CoreRuntime.ApiSecret);
+            await api.SelectAsync(SingBoxConfigBuilder.SelectorTag, candidate.Tag, CancellationToken.None)
+                .ConfigureAwait(false);
+            NodeStore.Select(candidate);
+            UpdateNodeLabel(candidate.DisplayDelay);
+            return candidate;
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("health", "Не удалось переключиться на загруженный сервер", exception);
+            return null;
+        }
+    }
+
+    /// <summary>Есть ли у устройства настоящая сеть (Wi-Fi/мобильная), а не только наш VPN.</summary>
+    private bool HasUnderlyingNetwork()
+    {
+        try
+        {
+            var manager = _connectivity ??= (ConnectivityManager?)GetSystemService(ConnectivityService);
+            if (manager is null)
+            {
+                return true;
+            }
+
+            foreach (var network in manager.GetAllNetworks())
+            {
+                var capabilities = manager.GetNetworkCapabilities(network);
+                if (capabilities is null)
+                {
+                    continue;
+                }
+
+                if (capabilities.HasTransport(TransportType.Wifi) ||
+                    capabilities.HasTransport(TransportType.Cellular) ||
+                    capabilities.HasTransport(TransportType.Ethernet))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (Exception exception)
+        {
+            Android.Util.Log.Warn("VieNLink", "проверка сети: " + exception.Message);
+        }
+
+        return true;
+    }
+
     /// <summary>Запуск ядра с конфигом sing-box. TUN ядро попросит само через <see cref="OpenTun"/>.</summary>
     private void StartCore(string configJson)
     {
         try
         {
-            // TUN-обход и прокси-узел взаимоисключающие: при обычном подключении форвардер
+            // TUN-обход и прокси-сервер взаимоисключающие: при обычном подключении форвардер
             // должен остановиться, иначе его сокет остаётся занятым до следующего отключения.
             if (!_bypassMode)
             {
@@ -542,7 +723,7 @@ public sealed class TunnelService : VpnService
 
             State = _tunDescriptor is null ? TunnelState.Stopped : TunnelState.Running;
 
-            // В уведомлении показываем узел, чтобы его не выбирать вслепую.
+            // В уведомлении показываем сервер, чтобы его не выбирать вслепую.
             if (State == TunnelState.Running)
             {
                 var selected = NodeStore.Selected;

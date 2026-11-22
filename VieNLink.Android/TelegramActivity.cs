@@ -1,4 +1,4 @@
-using Android.App;
+﻿using Android.App;
 using Android.Content;
 using Android.Graphics;
 using Android.Net;
@@ -10,7 +10,7 @@ namespace VieNLink.Mobile;
 
 /// <summary>
 /// Страница «Telegram MTProtoProxies»: рабочие MTProto-прокси, ручная проверка,
-/// открытие ссылки в Telegram и отдельное подключение к Telegram через узел.
+/// открытие ссылки в Telegram и отдельное подключение к Telegram через сервер.
 /// Сбор идёт автономно из Telegram-источников через RSS-зерцала.
 /// </summary>
 #if DEBUG
@@ -26,8 +26,14 @@ public sealed class TelegramActivity : BaseActivity
     private LinearLayout? _deadList;
     private TextView? _summary;
     private TextView? _status;
+    private TextView? _viaNodeButton;
+    private TextView? _collectButton;
+    private TextView? _testButton;
     private string? _pendingConfig;
     private bool _busy;
+    private string? _workKind;
+    private CancellationTokenSource? _workCts;
+    private CancellationTokenSource? _connectCts;
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
@@ -50,7 +56,8 @@ public sealed class TelegramActivity : BaseActivity
             Ui.Hint(this,
                 "MTProto-прокси работают только внутри Telegram: браузер через них пустить нельзя, " +
                 "это протокол самого мессенджера. Каналы читаются через RSS-зеркала, рабочие прокси " +
-                "проверяются каждые 10 минут, нерабочие удаляются через 24 часа.", P, P.MutedStrong));
+                "проверяются каждые 10 минут настоящим рукопожатием с Telegram, нерабочие удаляются " +
+                "через 24 часа.", P, P.MutedStrong));
         page.AddView(intro);
 
         _summary = Ui.Text(this, "Прокси: —", 15f, P.TextStrong, bold: true);
@@ -62,9 +69,11 @@ public sealed class TelegramActivity : BaseActivity
 
         var actions = Ui.Row(this);
         var test = Ui.Pill(this, P, "Проверить", UiButtonKind.Accent,
-            () => _ = RunTestAsync(), Resource.Drawable.ic_check);
+            ToggleTest, Resource.Drawable.ic_check);
+        _testButton = test;
         var collect = Ui.Pill(this, P, "Собрать", UiButtonKind.Secondary,
-            () => _ = RunCollectAsync(), Resource.Drawable.ic_refresh);
+            ToggleCollect, Resource.Drawable.ic_refresh);
+        _collectButton = collect;
         actions.AddView(test, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         var gap = new Space(this);
         actions.AddView(gap, new LinearLayout.LayoutParams(Ui.Dp(this, 8), 1));
@@ -75,9 +84,9 @@ public sealed class TelegramActivity : BaseActivity
             OpenBest, Resource.Drawable.ic_service_telegram);
         Ui.Add(page, openBest, 8);
 
-        var viaNode = Ui.Pill(this, P, "Подключить Telegram через узел", UiButtonKind.Secondary,
-            ConnectTelegramViaNode, Resource.Drawable.ic_tab_connection);
-        Ui.Add(page, viaNode, 8);
+        _viaNodeButton = Ui.Pill(this, P, "Подключить Telegram через сервер", UiButtonKind.Secondary,
+            ToggleTelegramConnect, Resource.Drawable.ic_tab_connection);
+        Ui.Add(page, _viaNodeButton, 8);
 
         page.AddView(Ui.Section(this, "Рабочие прокси", P));
         _list = Ui.Column(this);
@@ -101,6 +110,13 @@ public sealed class TelegramActivity : BaseActivity
     {
         base.OnResume();
         Reload();
+    }
+
+    protected override void OnDestroy()
+    {
+        _connectCts?.Cancel();
+        _workCts?.Cancel();
+        base.OnDestroy();
     }
 
     private async Task ReloadAsync()
@@ -223,6 +239,42 @@ public sealed class TelegramActivity : BaseActivity
         return left.TotalHours <= 0 ? "удаляется" : $"осталось {Math.Ceiling(left.TotalHours)} ч";
     }
 
+    private void ToggleCollect()
+    {
+        if (_workKind == "collect")
+        {
+            _workCts?.Cancel();
+            SetStatus("Останавливаю сбор прокси…");
+            return;
+        }
+
+        if (_busy)
+        {
+            Ui.Toast(this, "Дождитесь окончания другой операции");
+            return;
+        }
+
+        _ = RunCollectAsync();
+    }
+
+    private void ToggleTest()
+    {
+        if (_workKind == "test")
+        {
+            _workCts?.Cancel();
+            SetStatus("Останавливаю проверку прокси…");
+            return;
+        }
+
+        if (_busy)
+        {
+            Ui.Toast(this, "Дождитесь окончания другой операции");
+            return;
+        }
+
+        _ = RunTestAsync();
+    }
+
     private async Task RunCollectAsync()
     {
         if (_busy)
@@ -231,13 +283,21 @@ public sealed class TelegramActivity : BaseActivity
         }
 
         _busy = true;
-        SetStatus("Читаю Telegram-каналы через RSS…");
+        _workKind = "collect";
+        var cts = new CancellationTokenSource();
+        _workCts = cts;
+        SetCollectButton("Остановить сбор");
+        SetStatus("Собираю прокси из сайтов и каналов Telegram…");
         try
         {
             var progress = new Progress<string>(SetStatus);
-            var summary = await MtProtoStore.CollectAsync(progress, CancellationToken.None);
+            var summary = await MtProtoStore.CollectAsync(progress, cts.Token);
             SetStatus(summary);
             Reload();
+        }
+        catch (System.OperationCanceledException)
+        {
+            SetStatus("Сбор прокси остановлен");
         }
         catch (Exception exception)
         {
@@ -247,6 +307,14 @@ public sealed class TelegramActivity : BaseActivity
         finally
         {
             _busy = false;
+            _workKind = null;
+            if (ReferenceEquals(_workCts, cts))
+            {
+                _workCts = null;
+            }
+
+            cts.Dispose();
+            SetCollectButton("Собрать");
         }
     }
 
@@ -258,13 +326,21 @@ public sealed class TelegramActivity : BaseActivity
         }
 
         _busy = true;
-        SetStatus("Проверяю TCP-доступность прокси…");
+        _workKind = "test";
+        var cts = new CancellationTokenSource();
+        _workCts = cts;
+        SetTestButton("Остановить проверку");
+        SetStatus("Проверяю прокси так же, как Telegram: рукопожатие и запрос к его серверам…");
         try
         {
             var progress = new Progress<string>(SetStatus);
-            var summary = await MtProtoStore.TestAsync(progress, CancellationToken.None);
+            var summary = await MtProtoStore.TestAsync(progress, cts.Token);
             SetStatus(summary);
             Reload();
+        }
+        catch (System.OperationCanceledException)
+        {
+            SetStatus("Проверка прокси остановлена");
         }
         catch (Exception exception)
         {
@@ -274,8 +350,32 @@ public sealed class TelegramActivity : BaseActivity
         finally
         {
             _busy = false;
+            _workKind = null;
+            if (ReferenceEquals(_workCts, cts))
+            {
+                _workCts = null;
+            }
+
+            cts.Dispose();
+            SetTestButton("Проверить");
         }
     }
+
+    private void SetCollectButton(string text) => RunOnUiThread(() =>
+    {
+        if (_collectButton is not null)
+        {
+            _collectButton.Text = text;
+        }
+    });
+
+    private void SetTestButton(string text) => RunOnUiThread(() =>
+    {
+        if (_testButton is not null)
+        {
+            _testButton.Text = text;
+        }
+    });
 
     private void OpenBest()
     {
@@ -323,26 +423,38 @@ public sealed class TelegramActivity : BaseActivity
         }
     }
 
-    /// <summary>Подключение только для Telegram: узел с подтверждённым доступом к t.me.</summary>
-    private async void ConnectTelegramViaNode()
+    /// <summary>Подключение только для Telegram: сервер с подтверждённым доступом к t.me.</summary>
+    private void ToggleTelegramConnect()
     {
         if (_busy)
         {
+            // Повторное нажатие — отмена: долгий поиск сервера не должен «зависать».
+            _connectCts?.Cancel();
+            ProbeClient.Cancel();
+            SetStatus("Отменяю подключение…");
             return;
         }
 
+        _ = ConnectTelegramViaNodeAsync();
+    }
+
+    private async Task ConnectTelegramViaNodeAsync()
+    {
         _busy = true;
+        var cts = new CancellationTokenSource();
+        _connectCts = cts;
+        SetViaNodeButton("Отменить подключение");
         try
         {
-            NodeStore.EnsureLoaded();
+            await Task.Run(() => NodeStore.EnsureLoaded(), cts.Token);
             var progress = new Progress<string>(SetStatus);
-            SetStatus("Проверяю узел с доступом к Telegram…");
+            SetStatus("Проверяю сервер с доступом к Telegram…");
             var node = await NodeStore.PickVerifiedAsync(
-                NodeStore.QuickService.Telegram, null, progress, CancellationToken.None);
+                NodeStore.QuickService.Telegram, null, progress, cts.Token);
             if (node is null)
             {
-                Ui.Toast(this, "Нет живых узлов с доступом к Telegram");
-                SetStatus("Нет живых узлов с доступом к Telegram");
+                Ui.Toast(this, "Нет живых серверов с доступом к Telegram");
+                SetStatus("Нет живых серверов с доступом к Telegram");
                 return;
             }
 
@@ -351,16 +463,21 @@ public sealed class TelegramActivity : BaseActivity
                 CoreRuntime.LoadedTags.Contains(node.Tag))
             {
                 using var api = new ClashApiClient(CoreRuntime.ApiPort, CoreRuntime.ApiSecret);
-                await api.SelectAsync(SingBoxConfigBuilder.SelectorTag, node.Tag, CancellationToken.None);
+                await api.SelectAsync(SingBoxConfigBuilder.SelectorTag, node.Tag, cts.Token);
                 TunnelService.UpdateNodeLabel(node.DisplayDelay);
-                SetStatus("Telegram через узел: переключено · " + node.DisplayDelay);
+                SetStatus("Telegram через сервер: переключено · " + node.DisplayDelay);
                 return;
             }
 
-            var config = NodeStore.BuildTunnelConfig(out var error);
+            var built = await Task.Run(() =>
+            {
+                var tunnelConfig = NodeStore.BuildTunnelConfig(out var buildError);
+                return (Config: tunnelConfig, Error: buildError);
+            });
+            var config = built.Config;
             if (config is null)
             {
-                Ui.Toast(this, error ?? "Не удалось собрать конфиг");
+                Ui.Toast(this, built.Error ?? "Не удалось собрать конфиг");
                 return;
             }
 
@@ -373,7 +490,11 @@ public sealed class TelegramActivity : BaseActivity
             }
 
             VpnStarter.Start(this, config);
-            SetStatus("Telegram через узел: туннель запускается");
+            SetStatus("Telegram через сервер: туннель запускается");
+        }
+        catch (System.OperationCanceledException)
+        {
+            SetStatus("Подключение отменено");
         }
         catch (Exception exception)
         {
@@ -382,8 +503,23 @@ public sealed class TelegramActivity : BaseActivity
         finally
         {
             _busy = false;
+            if (ReferenceEquals(_connectCts, cts))
+            {
+                _connectCts = null;
+            }
+
+            cts.Dispose();
+            SetViaNodeButton("Подключить Telegram через сервер");
         }
     }
+
+    private void SetViaNodeButton(string text) => RunOnUiThread(() =>
+    {
+        if (_viaNodeButton is not null)
+        {
+            _viaNodeButton.Text = text;
+        }
+    });
 
     protected override void OnActivityResult(int requestCode, Result resultCode, Intent? data)
     {
@@ -396,7 +532,7 @@ public sealed class TelegramActivity : BaseActivity
         if (resultCode == Result.Ok && _pendingConfig is not null)
         {
             VpnStarter.Start(this, _pendingConfig);
-            SetStatus("Telegram через узел: туннель запускается");
+            SetStatus("Telegram через сервер: туннель запускается");
         }
         else
         {
@@ -414,3 +550,4 @@ public sealed class TelegramActivity : BaseActivity
         }
     });
 }
+

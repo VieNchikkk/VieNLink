@@ -33,10 +33,17 @@ internal sealed class AndroidSettings
     /// <summary>Стратегия TUN-обхода, выбранная пользователем (имя <see cref="StreamFragmentMode"/>).</summary>
     public string TunBypassStrategy { get; set; } = "RecordSplit";
 
+    /// <summary>
+    /// Последний режим запуска: true — TUN-обход, false — прокси-сервер. Нужен, чтобы
+    /// после перезапуска службы системой (START_STICKY без intent) восстановить
+    /// именно тот режим, а не поднять прямой TUN без прокси.
+    /// </summary>
+    public bool LastRunWasBypass { get; set; }
+
     /// <summary>Автоматически собирать MTProto из каналов.</summary>
     public bool AutoMtProto { get; set; } = true;
 
-    /// <summary>Автоматически проверять узлы в фоне (в дополнение к :probe в процессе).</summary>
+    /// <summary>Автоматически проверять серверы в фоне (в дополнение к :probe в процессе).</summary>
     public bool AutoProbe { get; set; } = true;
 }
 

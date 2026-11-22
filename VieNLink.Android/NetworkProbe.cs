@@ -5,7 +5,7 @@ using System.Text.Json;
 
 namespace VieNLink.Mobile;
 
-/// <summary>Сведения о выходе через узел: IP, страна и провайдер.</summary>
+/// <summary>Сведения о выходе через сервер: IP, страна и провайдер.</summary>
 internal sealed record ExitInfo(string Ip, string CountryCode, string Country, string City, string Org)
 {
     /// <summary>Флаг страны эмодзи: две региональные буквы из ISO-кода.</summary>
@@ -47,7 +47,7 @@ internal static class NetworkProbe
     public static double? CachedSpeed =>
         _speed is not null && DateTime.UtcNow - _speedAtUtc < TimeSpan.FromMinutes(5) ? _speed : null;
 
-    /// <summary>Сбрасывает кэш выхода и скорости: после смены узла это уже другие данные.</summary>
+    /// <summary>Сбрасывает кэш выхода и скорости: после смены сервера это уже другие данные.</summary>
     public static void Invalidate()
     {
         _exit = null;
@@ -82,7 +82,7 @@ internal static class NetworkProbe
         return client;
     }
 
-    /// <summary>Выходной IP и страна через узел. null — туннель не запущен или запрос не прошёл.</summary>
+    /// <summary>Выходной IP и страна через сервер. null — туннель не запущен или запрос не прошёл.</summary>
     public static async Task<ExitInfo?> LookupExitAsync(CancellationToken cancellationToken)
     {
         if (!CoreRuntime.IsRunning)
@@ -194,7 +194,7 @@ internal static class NetworkProbe
         }
     }
 
-    /// <summary>Прямой IP (мимо туннеля) — чтобы показать, что узел действительно меняет выход.</summary>
+    /// <summary>Прямой IP (мимо туннеля) — чтобы показать, что сервер действительно меняет выход.</summary>
     public static async Task<string?> DirectIpAsync(CancellationToken cancellationToken)
     {
         try
@@ -210,7 +210,7 @@ internal static class NetworkProbe
         }
     }
 
-    /// <summary>Замер скорости через узел, Мбит/с. Результат сохраняется в узле.</summary>
+    /// <summary>Замер скорости через сервер, Мбит/с. Результат сохраняется в сервере.</summary>
     public static async Task<double?> MeasureSpeedAsync(CancellationToken cancellationToken)
     {
         if (!CoreRuntime.IsRunning)
@@ -275,7 +275,7 @@ internal static class NetworkProbe
             }
             catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or OperationCanceledException)
             {
-                // Медленный узел или сервис недоступен — пробуем другой адрес.
+                // Медленный сервер или сервис недоступен — пробуем другой адрес.
                 AppLog.Write("speed", $"{new Uri(url).Host}: {exception.GetType().Name}: {exception.Message}");
             }
         }

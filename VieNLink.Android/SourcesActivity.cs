@@ -61,9 +61,14 @@ public sealed class SourcesActivity : BaseActivity
             () => _ = RunDiscoveryAsync(), Resource.Drawable.ic_globe);
         Ui.Add(page, discover, 8);
 
-        var hint = Ui.Banner(P, this, P.Accent, "Какие бывают источники",
-            "Подписка (base64, Clash/YAML, JSON), открытый список ссылок, канал Telegram и одна " +
-            "ссылка на узел. Ссылки подписок содержат токены и хранятся в sources.dat, " +
+        var collectProxies = Ui.Pill(this, P, "Собрать Telegram-прокси", UiButtonKind.Secondary,
+            () => _ = RunMtProtoCollectAsync(), Resource.Drawable.ic_refresh);
+        Ui.Add(page, collectProxies, 8);
+
+        var hint = Ui.Banner(P, this, P.Accent, "Два разных списка",
+            "Источники серверов — подписки (base64, Clash/YAML, JSON) и открытые списки ссылок. " +
+            "Каналы Telegram — отдельный блок: из них собираются MTProto-прокси для Telegram, " +
+            "а не серверы. Ссылки подписок содержат токены и хранятся в sources.dat, " +
             "зашифрованном ключом Keystore.");
         Ui.Add(page, hint, 12);
 
@@ -97,89 +102,130 @@ public sealed class SourcesActivity : BaseActivity
 
         _list.RemoveAllViews();
         var sources = NodeStore.SnapshotSources();
-        var enabled = sources.Count(source => source.Enabled);
+        var nodeSources = sources
+            .Where(source => !SourceKinds.IsProxy(source))
+            .OrderByDescending(source => source.IsMine)
+            .ThenBy(source => source.Name)
+            .ToList();
+        var telegramSources = sources
+            .Where(SourceKinds.IsProxy)
+            .OrderBy(source => source.Name)
+            .ToList();
 
-        _summary.Text = $"Источников: {sources.Count} · включено: {enabled}";
-        if (sources.Count == 0)
+        _summary.Text = $"Серверы: {nodeSources.Count} · Telegram-прокси: {telegramSources.Count}";
+
+        _list.AddView(Ui.Section(this, "Источники серверов", P));
+        if (nodeSources.Count == 0)
         {
             _list.AddView(Ui.Card(P, this,
-                Ui.Text(this, "Источников нет", 15f, P.MutedStrong, bold: true),
-                Ui.Hint(this, "Нажмите «Добавить» и вставьте ссылку на подписку, список или канал.", P)));
+                Ui.Text(this, "Источников серверов нет", 15f, P.MutedStrong, bold: true),
+                Ui.Hint(this, "Нажмите «Добавить» и вставьте ссылку на подписку или открытый список.", P)));
+        }
+        else
+        {
+            foreach (var source in nodeSources)
+            {
+                AddSourceCard(source);
+            }
+        }
+
+        _list.AddView(Ui.Section(this, "Telegram-прокси (каналы и сайты)", P));
+        if (telegramSources.Count == 0)
+        {
+            _list.AddView(Ui.Card(P, this,
+                Ui.Text(this, "Каналов нет", 15f, P.MutedStrong, bold: true),
+                Ui.Hint(this, "Добавьте канал вида https://t.me/s/канал — из него собираются MTProto-прокси.", P)));
+        }
+        else
+        {
+            foreach (var source in telegramSources)
+            {
+                AddSourceCard(source);
+            }
+        }
+    }
+
+    /// <summary>Карточка одного источника: общая для серверов и каналов Telegram.</summary>
+    private void AddSourceCard(SourceDefinition source)
+    {
+        if (_list is null)
+        {
             return;
         }
 
-        foreach (var source in sources.OrderByDescending(item => item.IsMine).ThenBy(item => item.Name))
+        var isProxySource = SourceKinds.IsProxy(source);
+        var card = Ui.Column(this);
+        card.SetPadding(Ui.Dp(this, 14), Ui.Dp(this, 12), Ui.Dp(this, 14), Ui.Dp(this, 12));
+        card.Background = Ui.Rounded(source.Enabled ? P.Card : P.Inner, 14, this,
+            source.Enabled ? P.Border : P.BorderSoft);
+
+        var row = Ui.Row(this);
+        var name = Ui.Text(this, source.Name, 14.5f,
+            source.Enabled ? P.TextStrong : P.Muted, bold: true);
+        name.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        name.SetSingleLine(true);
+        row.AddView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        if (source.IsMine)
         {
-            var card = Ui.Column(this);
-            card.SetPadding(Ui.Dp(this, 14), Ui.Dp(this, 12), Ui.Dp(this, 14), Ui.Dp(this, 12));
-            card.Background = Ui.Rounded(source.Enabled ? P.Card : P.Inner, 14, this,
-                source.Enabled ? P.Border : P.BorderSoft);
-
-            var row = Ui.Row(this);
-            var name = Ui.Text(this, source.Name, 14.5f,
-                source.Enabled ? P.TextStrong : P.Muted, bold: true);
-            name.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-            name.SetSingleLine(true);
-            row.AddView(name, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-            if (source.IsMine)
-            {
-                row.AddView(Ui.Badge(this, P, "★ МОЯ", P.Accent));
-            }
-
-            row.AddView(Ui.Badge(this, P, source.Enabled ? "ВКЛ" : "ВЫКЛ",
-                source.Enabled ? P.Positive : P.Muted));
-            card.AddView(row);
-
-            var url = Ui.Text(this, source.Url, 11f, P.Muted);
-            url.SetSingleLine(true);
-            url.Ellipsize = Android.Text.TextUtils.TruncateAt.Middle;
-            url.SetPadding(0, Ui.Dp(this, 4), 0, 0);
-            card.AddView(url);
-
-            var count = source.LastNodeCount > 0 ? source.LastNodeCount + " узлов" : "узлов пока нет";
-            var status = source.LastError is not null
-                ? "ошибка: " + source.LastError
-                : source.LastCheckedUtc is null
-                    ? "не проверялся"
-                    : "обновлён " + source.LastCheckedUtc.Value.ToLocalTime().ToString("dd.MM HH:mm");
-            var stats = Ui.Hint(this, count + " · " + status, P,
-                source.LastError is null ? P.Muted : P.Danger);
-            stats.SetPadding(0, Ui.Dp(this, 2), 0, 0);
-            card.AddView(stats);
-
-            if (!string.IsNullOrWhiteSpace(source.SubscriptionInfo))
-            {
-                var info = Ui.Hint(this, "Подписка: " + source.SubscriptionInfo, P, P.Accent);
-                info.SetPadding(0, Ui.Dp(this, 2), 0, 0);
-                card.AddView(info);
-            }
-
-            var buttons = Ui.Row(this);
-            var toggle = Ui.Pill(this, P, source.Enabled ? "Выключить" : "Включить",
-                UiButtonKind.Ghost, () =>
-                {
-                    NodeStore.SetSourceEnabled(source, !source.Enabled);
-                    Reload();
-                    SetProgress((source.Enabled ? "Включён: " : "Выключен: ") + source.Name);
-                });
-            var update = Ui.Pill(this, P, "Обновить", UiButtonKind.Ghost,
-                () => _ = UpdateOneAsync(source), Resource.Drawable.ic_refresh);
-            var delete = Ui.Pill(this, P, "Удалить", UiButtonKind.Ghost,
-                () => ConfirmRemove(source), Resource.Drawable.ic_delete);
-            delete.SetTextColor(P.Danger);
-            buttons.AddView(toggle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-            buttons.AddView(update, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-            buttons.AddView(delete, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-            var buttonsLayout = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
-            buttonsLayout.TopMargin = Ui.Dp(this, 8);
-            card.AddView(buttons, buttonsLayout);
-
-            var outer = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
-            outer.BottomMargin = Ui.Dp(this, 8);
-            _list.AddView(card, outer);
+            row.AddView(Ui.Badge(this, P, "★ МОЯ", P.Accent));
         }
+
+        row.AddView(Ui.Badge(this, P, source.Enabled ? "ВКЛ" : "ВЫКЛ",
+            source.Enabled ? P.Positive : P.Muted));
+        card.AddView(row);
+
+        var url = Ui.Text(this, source.Url, 11f, P.Muted);
+        url.SetSingleLine(true);
+        url.Ellipsize = Android.Text.TextUtils.TruncateAt.Middle;
+        url.SetPadding(0, Ui.Dp(this, 4), 0, 0);
+        card.AddView(url);
+
+        var unit = isProxySource ? "прокси" : "серверов";
+        var count = source.LastNodeCount > 0
+            ? source.LastNodeCount + " " + unit
+            : (isProxySource ? "прокси пока нет" : "серверов пока нет");
+        var status = source.LastError is not null
+            ? "ошибка: " + source.LastError
+            : source.LastCheckedUtc is null
+                ? "не проверялся"
+                : "обновлён " + source.LastCheckedUtc.Value.ToLocalTime().ToString("dd.MM HH:mm");
+        var stats = Ui.Hint(this, count + " · " + status, P,
+            source.LastError is null ? P.Muted : P.Danger);
+        stats.SetPadding(0, Ui.Dp(this, 2), 0, 0);
+        card.AddView(stats);
+
+        if (!string.IsNullOrWhiteSpace(source.SubscriptionInfo))
+        {
+            var info = Ui.Hint(this, "Подписка: " + source.SubscriptionInfo, P, P.Accent);
+            info.SetPadding(0, Ui.Dp(this, 2), 0, 0);
+            card.AddView(info);
+        }
+
+        var buttons = Ui.Row(this);
+        var toggle = Ui.Pill(this, P, source.Enabled ? "Выключить" : "Включить",
+            UiButtonKind.Ghost, () =>
+            {
+                NodeStore.SetSourceEnabled(source, !source.Enabled);
+                Reload();
+                SetProgress((source.Enabled ? "Включён: " : "Выключен: ") + source.Name);
+            });
+        var update = Ui.Pill(this, P, "Обновить", UiButtonKind.Ghost,
+            () => _ = UpdateOneAsync(source), Resource.Drawable.ic_refresh);
+        var delete = Ui.Pill(this, P, "Удалить", UiButtonKind.Ghost,
+            () => ConfirmRemove(source), Resource.Drawable.ic_delete);
+        delete.SetTextColor(P.Danger);
+        buttons.AddView(toggle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        buttons.AddView(update, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        buttons.AddView(delete, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        var buttonsLayout = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+        buttonsLayout.TopMargin = Ui.Dp(this, 8);
+        card.AddView(buttons, buttonsLayout);
+
+        var outer = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+        outer.BottomMargin = Ui.Dp(this, 8);
+        _list.AddView(card, outer);
     }
 
     private void ShowAddDialog()
@@ -265,7 +311,7 @@ public sealed class SourcesActivity : BaseActivity
     private void ConfirmRemove(SourceDefinition source)
     {
         using var dialog = new AlertDialog.Builder(this)
-            .SetMessage("Удалить источник «" + source.Name + "»? Узлы из него останутся в кэше до чистки.")
+            .SetMessage("Удалить источник «" + source.Name + "»? Серверы из него останутся в кэше до чистки.")
             .SetPositiveButton("Удалить", (_, _) =>
             {
                 NodeStore.RemoveSource(source);
@@ -290,12 +336,55 @@ public sealed class SourcesActivity : BaseActivity
         try
         {
             var progress = new Progress<string>(SetProgress);
-            var result = await NodeStore.ImportSourceAsync(source, progress, CancellationToken.None);
-            SetProgress(result);
+            if (SourceKinds.IsProxy(source))
+            {
+                // Канал Telegram — источник MTProto-прокси, а не серверов.
+                SetProgress("Собираю прокси из канала: " + source.Name);
+                var proxies = await MtProtoService
+                    .FetchAsync(source, CancellationToken.None, forceRss: true)
+                    .ConfigureAwait(false);
+                var added = MtProtoStore.AddDiscovered(proxies);
+                source.LastCheckedUtc = DateTime.UtcNow;
+                source.LastError = null;
+                source.LastNodeCount = proxies.Count;
+                SetProgress($"{source.Name}: прокси {proxies.Count}, новых {added}");
+            }
+            else
+            {
+                var result = await NodeStore.ImportSourceAsync(source, progress, CancellationToken.None);
+                SetProgress(result);
+            }
         }
         catch (Exception exception)
         {
             SetProgress("Ошибка: " + exception.Message);
+        }
+        finally
+        {
+            _busy = false;
+            Reload();
+        }
+    }
+
+    private async Task RunMtProtoCollectAsync()
+    {
+        if (_busy)
+        {
+            SetProgress("Дождитесь окончания загрузки");
+            return;
+        }
+
+        _busy = true;
+        SetProgress("Собираю MTProto-прокси из каналов…");
+        try
+        {
+            var progress = new Progress<string>(SetProgress);
+            var summary = await MtProtoStore.CollectAsync(progress, CancellationToken.None).ConfigureAwait(false);
+            SetProgress(summary);
+        }
+        catch (Exception exception)
+        {
+            SetProgress("Ошибка сбора прокси: " + exception.Message);
         }
         finally
         {
@@ -324,7 +413,7 @@ public sealed class SourcesActivity : BaseActivity
 
             if (NodeStore.Settings.TestAfterRefresh)
             {
-                SetProgress("Проверяю новые узлы в :probe…");
+                SetProgress("Проверяю новые серверы в :probe…");
                 var tested = await ProbeClient.RunBatchAsync(NodeTester.MaxBatch, CancellationToken.None);
                 SetProgress(tested.Error ?? $"Источники обновлены; проверено {tested.Tested}, " +
                                             $"рабочих {tested.Working}");
@@ -358,7 +447,7 @@ public sealed class SourcesActivity : BaseActivity
                 NodeStore.SnapshotSources(), progress, CancellationToken.None);
             var added = NodeStore.AddDiscovered(result);
             var mtproto = MtProtoStore.AddDiscovered(result.MtProto);
-            SetProgress($"Новых источников {added}, узлов {result.Nodes.Count}, MTProto {mtproto}." +
+            SetProgress($"Новых источников {added}, серверов {result.Nodes.Count}, MTProto {mtproto}." +
                         (result.Error is null ? string.Empty : " Ошибка: " + result.Error));
             Reload();
         }

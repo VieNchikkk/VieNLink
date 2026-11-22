@@ -15,7 +15,14 @@ internal static class JsonFileStore
         Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
-    /// <summary>Файлы пишутся из фона (кэш узлов), поэтому общий временный файл защищаем.</summary>
+    /// <summary>Компактная запись для больших кэшей: без отступов файл в разы меньше и быстрее.</summary>
+    private static readonly JsonSerializerOptions CompactOptions = new()
+    {
+        WriteIndented = false,
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+    };
+
+    /// <summary>Файлы пишутся из фона (кэш серверов), поэтому общий временный файл защищаем.</summary>
     private static readonly object WriteLock = new();
 
     public static T? Read<T>(string path) where T : class
@@ -48,7 +55,12 @@ internal static class JsonFileStore
         return null;
     }
 
-    public static void Write<T>(string path, T value)
+    public static void Write<T>(string path, T value) => WriteCore(path, value, Options);
+
+    /// <summary>Компактная запись (без отступов) — для кэша серверов на тысячи записей.</summary>
+    public static void WriteCompact<T>(string path, T value) => WriteCore(path, value, CompactOptions);
+
+    private static void WriteCore<T>(string path, T value, JsonSerializerOptions options)
     {
         lock (WriteLock)
         {
@@ -59,7 +71,7 @@ internal static class JsonFileStore
                 using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
                 {
                     // Сериализация сразу в поток: без промежуточной строки на десятки мегабайт.
-                    JsonSerializer.Serialize(stream, value, Options);
+                    JsonSerializer.Serialize(stream, value, options);
                 }
 
                 if (File.Exists(path))

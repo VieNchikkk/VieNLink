@@ -20,8 +20,9 @@ public sealed partial class MainActivity
         page.AddView(Ui.Section(this, "Быстрое подключение", P));
 
         var first = Ui.Row(this);
-        AddWeighted(first, Ui.ServiceButton(this, P, "YouTube", Resource.Drawable.ic_service_youtube,
-            P.YouTube, P.YouTubeSurface, () => StartForService(NodeStore.QuickService.YouTube)), 8);
+        AddWeighted(first, Ui.ServiceButton(this, P, "YouTube", Resource.Drawable.ic_service_youtube_brand,
+            P.YouTube, P.YouTubeSurface, () => StartForService(NodeStore.QuickService.YouTube),
+            tintIcon: false), 8);
         AddWeighted(first, Ui.ServiceButton(this, P, "Discord", Resource.Drawable.ic_service_discord,
             P.Discord, P.DiscordSurface, () => StartForService(NodeStore.QuickService.Discord)), 0);
         page.AddView(first);
@@ -37,25 +38,29 @@ public sealed partial class MainActivity
             P.Telegram, P.TelegramSurface, () => StartForService(NodeStore.QuickService.Telegram)), 0);
         page.AddView(second, secondLayout);
 
-        var mtproto = Ui.Pill(this, P, "Telegram MTProtoProxies", UiButtonKind.Accent,
-            () => Open(typeof(TelegramActivity)), Resource.Drawable.ic_mtproto);
+        var mtproto = Ui.Pill(this, P, "Telegram MTProtoProxies", UiButtonKind.Secondary,
+            () => Open(typeof(TelegramActivity)), Resource.Drawable.ic_mtproto, tone: P.Telegram);
         Ui.Add(page, mtproto, 8);
 
+        var addServer = Ui.Pill(this, P, "Добавить сервер", UiButtonKind.Secondary,
+            ShowAddServerDialog, Resource.Drawable.ic_nodes);
+        Ui.Add(page, addServer, 8);
+
         var explanation = Ui.Banner(P, this, P.Accent, "Кратко",
-            "Нажмите кнопку сервиса — VieNLink сам выберет проверенный узел с доступом к нему " +
+            "Нажмите кнопку сервиса — VieNLink сам выберет проверенный сервер с доступом к нему " +
             "и подключится. После подключения в шапке появятся страна, задержка, скорость и оценка.");
         Ui.Add(page, explanation, 12);
 
         page.AddView(Ui.Section(this, "Как это работает", P));
         var how = Ui.Card(P, this);
-        how.AddView(Bullet("1. Узлы собираются из открытых списков, подписок и каналов Telegram."));
-        how.AddView(Bullet("2. Каждый узел проверяется запросом через сам узел: задержка = сайт реально открылся."));
+        how.AddView(Bullet("1. Серверы собираются из открытых списков, подписок и каналов Telegram."));
+        how.AddView(Bullet("2. Каждый сервер проверяется запросом через сам сервер: задержка = сайт реально открылся."));
         how.AddView(Bullet("3. Лучший — тот, кто открывает больше заблокированных доменов, затем быстрейший."));
-        how.AddView(Bullet("4. Список узлов скрыт: приложение выбирает и меняет узел само."));
+        how.AddView(Bullet("4. Список серверов скрыт: приложение выбирает и меняет сервер само."));
         page.AddView(how);
 
         var beta = Ui.Banner(P, this, P.Warning, "Статус: бета-версия",
-            "Основные режимы проверены, но возможны сбои. Бесплатные узлы не проверяются никем: " +
+            "Основные режимы проверены, но возможны сбои. Бесплатные серверы не проверяются никем: " +
             "владелец сервера видит трафик так же, как провайдер. Не входите через них в банки и почту.");
         Ui.Add(page, beta, 12);
 
@@ -88,15 +93,15 @@ public sealed partial class MainActivity
         var bypass = TunnelService.IsBypassMode;
         var status = Ui.Card(P, this,
             Ui.Text(this,
-                bypass ? "TUN-обход (бета) работает" : running ? "Подключён прокси-узел" : "Обход выключен",
+                bypass ? "TUN-обход (бета) работает" : running ? "Подключён прокси-сервер" : "Обход выключен",
                 16f, bypass || running ? P.Positive : P.MutedStrong, bold: true),
             Ui.Hint(this,
                 bypass
-                    ? "Трафик идёт в TUN и в локальный форвардер с фрагментацией TLS. Прокси-узел не нужен. " +
+                    ? "Трафик идёт в TUN и в локальный форвардер с фрагментацией TLS. Прокси-сервер не нужен. " +
                       "Режим в бете: часть сайтов может не открываться."
                     : running
-                        ? "При подключении к узлу обход DPI останавливается: режимы взаимоисключающие."
-                        : "Выберите режим ниже. TUN-обход (бета) работает без узла; Zapret и WinDivert на Android недоступны.",
+                        ? "При подключении к серверу обход DPI останавливается: режимы взаимоисключающие."
+                        : "Выберите режим ниже. TUN-обход (бета) работает без сервера; Zapret и WinDivert на Android недоступны.",
                 P));
         page.AddView(status);
 
@@ -108,7 +113,7 @@ public sealed partial class MainActivity
         tunTop.AddView(Ui.Badge(this, P, "БЕТА", P.Warning));
         tun.AddView(tunTop);
         var tunHint = Ui.Hint(this,
-            "Без прокси-узла и без WinDivert: sing-box поднимает TUN, TCP идёт в собственный " +
+            "Без прокси-сервера и без WinDivert: sing-box поднимает TUN, TCP идёт в собственный " +
             "SOCKS5-форвардер, который режет TLS ClientHello. На SNI-блоках помогает, при блоке по IP — нет.", P);
         tunHint.SetPadding(0, Ui.Dp(this, 6), 0, 0);
         tun.AddView(tunHint);
@@ -191,7 +196,7 @@ public sealed partial class MainActivity
         var page = ColumnPage();
         page.AddView(Ui.Section(this, "Инструменты", P));
 
-        // Сведений об узлах здесь нет: для них есть отдельная вкладка «Узлы».
+        // Сведений об серверах здесь нет: для них есть отдельная вкладка «Серверы».
         // Остаётся только счётчик источников — он относится к этому разделу.
         var sources = 0;
         try
@@ -210,12 +215,12 @@ public sealed partial class MainActivity
             AppLog.Write("android", "Не удалось прочитать сводку инструментов", exception);
         }
 
-        // Ни сводки узлов, ни строки «Готово», ни кнопок проверки здесь нет:
-        // для этого есть отдельные экран «Узлы» и кнопка «Проверить узлы» в шапке.
+        // Ни сводки серверов, ни строки «Готово», ни кнопок проверки здесь нет:
+        // для этого есть отдельные экран «Серверы» и кнопка «Проверить серверы» в шапке.
         page.AddView(Ui.Section(this, "Разделы", P));
 
-        AddTile(page, Resource.Drawable.ic_nodes, "Узлы",
-            "Сводка, проверка и выбор узла",
+        AddTile(page, Resource.Drawable.ic_nodes, "Серверы",
+            "Сводка, проверка и выбор сервера",
             () => Open(typeof(NodesActivity)), P.Universal);
         AddTile(page, Resource.Drawable.ic_sources, "Источники",
             $"{sources} шт. · подписки, списки и Telegram-каналы",
@@ -227,10 +232,10 @@ public sealed partial class MainActivity
             $"{MtProtoStore.WorkingCount} рабочих прокси · каналы через RSS",
             () => Open(typeof(TelegramActivity)), P.Telegram);
         AddTile(page, Resource.Drawable.ic_settings, "Настройки",
-            "Автозапуск, выбор узла, тема, проверки",
+            "Тема, обновления, данные и VPN, автоматика",
             () => Open(typeof(SettingsActivity)), P.MutedStrong);
         AddTile(page, Resource.Drawable.ic_info, "О программе и лицензии",
-            "Версия, GPL-3.0, сторонние компоненты, обновления",
+            "Версия, GPL-3.0, сторонние компоненты",
             () => Open(typeof(AboutActivity)), P.Accent);
 
         page.AddView(Ui.Section(this, "Автоматика", P));
@@ -243,7 +248,7 @@ public sealed partial class MainActivity
 
         var auto = Ui.Banner(P, this, P.Accent, "Работает само",
             "Фоновое обслуживание раз в 30 минут обновляет устаревшие источники, собирает MTProto " +
-            "и удаляет нерабочие записи. Проверка узлов идёт в отдельном процессе :probe.");
+            "и удаляет нерабочие записи. Проверка серверов идёт в отдельном процессе :probe.");
         Ui.Add(page, auto, 14);
 
         return page;
@@ -258,7 +263,7 @@ public sealed partial class MainActivity
         page.AddView(tile, layout);
     }
 
-    /// <summary>Подпись итога проверки — общая для «Инструментов» и экрана «Узлы».</summary>
+    /// <summary>Подпись итога проверки — общая для «Инструментов» и экрана «Серверы».</summary>
     internal static string DescribeTestResult(NodeTestSummary summary) => summary.Error is not null
         ? summary.Error
         : $"Проверено {summary.Tested}: рабочих {summary.Working} " +
@@ -280,7 +285,7 @@ public sealed partial class MainActivity
                 NodeStore.SnapshotSources(), null, CancellationToken.None);
             var added = NodeStore.AddDiscovered(result);
             var mtproto = MtProtoStore.AddDiscovered(result.MtProto);
-            var message = $"Новых источников {added}, узлов {result.Nodes.Count}, MTProto {mtproto}" +
+            var message = $"Новых источников {added}, серверов {result.Nodes.Count}, MTProto {mtproto}" +
                           (result.Error is null ? string.Empty : ". Ошибка: " + result.Error);
             ShowHeaderDetail(message, 20);
             Ui.Toast(this, message);
@@ -299,11 +304,11 @@ public sealed partial class MainActivity
         var node = NodeStore.Selected ?? NodeStore.Snapshot().FirstOrDefault();
         if (node is null)
         {
-            Ui.Toast(this, "Нет узла для экспорта — обновите источники");
+            Ui.Toast(this, "Нет сервера для экспорта — обновите источники");
             return;
         }
 
-        var options = new[] { "Ссылка узла", "Список ссылок", "Конфиг sing-box (JSON)" };
+        var options = new[] { "Ссылка сервера", "Список ссылок", "Конфиг sing-box (JSON)" };
         using var dialog = new AlertDialog.Builder(this)
             .SetTitle("Экспорт профиля")
             .SetItems(options, (_, args) =>
@@ -423,148 +428,4 @@ public sealed partial class MainActivity
         }
     }
 
-    // ------------------------------------------------------------------ общие
-
-    private View BuildGeneralPage()
-    {
-        var page = ColumnPage();
-        page.AddView(Ui.Section(this, "Приложение", P));
-
-        var version = "1.1.0";
-        try
-        {
-            version = PackageManager?.GetPackageInfo(PackageName!, 0)?.VersionName ?? version;
-        }
-        catch (Exception)
-        {
-            // Версия из манифеста недоступна — показываем запасную.
-        }
-
-        var about = Ui.Card(P, this);
-        var titleRow = Ui.Row(this);
-        titleRow.AddView(Ui.Text(this, "VieNLink", 18f, P.TextStrong, bold: true),
-            new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        titleRow.AddView(Ui.Badge(this, P, "БЕТА", P.Warning));
-        about.AddView(titleRow);
-        about.AddView(Ui.Hint(this,
-            $"Версия {version} · Android · бета\n" +
-            "Клиент для сбора, проверки и подключения прокси-узлов. Ядро — sing-box (libbox).", P));
-        page.AddView(about);
-
-        page.AddView(Ui.Section(this, "Оформление", P));
-        var theme = new CheckBox(this)
-        {
-            Text = "Светлая тема",
-            Checked = ThemeManager.IsLight,
-        };
-        theme.SetTextColor(P.TextSoft());
-        theme.CheckedChange += (_, args) =>
-        {
-            if (SettingsStore.Current.Theme.Equals(args.IsChecked ? "Light" : "Dark", StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-
-            SettingsStore.Current.Theme = args.IsChecked ? "Light" : "Dark";
-            SettingsStore.Save();
-            Recreate();
-        };
-        page.AddView(theme);
-
-        page.AddView(Ui.Section(this, "Обновления и ссылки", P));
-        var updateStatus = Ui.Hint(this,
-            "Проверка идёт автоматически при запуске; кнопка проверяет вручную и устанавливает новую версию.", P);
-        var update = Ui.Pill(this, P, "Проверить обновление", UiButtonKind.Accent,
-            () => _ = CheckUpdateAsync(updateStatus), Resource.Drawable.ic_download);
-        page.AddView(update);
-        page.AddView(updateStatus);
-
-        var aboutButton = Ui.Pill(this, P, "О программе и лицензии", UiButtonKind.Secondary,
-            () => Open(typeof(AboutActivity)), Resource.Drawable.ic_info);
-        Ui.Add(page, aboutButton, 8);
-
-        var github = Ui.Pill(this, P, "Открыть GitHub-репозиторий", UiButtonKind.Ghost,
-            () => OpenUrl("https://github.com/VieNchikkk/VieNLink"), Resource.Drawable.ic_open);
-        Ui.Add(page, github, 8);
-
-        page.AddView(Ui.Section(this, "Безопасность и данные", P));
-        var safety = Ui.Banner(P, this, P.Warning, "О безопасности",
-            "Узлы берутся из открытых источников и никем не проверяются: владелец сервера видит ваш " +
-            "трафик так же, как провайдер. Используйте бесплатные узлы для доступа к заблокированным " +
-            "сайтам, но не входите через них в банки и почту.");
-        page.AddView(safety);
-
-        var clear = Ui.Pill(this, P, "Очистить кэш узлов", UiButtonKind.Danger, ConfirmClearNodes,
-            Resource.Drawable.ic_delete);
-        Ui.Add(page, clear, 10);
-
-        var vpnSettings = Ui.Pill(this, P, "Настройки VPN Android", UiButtonKind.Secondary, () =>
-        {
-            try
-            {
-                StartActivity(new Intent(Android.Provider.Settings.ActionVpnSettings));
-            }
-            catch (Exception exception)
-            {
-                Ui.Toast(this, "Не удалось открыть настройки: " + exception.Message);
-            }
-        }, Resource.Drawable.ic_settings);
-        Ui.Add(page, vpnSettings, 8);
-
-        var paths = Ui.Card(P, this,
-            Ui.Text(this, "Данные приложения", 14f, P.TextStrong, bold: true),
-            Ui.Hint(this,
-                "Настройки: settings.json · источники: sources.dat (шифруются Keystore)\n" +
-                "Кэш узлов: nodes.json · профили обходов: bypass-profiles.json\n" +
-                "Папка: " + AppPaths.DataDirectory, P));
-        Ui.Add(page, paths, 14);
-
-        page.AddView(Ui.Section(this, "Виджет и плитка", P));
-        var widget = Ui.Card(P, this,
-            Ui.Text(this, "Виджет на главный экран", 14.5f, P.TextStrong, bold: true),
-            Ui.Hint(this,
-                "Долгое нажатие на рабочем столе → «Виджеты» → VieNLink. Виджет показывает состояние " +
-                "туннеля и содержит кнопки «Лучший» и «Отключить». Плитка VieNLink добавляется " +
-                "в шторку быстрых настроек через редактор плиток.", P));
-        page.AddView(widget);
-
-        return page;
-    }
-
-    private async Task CheckUpdateAsync(TextView status)
-    {
-        status.Text = "Проверяю GitHub…";
-        await UpdateCenter.CheckInteractiveAsync(this, text => status.Text = text);
-    }
-
-    private void ConfirmClearNodes()
-    {
-        using var dialog = new AlertDialog.Builder(this)
-            .SetTitle("Очистить кэш узлов?")
-            .SetMessage("Источники останутся, но все узлы и результаты проверок будут удалены. " +
-                        "После этого нужно обновить источники и проверить узлы.")
-            .SetPositiveButton("Очистить", (_, _) =>
-            {
-                var removed = NodeStore.ClearCache();
-                Ui.Toast(this, $"Удалено узлов: {removed}");
-                SelectTab(_tab);
-            })
-            .SetNegativeButton("Отмена", (_, _) => { })
-            .Create();
-        dialog.Show();
-    }
-
-    private void OpenUrl(string url)
-    {
-        try
-        {
-            var intent = new Intent(Intent.ActionView, Android.Net.Uri.Parse(url)!)
-                .AddFlags(ActivityFlags.NewTask);
-            StartActivity(intent);
-        }
-        catch (Exception exception)
-        {
-            Ui.Toast(this, "Не удалось открыть ссылку: " + exception.Message);
-        }
-    }
 }

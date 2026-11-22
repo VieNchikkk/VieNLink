@@ -43,7 +43,8 @@ public partial class MainWindow
     /// <summary>Кнопки шапки сами определяют, что отменять и что отключать.</summary>
     private void UpdateHeaderState()
     {
-        if (CancelButton is null || HeaderDisconnectButton is null)
+        if (CancelButton is null || HeaderDisconnectButton is null || HeaderNextNodeButton is null ||
+            HeaderShareNodeButton is null)
         {
             return;
         }
@@ -54,7 +55,7 @@ public partial class MainWindow
         var active = new List<string>();
         if (connected)
         {
-            active.Add("прокси-узел");
+            active.Add("прокси-сервер");
         }
         else if (held)
         {
@@ -80,6 +81,14 @@ public partial class MainWindow
             ? Visibility.Visible
             : Visibility.Collapsed;
         HeaderDisconnectButton.IsEnabled = !_busy;
+        HeaderNextNodeButton.Visibility = connected && !_busy
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        HeaderNextNodeButton.IsEnabled = !_busy;
+        HeaderShareNodeButton.Visibility = connected && !_busy
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        HeaderShareNodeButton.IsEnabled = !_busy;
         HeaderDisconnectButton.ToolTip = active.Count > 0
             ? "Отключить всё: " + string.Join(", ", active)
             : "Отключить все активные подключения";
@@ -96,7 +105,7 @@ public partial class MainWindow
         UpdateHeaderConnectionInfo();
     }
 
-    /// <summary>Карточка в шапке: узел при подключении или активный обход без узла.</summary>
+    /// <summary>Карточка в шапке: сервер при подключении или активный обход без сервера.</summary>
     private void UpdateHeaderConnectionInfo()
     {
         if (HeaderConnectionPanel is null || HeaderConnectionText is null || HeaderConnectionQualityText is null)
@@ -165,7 +174,7 @@ public partial class MainWindow
             ? label
             : new string('★', stars) + new string('☆', 5 - stars) + " " + label;
 
-        var details = new List<string> { title, "Узел: " + name };
+        var details = new List<string> { title, "Сервер: " + name };
         if (country.Length > 0)
         {
             details.Add("Страна: " + country);
@@ -192,7 +201,7 @@ public partial class MainWindow
             string.Join(Environment.NewLine, details));
     }
 
-    /// <summary>Обход блокировок без прокси-узла: показываем режим, стратегию и статус.</summary>
+    /// <summary>Обход блокировок без прокси-сервера: показываем режим, стратегию и статус.</summary>
     private bool TryShowBypassHeader()
     {
         if (_tunBypass.IsRunning || (_tunBypassStartedDesync && _desync.IsRunning))
@@ -214,7 +223,7 @@ public partial class MainWindow
             {
                 desyncOnly ? "Обход: TUN (движок WinDivert)" : "Обход: TUN-обход (Beta)",
                 "Стратегия: " + strategy,
-                "Прокси-узел не нужен",
+                "Прокси-сервер не нужен",
                 "Скорость: " + speed,
                 "Качество: " + quality,
                 "Статус: активен",
@@ -256,7 +265,7 @@ public partial class MainWindow
             {
                 "Обход: Zapret",
                 $"Стратегия: {preset}",
-                "Режим: WinDivert, без прокси-узла",
+                "Режим: WinDivert, без прокси-сервера",
                 "Правила: только целевые домены",
                 "Скорость канала: " + speed,
                 "Качество: " + quality,
@@ -288,7 +297,7 @@ public partial class MainWindow
             {
                 "Обход: свой DPI",
                 "Стратегия: " + strategy,
-                "Режим: WinDivert, без прокси-узла",
+                "Режим: WinDivert, без прокси-сервера",
                 "Правила: только целевые домены",
                 "Скорость канала: " + speed,
                 "Качество: " + quality,
@@ -447,7 +456,7 @@ public partial class MainWindow
         return null;
     }
 
-    /// <summary>Флаг и код страны из названия узла: настоящий эмодзи или экранированный \U0001F1XX.</summary>
+    /// <summary>Флаг и код страны из названия сервера: настоящий эмодзи или экранированный \U0001F1XX.</summary>
     private static (string Flag, string Code) ExtractCountryFlag(string? source)
     {
         if (string.IsNullOrWhiteSpace(source))
@@ -580,7 +589,7 @@ public partial class MainWindow
     private static string FormatQuality(int stars, string label) =>
         stars == 0 ? label : new string('★', stars) + new string('☆', 5 - stars) + " " + label;
 
-    /// <summary>Страна и IP выхода: один запрос через тот же узел, что и браузер.</summary>
+    /// <summary>Страна и IP выхода: один запрос через тот же сервер, что и браузер.</summary>
     private async Task RefreshExitInfoAsync()
     {
         if (!_settings.ShowExitInfo)
@@ -635,7 +644,7 @@ public partial class MainWindow
             }
 
             RouteOnlyRadio.IsChecked = true;
-            FooterText.Text = $"«{box.Content}» добавлен: через узел пойдут только эти домены";
+            FooterText.Text = $"«{box.Content}» добавлен: через сервер пойдут только эти домены";
         }
         else
         {
@@ -690,7 +699,7 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>Замер скорости: выбранный узел или 10 лучших рабочих. Требует запущенного ядра.</summary>
+    /// <summary>Замер скорости: выбранный сервер или 10 лучших рабочих. Требует запущенного ядра.</summary>
     private async void OnSpeedTestClick(object sender, RoutedEventArgs e)
     {
         if (!BeginOperation("замер скорости"))
@@ -704,16 +713,16 @@ public partial class MainWindow
             List<ProxyNode> targets;
             if (_manager.IsConnected)
             {
-                // Переключать узел под живым соединением нельзя: замеряем только текущий.
+                // Переключать сервер под живым соединением нельзя: замеряем только текущий.
                 if (_manager.CurrentNode is not { } current)
                 {
-                    SetStatus("Замер скорости", "Нет активного узла");
+                    SetStatus("Замер скорости", "Нет активного сервера");
                     return;
                 }
 
                 if (selected is not null && selected.Id != current.Id)
                 {
-                    SetStatus("Замер скорости", "При активном соединении можно замерить только текущий узел");
+                    SetStatus("Замер скорости", "При активном соединении можно замерить только текущий сервер");
                 }
 
                 targets = new List<ProxyNode> { current };
@@ -733,7 +742,7 @@ public partial class MainWindow
 
             if (targets.Count == 0)
             {
-                SetStatus("Нет узлов для замера", "Сначала проверьте узлы: «Все узлы» на вкладке «Узлы»");
+                SetStatus("Нет серверов для замера", "Сначала проверьте серверы: «Все серверы» на вкладке «Серверы»");
                 return;
             }
 
@@ -760,7 +769,7 @@ public partial class MainWindow
                 }
                 catch (Exception exception)
                 {
-                    // Один проблемный узел не должен срывать замер остальных.
+                    // Один проблемный сервер не должен срывать замер остальных.
                     AppLog.Write("speed", $"Замер «{node.Name}» не удался", exception);
                 }
 
@@ -772,7 +781,7 @@ public partial class MainWindow
             }
 
             NodeSourceService.SaveCache(AllRows.Select(r => r.Node).ToList());
-            SetStatus("Замер скорости завершён", $"Замерено узлов: {targets.Count}");
+            SetStatus("Замер скорости завершён", $"Замерено серверов: {targets.Count}");
         }
         catch (OperationCanceledException)
         {
@@ -862,7 +871,7 @@ public partial class MainWindow
     /// </summary>
     private async Task AutoUpdateCoreOnStartupAsync()
     {
-        if (_closing)
+        if (_closing || _settings.AutomationPaused)
         {
             return;
         }
@@ -904,7 +913,7 @@ public partial class MainWindow
 
             if (_manager.IsConnected || _zapret.IsRunning || _desync.IsRunning || _tunBypass.IsRunning)
             {
-                AppendLog($"Ядро: доступна версия {latest}, обновление отложено до отключения обхода/узла.");
+                AppendLog($"Ядро: доступна версия {latest}, обновление отложено до отключения обхода/сервера.");
                 return;
             }
 
@@ -950,7 +959,7 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>Выбор узла из меню трея.</summary>
+    /// <summary>Выбор сервера из меню трея.</summary>
     private void OnTrayNodeSelected(string nodeId)
     {
         var node = AllRows.Select(row => row.Node).FirstOrDefault(candidate => candidate.Id == nodeId);
@@ -979,12 +988,12 @@ public partial class MainWindow
             }
             catch (Exception exception)
             {
-                AppLog.Write("tray", "Не удалось подключиться к узлу из трея", exception);
+                AppLog.Write("tray", "Не удалось подключиться к серверу из трея", exception);
             }
         }));
     }
 
-    /// <summary>Верхние узлы для меню трея: личные, быстрые и по скорости.</summary>
+    /// <summary>Верхние серверы для меню трея: личные, быстрые и по скорости.</summary>
     private void UpdateTrayNodes()
     {
         if (_tray is null)

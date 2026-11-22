@@ -25,6 +25,7 @@ internal static class AppUpdateService
     {
         $"https://api.github.com/repos/{Repository}/releases?per_page=20",
         $"https://ghfast.top/https://api.github.com/repos/{Repository}/releases?per_page=20",
+        $"https://gh-proxy.com/https://api.github.com/repos/{Repository}/releases?per_page=20",
     };
 
     public static async Task<AppRelease?> FindLatestAsync(CancellationToken cancellationToken)
