@@ -2397,10 +2397,8 @@ internal static class Program
             timeoutMs: 3000,
             youtubeUrl: "https://www.youtube.com/",
             telegramUrl: "https://t.me/");
-        Check(dead.Status == NodeStatus.Unknown && dead.FailCount == 1,
-            "непроверенный: после первого провала остаётся для повторной попытки");
-        NodeHealth.RegisterFailure(dead);
-        Check(dead.Status == NodeStatus.Dead, "непроверенный удаляется после второго провала");
+        Check(dead.Status == NodeStatus.Dead && dead.FailCount == 1,
+            "непроверенный удаляется после первой неудачной проверки");
         Check(dead.YoutubeOk == false && dead.TelegramOk == false, "обе отметки — отказ");
 
         // 3. Узел, который уже был рабочим, получает несколько попыток, затем удаляется.
@@ -2566,11 +2564,8 @@ internal static class Program
             $"провал: после {NodeLimits.RemoveAfterFailures} провалов подряд сервер помечается мёртвым");
         var unproven = new ProxyNode { Status = NodeStatus.Unknown };
         NodeHealth.RegisterFailure(unproven);
-        Check(unproven.Status == NodeStatus.Unknown,
-            "провал: первый провал непроверенного сервер не удаляет");
-        NodeHealth.RegisterFailure(unproven);
         Check(unproven.Status == NodeStatus.Dead,
-            "провал: второй провал непроверенного сервер удаляет");
+            "провал: непроверенный удаляется после первой неудачной проверки");
 
         // 9. Кэш можно писать и читать по отдельному пути: так рабочие серверы
         // живут в своём маленьком файле, отдельно от кучи непроверенных.

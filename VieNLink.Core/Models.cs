@@ -328,10 +328,10 @@ internal static class NodeHealth
     public const int GraceFailures = 1;
 
     /// <summary>
-    /// Сколько провалов переживает непроверенный сервер. Раньше он удалялся с первого,
-    /// и одна сетевая ошибка вычищала целую партию найденных серверов.
+    /// Сколько провалов переживает непроверенный сервер: один. Не прошёл первую же
+    /// проверку — удаляем, чтобы список не копил мусор.
     /// </summary>
-    public const int UnverifiedFailures = 2;
+    public const int UnverifiedFailures = 1;
 
     /// <summary>Отмечает неудачную проверку. true — сервер пора удалить.</summary>
     public static bool RegisterFailure(ProxyNode node)
@@ -341,7 +341,7 @@ internal static class NodeHealth
 
         if (!wasWorking)
         {
-            // Непроверенный: данные чистить нечего, второй провал подряд — не случайность.
+            // Непроверенный: одна проверка не прошла — удаляем, чтобы не копить мусор.
             node.CheckedAtUtc = DateTime.UtcNow;
             node.DelayMs = null;
             node.YoutubeOk = false;

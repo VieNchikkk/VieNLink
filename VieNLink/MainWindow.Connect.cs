@@ -1105,7 +1105,7 @@ public partial class MainWindow
         var mtproto = _mtprotoRows.Count + _mtprotoDeadRows.Count;
         CacheSummaryText.Text =
             $"Кэш: {nodes} серверов · MTProto {mtproto} (нерабочих {_mtprotoDeadRows.Count}). " +
-            $"Непроверенные серверы удаляются после {NodeLimits.RemoveAfterFailures} провалов, уже рабочие — тоже после {NodeLimits.RemoveAfterFailures} подряд; " +
+            $"Непроверенные серверы удаляются после первой неудачной проверки, уже рабочие — после {NodeLimits.RemoveAfterFailures} провалов подряд; " +
             $"нерабочие MTProto: лимит {MtProtoRetention.MaxDead}, старше {MtProtoRetention.DeadHours} ч удаляются автоматически.";
     }
 
