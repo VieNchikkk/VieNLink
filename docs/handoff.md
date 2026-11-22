@@ -46,6 +46,19 @@
   (APK установлен на телефон, `versionCode=10305`, `versionName=1.3.5`).
 - Магазинные артефакты: `release\VieNLink-1.3.5-store.apk`, `-store.aab` + `.sha256`.
 
+Опубликована **1.3.6** (`versionCode` 10306), релизы pre-release:
+
+- Windows: `release\VieNLink-1.3.6-setup.exe` (подпись `CN=VieN`) + `VieNLink-1.3.6-win-x64.zip`
+  + `SHA256SUMS.txt` → https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.6-beta
+- Android: `release\VieNLink-1.3.6-android.apk` + `.apk.sha256` →
+  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.6-android
+  (APK установлен на телефон, `versionCode=10306`, `versionName=1.3.6`).
+- Магазинные артефакты: `release\VieNLink-1.3.6-store.apk`, `-store.aab` + `.sha256`.
+
+Содержимое 1.3.6: Android — сторожевой таймер `:probe` (75 с без прогресса → процесс
+завершается, следующий такт проверяет заново), партия уменьшена до 100, при сбое партии
+серверы помечаются `TriedAtUtc`, чтобы не повторять тот же набор.
+
 Содержимое 1.3.5: рабочие серверы не отбрасываются при загрузке кэша по возрасту источника
 (`KeepUnseenNodeDays`), их судьбу решает только перепроверка — важно после обновления/простоя.
 
