@@ -185,6 +185,20 @@ internal static class NodeStore
         }
     }
 
+    /// <summary>Возвращает перепроверенные серверы из отсева в рабочий список.</summary>
+    public static void RestoreRejected(IEnumerable<ProxyNode> nodes)
+    {
+        var working = nodes.Where(node => node.Status == NodeStatus.Working).ToList();
+        if (working.Count == 0)
+        {
+            return;
+        }
+
+        Merge(working);
+        RejectedNodeStore.Remove(working.Select(node => node.Id));
+        SaveNodes(force: true);
+    }
+
     /// <summary>
     /// Счётчики для шапки и экрана «Серверы» без копирования всего списка: шапка обновляется
     /// каждые несколько секунд, и полный Snapshot из 12 000 серверов на каждый тик давал бы

@@ -16,15 +16,16 @@
 
 ## Состояние на 22.11.2026
 
-**Политика публикации (23.11.2026):** публичная версия — **1.3.17**, её assets не обновляем
+**Политика публикации (23.11.2026):** публичная версия — **1.3.18**, её assets не обновляем
 задним числом. Сначала копим и исправляем ошибки локально; когда наберётся значимый
 набор правок — поднимаем версию и выпускаем патч. `build/Version.props` без команды
-владельца не поднимаем. В GitHub остаются релизы 1.3.7–1.3.17 (`v1.3.7-beta`,
+владельца не поднимаем. В GitHub остаются релизы 1.3.7–1.3.18 (`v1.3.7-beta`,
 `v1.3.7-android`, `v1.3.8-beta`, `v1.3.8-android`, `v1.3.9-beta`, `v1.3.9-android`,
 `v1.3.10-beta`, `v1.3.10-android`, `v1.3.11-beta`, `v1.3.11-android`,
 `v1.3.12-beta`, `v1.3.12-android`, `v1.3.13-beta`, `v1.3.13-android`,
 `v1.3.14-beta`, `v1.3.14-android`, `v1.3.15-beta`, `v1.3.15-android`,
-`v1.3.16-beta`, `v1.3.16-android`, `v1.3.17-beta`, `v1.3.17-android`).
+`v1.3.16-beta`, `v1.3.16-android`, `v1.3.17-beta`, `v1.3.17-android`,
+`v1.3.18-beta`, `v1.3.18-android`).
 
 **Что вошло в 1.3.8–1.3.9 (ранее локальные правки):**
 - Android, причина зависаний: UI ждал `NodeStore.Gate`, пока фон разбирал кэш на 12 000
@@ -265,6 +266,18 @@
   (`SourceFreshnessHours`, по умолчанию 24 ч). Новая вкладка «Отсев — Перепроверка»:
   `nodes-rejected.json`, счётчики по сервисам, фильтр и кнопки подключения/возврата.
   Telegram/MTProto источники не изменялись.
+
+Опубликована **1.3.18** (`versionCode` 10318), релизы pre-release:
+
+- Windows: `release\VieNLink-1.3.18-setup.exe` (подпись `CN=VieN`)
+  + `VieNLink-1.3.18-win-x64.zip` + `SHA256SUMS.txt` →
+  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.18-beta
+- Android: `release\VieNLink-1.3.18-android.apk` + `.apk.sha256` →
+  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.18-android
+- Магазинные артефакты: `release\VieNLink-1.3.18-store.apk`, `-store.aab` + `.sha256`.
+- Содержимое: Android-экран «Отсев — Перепроверка» (`RejectedActivity`) с тем же
+  функционалом, что на ПК; `NodeTester.TestNodesAsync` для произвольного набора,
+  `NodeStore.RestoreRejected`; источники и свежесть как в 1.3.17.
 
 Содержимое 1.3.6: Android — сторожевой таймер `:probe` (75 с без прогресса → процесс
 завершается, следующий такт проверяет заново), партия уменьшена до 100, при сбое партии

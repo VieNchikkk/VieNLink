@@ -193,6 +193,9 @@ public sealed partial class MainActivity
         AddTile(page, Resource.Drawable.ic_service_telegram, "Telegram MTProtoProxies",
             $"{MtProtoStore.WorkingCount} рабочих прокси · каналы через RSS",
             () => Open(typeof(TelegramActivity)), P.Telegram);
+        AddTile(page, Resource.Drawable.ic_delete, "Отсев — Перепроверка",
+            "Рабочие серверы, переставшие работать",
+            () => Open(typeof(RejectedActivity)), P.Warning);
         AddTile(page, Resource.Drawable.ic_tab_log, "Журнал",
             "События приложения и лог ядра sing-box",
             () => Open(typeof(LogActivity)), P.Warning);

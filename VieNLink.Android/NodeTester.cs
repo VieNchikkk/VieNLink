@@ -63,7 +63,21 @@ internal static class NodeTester
 
     public static bool IsRunning => Volatile.Read(ref _running) == 1;
 
-    public static async Task<NodeTestSummary> TestAsync(
+    public static Task<NodeTestSummary> TestAsync(
+        IProgress<string>? progress,
+        Action<ProxyNode>? onTested,
+        CancellationToken cancellationToken) =>
+        TestAsync(null, progress, onTested, cancellationToken);
+
+    /// <summary>Проверка произвольного набора (например, серверов из отсева).</summary>
+    public static Task<NodeTestSummary> TestNodesAsync(
+        IReadOnlyList<ProxyNode> nodes,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken) =>
+        TestAsync(nodes, progress, null, cancellationToken);
+
+    private static async Task<NodeTestSummary> TestAsync(
+        IReadOnlyList<ProxyNode>? explicitNodes,
         IProgress<string>? progress,
         Action<ProxyNode>? onTested,
         CancellationToken cancellationToken)
@@ -79,70 +93,92 @@ internal static class NodeTester
         {
             NodeStore.EnsureLoaded();
 
-            var ordered = NodeStore.OrderForConfig(NodeStore.Snapshot());
-            if (ordered.Count == 0)
-            {
-                return new NodeTestSummary(0, 0, 0, "Список серверов пуст: обновите источники");
-            }
-
             List<ProxyNode> candidates;
-            if (TunnelService.State == TunnelState.Running && CoreRuntime.IsRunning)
+            if (explicitNodes is not null)
             {
-                // Работающий туннель не трогаем: проверяем только то, что уже загружено в ядро.
-                var loaded = CoreRuntime.LoadedTags;
-                candidates = ordered.Where(node => loaded.Contains(node.Tag)).Take(MaxBatch).ToList();
-                if (candidates.Count == 0)
+                if (TunnelService.State == TunnelState.Running || CoreRuntime.IsRunning)
                 {
                     return new NodeTestSummary(0, 0, 0,
-                        "Туннель запущен с другим конфигом — сначала выберите сервер в списке");
+                        "Остановите VPN перед перепроверкой отсева");
                 }
 
-                progress?.Report($"Проверяю серверы работающего туннеля: {candidates.Count}");
+                candidates = explicitNodes
+                    .Where(node => !string.IsNullOrWhiteSpace(node.Tag))
+                    .Take(MaxBatch)
+                    .ToList();
+                if (candidates.Count == 0)
+                {
+                    return new NodeTestSummary(0, 0, 0, "В отсеве нет серверов для проверки");
+                }
+
+                progress?.Report($"Перепроверяю отсев: {candidates.Count} серверов");
             }
             else
             {
-                if (CoreRuntime.IsRunning)
+                var ordered = NodeStore.OrderForConfig(NodeStore.Snapshot());
+                if (ordered.Count == 0)
                 {
-                    return new NodeTestSummary(0, 0, 0, "Туннель ещё запускается, подождите");
+                    return new NodeTestSummary(0, 0, 0, "Список серверов пуст: обновите источники");
                 }
 
-                candidates = ordered.Take(MaxBatch).ToList();
-                progress?.Report($"Поднимаю ядро для проверки: {candidates.Count} серверов");
-
-                var testSettings = new AppSettings
+                if (TunnelService.State == TunnelState.Running && CoreRuntime.IsRunning)
                 {
-                    // Временный конфиг без TUN: нужен только mixed-порт и Clash API.
-                    TunnelMode = TunnelMode.SystemProxy,
-                    SiteRouteMode = SiteRouteMode.All,
-                    OnlySelectedApps = false,
-                    AppRouteMode = AppRouteMode.All,
-                    AppList = string.Empty,
-                };
+                    // Работающий туннель не трогаем: проверяем только то, что уже загружено в ядро.
+                    var loaded = CoreRuntime.LoadedTags;
+                    candidates = ordered.Where(node => loaded.Contains(node.Tag)).Take(MaxBatch).ToList();
+                    if (candidates.Count == 0)
+                    {
+                        return new NodeTestSummary(0, 0, 0,
+                            "Туннель запущен с другим конфигом — сначала выберите сервер в списке");
+                    }
 
-                var config = SingBoxConfigBuilder.Build(
-                    candidates,
-                    candidates[0].Tag,
-                    CoreRuntime.MixedPort,
-                    CoreRuntime.ApiPort,
-                    CoreRuntime.ApiSecret,
-                    testSettings);
-
-                CoreRuntime.EnsureSetup(Android.App.Application.Context);
-
-                // TUN в этом конфиге нет: OpenTun не вызывается, служба не нужна.
-                if (!CoreRuntime.Start(config))
-                {
-                    return new NodeTestSummary(0, 0, 0, "Ядро не создало сервер проверки");
+                    progress?.Report($"Проверяю серверы работающего туннеля: {candidates.Count}");
                 }
-
-                startedTestCore = true;
-
-                var loaded = CoreRuntime.LoadedTags;
-                candidates = candidates.Where(node => loaded.Contains(node.Tag)).ToList();
-                if (candidates.Count == 0)
+                else
                 {
-                    return new NodeTestSummary(0, 0, 0, "Ядро не приняло ни одного сервера");
+                    if (CoreRuntime.IsRunning)
+                    {
+                        return new NodeTestSummary(0, 0, 0, "Туннель ещё запускается, подождите");
+                    }
+
+                    candidates = ordered.Take(MaxBatch).ToList();
+                    progress?.Report($"Поднимаю ядро для проверки: {candidates.Count} серверов");
                 }
+            }
+
+            var testSettings = new AppSettings
+            {
+                // Временный конфиг без TUN: нужен только mixed-порт и Clash API.
+                TunnelMode = TunnelMode.SystemProxy,
+                SiteRouteMode = SiteRouteMode.All,
+                OnlySelectedApps = false,
+                AppRouteMode = AppRouteMode.All,
+                AppList = string.Empty,
+            };
+
+            var config = SingBoxConfigBuilder.Build(
+                candidates,
+                candidates[0].Tag,
+                CoreRuntime.MixedPort,
+                CoreRuntime.ApiPort,
+                CoreRuntime.ApiSecret,
+                testSettings);
+
+            CoreRuntime.EnsureSetup(Android.App.Application.Context);
+
+            // TUN в этом конфиге нет: OpenTun не вызывается, служба не нужна.
+            if (!CoreRuntime.Start(config))
+            {
+                return new NodeTestSummary(0, 0, 0, "Ядро не создало сервер проверки");
+            }
+
+            startedTestCore = true;
+
+            var loadedTags = CoreRuntime.LoadedTags;
+            candidates = candidates.Where(node => loadedTags.Contains(node.Tag)).ToList();
+            if (candidates.Count == 0)
+            {
+                return new NodeTestSummary(0, 0, 0, "Ядро не приняло ни одного сервера");
             }
 
             api = new ClashApiClient(CoreRuntime.ApiPort, CoreRuntime.ApiSecret);
