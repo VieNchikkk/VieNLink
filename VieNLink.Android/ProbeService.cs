@@ -22,6 +22,8 @@ public sealed class ProbeService : Service
     private readonly object _progressLock = new();
     private readonly CancellationTokenSource _workCts = new();
     private DateTime _lastProgressWrite = DateTime.MinValue;
+    private DateTime _lastProgressUtc = DateTime.UtcNow;
+    private System.Threading.Timer? _watchdog;
     private int _progressTested;
     private int _progressWorking;
     private int _progressTotal;
@@ -45,13 +47,48 @@ public sealed class ProbeService : Service
         }
 
         var requestPath = intent?.GetStringExtra(ProbeProtocol.ExtraRequest);
+        StartWatchdog();
         _ = Task.Run(() => RunAsync(requestPath));
         return StartCommandResult.NotSticky;
+    }
+
+    /// <summary>
+    /// Страховка от зависшего :probe: если прогресс не двигается 75 секунд,
+    /// завершаем процесс. Следующий такт запустит чистую проверку.
+    /// </summary>
+    private void StartWatchdog()
+    {
+        _lastProgressUtc = DateTime.UtcNow;
+        _watchdog?.Dispose();
+        _watchdog = new System.Threading.Timer(_ =>
+        {
+            try
+            {
+                if (DateTime.UtcNow - _lastProgressUtc < TimeSpan.FromSeconds(75))
+                {
+                    return;
+                }
+
+                AppLog.Write(Tag, "Проверка не двигается 75 с — завершаю процесс :probe");
+                Android.OS.Process.KillProcess(Android.OS.Process.MyPid());
+            }
+            catch (Exception)
+            {
+                // Процесс уже завершается.
+            }
+        }, null, TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(15));
+    }
+
+    private void StopWatchdog()
+    {
+        _watchdog?.Dispose();
+        _watchdog = null;
     }
 
     /// <summary>Останавливает проверку и сразу завершает процесс :probe.</summary>
     private void StopNow()
     {
+        StopWatchdog();
         try
         {
             _workCts.Cancel();
@@ -75,6 +112,7 @@ public sealed class ProbeService : Service
 
     public override void OnDestroy()
     {
+        StopWatchdog();
         try
         {
             _workCts.Cancel();
@@ -140,6 +178,7 @@ public sealed class ProbeService : Service
     /// </summary>
     private void WriteProgress(string stage, int tested, int total, int working, bool force = false)
     {
+        _lastProgressUtc = DateTime.UtcNow;
         lock (_progressLock)
         {
             if (!force && DateTime.UtcNow - _lastProgressWrite < TimeSpan.FromMilliseconds(500))
@@ -323,6 +362,7 @@ public sealed class ProbeService : Service
         }
         finally
         {
+            StopWatchdog();
             WriteProgress(result.Error is null ? "Записываю результаты…" : "Проверка не удалась",
                 Volatile.Read(ref _progressTested), _progressTotal, Volatile.Read(ref _progressWorking),
                 force: true);

@@ -564,12 +564,14 @@ internal static class ProbeClient
 
             if (result is null)
             {
+                MarkTried(nodes);
                 ReportActivity("Фоновая проверка не ответила", 15);
                 return new NodeTestSummary(0, 0, 0, "Фоновая проверка не ответила");
             }
 
             if (result.Error is not null && result.Nodes.Count == 0)
             {
+                MarkTried(nodes);
                 ReportActivity(result.Error, 15);
                 return new NodeTestSummary(0, 0, 0, result.Error);
             }
@@ -590,6 +592,7 @@ internal static class ProbeClient
         }
         catch (Exception exception)
         {
+            MarkTried(nodes);
             AppLog.Write("probe", "Ошибка фоновой проверки", exception);
             ReportActivity("Ошибка проверки: " + exception.Message, 15);
             return new NodeTestSummary(0, 0, 0, "Ошибка проверки: " + exception.Message);
@@ -622,6 +625,26 @@ internal static class ProbeClient
         {
             return null;
         }
+    }
+
+    /// <summary>
+    /// Отмечает попытку, не меняя статус. Если :probe завис и не вернул результат,
+    /// следующая партия не должна снова брать те же серверы.
+    /// </summary>
+    private static void MarkTried(IReadOnlyList<ProxyNode> nodes)
+    {
+        if (nodes.Count == 0)
+        {
+            return;
+        }
+
+        var now = DateTime.UtcNow;
+        foreach (var node in nodes)
+        {
+            node.TriedAtUtc = now;
+        }
+
+        NodeStore.SaveNodes();
     }
 
     /// <summary>Переносит результаты из :probe в NodeStore и сохраняет кэш.</summary>

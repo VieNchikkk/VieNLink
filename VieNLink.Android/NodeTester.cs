@@ -21,9 +21,10 @@ internal static class NodeTester
 {
     /// <summary>
     /// За один прогон проверяем не весь список: мобильный канал слабее, а каждый запрос
-    /// идёт через сервер и тратит его трафик.
+    /// идёт через сервер и тратит его трафик. 100 — компромисс: партия успевает
+    /// завершиться и не зависает на одном проблемном конфиге.
     /// </summary>
-    public const int MaxBatch = 150;
+    public const int MaxBatch = 100;
 
     public const int Concurrency = 12;
     public const int TimeoutMs = 4000;
