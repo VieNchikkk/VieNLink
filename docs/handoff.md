@@ -55,6 +55,21 @@
   (APK установлен на телефон, `versionCode=10306`, `versionName=1.3.6`).
 - Магазинные артефакты: `release\VieNLink-1.3.6-store.apk`, `-store.aab` + `.sha256`.
 
+Опубликована **1.3.7** (`versionCode` 10307), релизы pre-release:
+
+- Windows: `release\VieNLink-1.3.7-setup.exe` (подпись `CN=VieN`) + `VieNLink-1.3.7-win-x64.zip`
+  + `SHA256SUMS.txt` → https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.7-beta
+- Android: `release\VieNLink-1.3.7-android.apk` + `.apk.sha256` →
+  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.7-android
+  (APK установлен, проверено live: имя сервера, IP:порт, задержка, выход `🇵🇱 144.31.0.101 · Польша`).
+- Магазинные артефакты: `release\VieNLink-1.3.7-store.apk`, `-store.aab` + `.sha256`.
+- Windows 1.3.7 установлен на ПК тихой установкой; при обновлении поверх 1.3.4
+  был запущен VieNLink — перед установкой его надо закрыть (файлы блокируются).
+
+Содержимое 1.3.7: Android — в шапке имя сервера, `IP:порт`, задержка, качество и выход
+(флаг, IP, страна), уведомление/виджет обновляются; флаги-эмодзи из источников
+(`\U0001F1EC...`) декодируются в нормальные символы на ПК и Android.
+
 Содержимое 1.3.6: Android — сторожевой таймер `:probe` (75 с без прогресса → процесс
 завершается, следующий такт проверяет заново), партия уменьшена до 100, при сбое партии
 серверы помечаются `TriedAtUtc`, чтобы не повторять тот же набор.
