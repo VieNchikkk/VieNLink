@@ -282,8 +282,9 @@ public partial class MainWindow : Window
 
         // Счётчики в шапке и на вкладке «Серверы» живут отдельно от проверок: сервер,
         // у которого истекло окно свежести (5 минут), должен исчезнуть из числа
-        // сам, даже если в этот момент ничего не проверяется.
-        _counterTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(1) };
+        // сам, даже если в этот момент ничего не проверяется. Обновляем каждые
+        // 3 секунды: числа должны успевать за проверкой, а не раз в минуту.
+        _counterTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
         _counterTimer.Tick += (_, _) =>
         {
             if (!_closing)

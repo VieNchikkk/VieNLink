@@ -158,6 +158,16 @@ internal static class NodeSourceService
     private static readonly string[] ObsoleteSourceUrls =
     {
         "https://raw.githubusercontent.com/Kwinshadow/TelegramV2rayCollector/main/sublinks/mix.txt",
+        // Проверены на ПК: за всё время не дали ни одного рабочего сервера
+        // либо дают единицы мёртвых. Держать их в сборке бессмысленно.
+        "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/sub_merge.txt",
+        "https://raw.githubusercontent.com/mahdibland/ShadowsocksAggregator/master/Eternity.txt",
+        "https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt",
+        "https://raw.githubusercontent.com/ripaojiedian/freenode/main/sub",
+        "https://raw.githubusercontent.com/roosterkid/openproxylist/main/V2RAY_RAW.txt",
+        "https://raw.githubusercontent.com/free-nodes/v2rayfree/main/sub",
+        "https://raw.githubusercontent.com/jafarm83/ConfigV2Ray/main/jafar.txt",
+        "https://raw.githubusercontent.com/zhuhaiuk/free-nodes/main/nodes.txt",
     };
 
     /// <summary>
@@ -169,30 +179,32 @@ internal static class NodeSourceService
     public static List<SourceDefinition> DefaultSources() => new()
     {
         new() { Name = "v2rayNG-Config (GitHub)", Url = "https://raw.githubusercontent.com/ALIILAPRO/v2rayNG-Config/main/server.txt", Kind = SourceKind.PlainList },
-        new() { Name = "V2RayAggregator (GitHub)", Url = "https://raw.githubusercontent.com/mahdibland/V2RayAggregator/master/sub/sub_merge.txt", Kind = SourceKind.PlainList },
-        new() { Name = "ShadowsocksAggregator (GitHub)", Url = "https://raw.githubusercontent.com/mahdibland/ShadowsocksAggregator/master/Eternity.txt", Kind = SourceKind.PlainList },
-        new() { Name = "get_subscribe (GitHub)", Url = "https://raw.githubusercontent.com/ermaozi/get_subscribe/main/subscribe/v2ray.txt", Kind = SourceKind.PlainList },
         new() { Name = "Free-servers (подписка)", Url = "https://raw.githubusercontent.com/Pawdroid/Free-servers/main/sub", Kind = SourceKind.Subscription },
-        new() { Name = "freenode (подписка)", Url = "https://raw.githubusercontent.com/ripaojiedian/freenode/main/sub", Kind = SourceKind.Subscription },
-
-        // Небольшие списки с более высокой долей живых серверов.
-        new() { Name = "openproxylist V2RAY (GitHub)", Url = "https://raw.githubusercontent.com/roosterkid/openproxylist/main/V2RAY_RAW.txt", Kind = SourceKind.PlainList },
 
         // Проверены на ПК: обновляются каждый день/час и давали рабочие серверы.
-        new() { Name = "free-nodes (ежедневно)", Url = "https://raw.githubusercontent.com/free-nodes/v2rayfree/main/sub", Kind = SourceKind.Subscription },
         new() { Name = "0xRadikal (Clash)", Url = "https://raw.githubusercontent.com/0xRadikal/Free-v2ray-Configs/main/all/clash.yaml", Kind = SourceKind.PlainList },
         new() { Name = "SoliSpirit configs", Url = "https://raw.githubusercontent.com/SoliSpirit/v2ray-configs/main/Protocols/vless.txt", Kind = SourceKind.PlainList },
         new() { Name = "hamedcode port vless", Url = "https://raw.githubusercontent.com/hamedcode/port-based-v2ray-configs/main/sub/vless.txt", Kind = SourceKind.PlainList },
         new() { Name = "AutoAiVPN", Url = "https://raw.githubusercontent.com/penhandev/AutoAiVPN/main/allConfigs.txt", Kind = SourceKind.PlainList },
         new() { Name = "V2ray-Collector (Bahemmat)", Url = "https://raw.githubusercontent.com/MohammadBahemmat/V2ray-Collector/main/servers/vless_servers.txt", Kind = SourceKind.PlainList },
-        new() { Name = "ConfigV2Ray (Jafar)", Url = "https://raw.githubusercontent.com/jafarm83/ConfigV2Ray/main/jafar.txt", Kind = SourceKind.PlainList },
         new() { Name = "node-sub-zixf", Url = "https://raw.githubusercontent.com/chenzhihan1751-cyber/node-sub-zixf/main/sub/v2ray.txt", Kind = SourceKind.PlainList },
-        new() { Name = "zhuhaiuk free-nodes", Url = "https://raw.githubusercontent.com/zhuhaiuk/free-nodes/main/nodes.txt", Kind = SourceKind.PlainList },
 
         // Крупные агрегаторы: серверов много, но и пользы больше — по умолчанию включены.
         new() { Name = "barry-far vless (GitHub)", Url = "https://raw.githubusercontent.com/barry-far/V2ray-Config/main/Splitted-By-Protocol/vless.txt", Kind = SourceKind.PlainList },
         new() { Name = "MhdiTaheri mix (GitHub)", Url = "https://raw.githubusercontent.com/MhdiTaheri/V2rayCollector/main/sub/mix", Kind = SourceKind.PlainList },
         new() { Name = "Mineral nodes (GitHub)", Url = "https://raw.githubusercontent.com/LalatinaHub/Mineral/master/result/nodes", Kind = SourceKind.PlainList },
+
+        // Проверены 23.11.2026: обновляются ежедневно или ежечасно, содержат сотни–тысячи
+        // ссылок всех протоколов (VLESS/VMess/Trojan/SS/Hysteria2). Часть списков —
+        // base64-подписки, поэтому Kind = Subscription.
+        new() { Name = "MatinGhanbari (подписка)", Url = "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/base64/all_sub.txt", Kind = SourceKind.Subscription },
+        new() { Name = "Barabama FreeNodes", Url = "https://raw.githubusercontent.com/Barabama/FreeNodes/main/nodes/merged.txt", Kind = SourceKind.PlainList },
+        new() { Name = "DukeMehdi configs", Url = "https://raw.githubusercontent.com/DukeMehdi/FreeList-V2ray-Configs/main/Configs/All-DukeMehdi-Configs.txt", Kind = SourceKind.PlainList },
+        new() { Name = "rtwo2 FastNodes", Url = "https://raw.githubusercontent.com/rtwo2/FastNodes/main/sub/top.txt", Kind = SourceKind.PlainList },
+        new() { Name = "4n0nymou3 configs", Url = "https://raw.githubusercontent.com/4n0nymou3/multi-proxy-config-fetcher/main/configs/proxy_configs.txt", Kind = SourceKind.PlainList },
+        new() { Name = "FlareFeed Top500", Url = "https://raw.githubusercontent.com/svinakraft-maker/FlareFeed/main/public/Top500.txt", Kind = SourceKind.PlainList },
+        new() { Name = "NoMoreWalls (подписка)", Url = "https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list.txt", Kind = SourceKind.Subscription },
+        new() { Name = "ConfigForge V2Ray", Url = "https://raw.githubusercontent.com/ShatakVPN/ConfigForge-V2Ray/main/configs/all.txt", Kind = SourceKind.PlainList },
 
         // Каналы Telegram открываются только при уже работающем обходе блокировок.
         // @proxy_mtproto включён: после первого успешного подключения приложение само прочитает его.
@@ -339,18 +351,32 @@ internal static class NodeSourceService
                 source.IsTrusted = freshness.DateKnown && freshness.Fresh;
                 if (!freshness.Fresh)
                 {
-                    var remove = !freshness.DateKnown && freshness.ApiReached && !source.IsMine;
-                    outcome = new FetchOutcome
+                    // GitHub API недоступен (блокировка, лимит, зеркала не ответили):
+                    // дату проверить нельзя, но и выбрасывать все источники нельзя —
+                    // иначе при недоступном API приложение остаётся без серверов.
+                    // Собираем без проверки даты; при следующем сборе дата проверится.
+                    var apiUnavailable = !freshness.DateKnown && !freshness.ApiReached;
+                    if (apiUnavailable)
                     {
-                        Source = source,
-                        Skipped = true,
-                        RemoveSource = remove,
-                        Error = remove
-                            ? "дату публикации определить нельзя — источник удаляется"
-                            : "источник не обновлялся в выбранном окне — пропущен",
-                    };
-                    AppLog.Write("sources",
-                        $"{source.Name}: {(remove ? "нет даты публикации, удаляю" : "пропущен по свежести")}");
+                        AppLog.Write("sources",
+                            $"{source.Name}: GitHub API недоступен — собираю без проверки даты");
+                        outcome = await FetchAsync(source, cancellationToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        var remove = !freshness.DateKnown && freshness.ApiReached && !source.IsMine;
+                        outcome = new FetchOutcome
+                        {
+                            Source = source,
+                            Skipped = true,
+                            RemoveSource = remove,
+                            Error = remove
+                                ? "дату публикации определить нельзя — источник удаляется"
+                                : "источник не обновлялся в выбранном окне — пропущен",
+                        };
+                        AppLog.Write("sources",
+                            $"{source.Name}: {(remove ? "нет даты публикации, удаляю" : "пропущен по свежести")}");
+                    }
                 }
                 else
                 {

@@ -85,7 +85,8 @@ public partial class MainWindow
         var cutoff = NodeAvailability.RecheckCutoffUtc(nowUtc);
         return _workingRows.Any(row =>
             row.Node.Status == NodeStatus.Working &&
-            (row.Node.CheckedAtUtc is null || row.Node.CheckedAtUtc < cutoff));
+            (row.Node.CheckedAtUtc is null || row.Node.CheckedAtUtc < cutoff) &&
+            NodeAvailability.RetryAllowed(row.Node, nowUtc));
     }
 
     private async Task RunIdleTestAsync(bool userIdle, bool searchNew = true)
@@ -139,8 +140,11 @@ public partial class MainWindow
         // NodeLimits.WorkingRecheckMinutes (5 мин), начиная за пару минут до истечения.
         // Бесплатный сервер живёт минуты, и «рабочий» из кэша без перепроверки — главная
         // причина, почему значок сервиса обещал сервер, которого нет.
-        static bool NeedsCheck(ProxyNode node, DateTime threshold) =>
-            node.CheckedAtUtc is null || node.CheckedAtUtc < threshold;
+        // После провала выдерживаем паузу: иначе следующие партии подряд добивают
+        // живой сервер до RemoveAfterFailures и отправляют его в отсев.
+        static bool NeedsCheck(ProxyNode node, DateTime threshold, DateTime nowUtc) =>
+            (node.CheckedAtUtc is null || node.CheckedAtUtc < threshold) &&
+            NodeAvailability.RetryAllowed(node, nowUtc);
 
         // Проход только для перепроверки: партия меньше, ищем не новые серверы, а живые.
         if (!searchNew)
@@ -191,12 +195,13 @@ public partial class MainWindow
                 List<ProxyNode> candidates;
                 if (hidden)
                 {
+                    var checkNow = DateTime.UtcNow;
                     var ordered = AllRows
                         .Select(row => row.Node)
                         .Where(node => searchNew
                             ? node.Status == NodeStatus.Unknown ||
-                              (node.Status == NodeStatus.Working && NeedsCheck(node, recheckCutoff))
-                            : node.Status == NodeStatus.Working && NeedsCheck(node, recheckCutoff))
+                              (node.Status == NodeStatus.Working && NeedsCheck(node, recheckCutoff, checkNow))
+                            : node.Status == NodeStatus.Working && NeedsCheck(node, recheckCutoff, checkNow))
                         .Distinct()
                         // Сначала перепроверяем тех, кто прямо сейчас показан в счётчиках:
                         // их смерть важнее, чем поиск среди ещё не проверенных. Иначе
@@ -221,8 +226,9 @@ public partial class MainWindow
                 }
                 else
                 {
+                    var checkNow = DateTime.UtcNow;
                     candidates = _manager.LoadedNodes
-                        .Where(node => NeedsCheck(node, recheckCutoff) &&
+                        .Where(node => NeedsCheck(node, recheckCutoff, checkNow) &&
                                        (!searchNew || node.Status != NodeStatus.Dead))
                         .Take(batchSize)
                         .ToList();
@@ -367,7 +373,24 @@ public partial class MainWindow
 
         if (node.Status == NodeStatus.Dead)
         {
-            ArchiveRejectedNode(node);
+            // Сервер, через который прямо сейчас идёт трафик, не убираем: пользователь
+            // может смотреть видео, а скрытая проверка в этот момент не открыла адрес
+            // (сервер занят, лимит соединений, разовый сбой). Реальную смерть заметит
+            // health-check через активный прокси и переключит на запасной.
+            if (_manager.CurrentNode is { } connected &&
+                connected.Id.Equals(node.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                node.Status = NodeStatus.Working;
+                node.FailCount = 0;
+                node.TriedAtUtc = DateTime.UtcNow;
+                row.Refresh();
+                AppendLog($"«{node.Name}»: проверка не открыла адрес, но трафик идёт через него — оставляю в списке");
+                return;
+            }
+
+            // В отсев переносим только после завершения проверки (RepartitionAndSaveAsync):
+            // при откате партии «ни один сервер не открылся» статус возвращается, и сервер
+            // не должен остаться в отсеве как рабочий.
             DropNode(row);
             return;
         }

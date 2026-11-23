@@ -52,6 +52,36 @@ public partial class MainWindow
         ReloadRejected();
     }
 
+    /// <summary>
+    /// Убирает из отсева «фантомные» записи: сервер уже лежит в рабочем списке.
+    /// Старый откат партии сначала писал сервер в отсев, а потом возвращал статус,
+    /// из-за чего рабочий сервер годами висел в отсеве. Настоящий отсев — это только
+    /// те, кого в рабочем списке нет.
+    /// </summary>
+    private void DropWorkingFromRejected()
+    {
+        var working = new HashSet<string>(
+            _workingRows.Select(row => row.Id), StringComparer.OrdinalIgnoreCase);
+        if (working.Count == 0)
+        {
+            return;
+        }
+
+        var items = RejectedNodeStore.Load();
+        var ghosts = items
+            .Where(item => item.Node is not null && working.Contains(item.Node.Id))
+            .Select(item => item.Node.Id)
+            .ToList();
+        if (ghosts.Count == 0)
+        {
+            return;
+        }
+
+        RejectedNodeStore.Remove(ghosts);
+        AppLog.Write("nodes", $"Из отсева убрано {ghosts.Count}: сервер уже в рабочем списке");
+        ReloadRejected();
+    }
+
     private bool FilterRejected(object item)
     {
         if (item is not RejectedNodeRow row)
@@ -94,9 +124,10 @@ public partial class MainWindow
         var telegram = _rejectedRows.Count(row => row.Node.TelegramOk == true);
         var discord = _rejectedRows.Count(row => row.Node.DiscordOk == true);
         var universal = _rejectedRows.Count(row => row.Node.UniversalOk == true);
+        var working = _rejectedRows.Count(row => row.Node.Status == NodeStatus.Working);
         RejectedSummaryText.Text =
-            $"Всего в отсеве: {total} · YouTube: {youtube} · Telegram: {telegram} · " +
-            $"Discord: {discord} · Универсальный: {universal}";
+            $"Всего в отсеве: {total} · проверка прошла: {working} · YouTube: {youtube} · " +
+            $"Telegram: {telegram} · Discord: {discord} · Универсальный: {universal}";
     }
 
     private async void OnRecheckRejectedClick(object sender, RoutedEventArgs e)
@@ -195,12 +226,24 @@ public partial class MainWindow
 
         var node = row.Entry.Node;
         await ConnectAsync(node);
-        if (_manager.IsConnected &&
-            _manager.CurrentNode is { } current &&
-            current.Id.Equals(node.Id, StringComparison.OrdinalIgnoreCase))
+        if (_manager.IsConnected)
         {
-            // В рабочие переводит только кнопка «Вернуть (В рабочие)».
-            SetStatus("VPN подключён", "Сервер остаётся в отсеве — нажмите «Вернуть (В рабочие)»");
+            if (_manager.CurrentNode is { } current &&
+                current.Id.Equals(node.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                // Реальный трафик через сервер — лучшее доказательство, что он рабочий.
+                // Возвращаем в рабочий список сразу; скрытая проверка могла ошибиться.
+                RestoreRejectedNodes(new[] { node }, "VPN подключён",
+                    $"«{node.Name}» возвращён в рабочие: через него идёт трафик");
+            }
+            else
+            {
+                // Подключился запасной: иначе статус «Сервер не подключился» висел,
+                // хотя прокси уже работает и видео идёт через другой сервер.
+                var backup = _manager.CurrentNode?.Name ?? "запасной сервер";
+                SetStatus("Подключён запасной сервер",
+                    $"«{node.Name}» не открыл сайт — работает «{backup}». Сервер остался в отсеве");
+            }
         }
         else
         {
@@ -240,12 +283,26 @@ public partial class MainWindow
             return;
         }
 
-        var nodes = rows.Select(row => row.Entry.Node).ToList();
+        RestoreRejectedNodes(rows.Select(row => row.Entry.Node).ToList(),
+            "Возвращено в рабочие", string.Empty);
+    }
+
+    /// <summary>
+    /// Возвращает серверы из отсева в рабочий список. Используется кнопкой «Вернуть»
+    /// и успешным подключением: если через сервер реально пошёл трафик, он рабочий,
+    /// даже если скрытая проверка его забраковала.
+    /// </summary>
+    private void RestoreRejectedNodes(IReadOnlyList<ProxyNode> nodes, string title, string detail)
+    {
+        var now = DateTime.UtcNow;
         foreach (var node in nodes)
         {
             // Ручное возвращение: пользователь сам решил, что сервер нужно вернуть.
             node.Status = NodeStatus.Working;
             node.FailCount = 0;
+            // Возвращённый сервер снова в списке — не должен выпасть
+            // по сроку давности при следующей загрузке кэша.
+            node.LastSeenUtc = now;
         }
 
         MergeNodes(nodes);
@@ -260,7 +317,9 @@ public partial class MainWindow
         }
 
         ReloadRejected();
-        SetStatus("Возвращено в рабочие", $"{present.Count} из {nodes.Count}");
+        SetStatus(title, string.IsNullOrEmpty(detail)
+            ? $"{present.Count} из {nodes.Count}"
+            : detail);
     }
 
     private void OnRemoveRejectedClick(object sender, RoutedEventArgs e)

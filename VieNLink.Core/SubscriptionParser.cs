@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -212,10 +213,24 @@ internal static class SubscriptionParser
                     return null;
                 }
 
-                var serverText = server.GetString() ?? string.Empty;
+                var rawServer = server.GetString() ?? string.Empty;
+                var serverText = LinkParser.NormalizeHost(rawServer);
                 if (port <= 0 || serverText.Contains('/') || serverText.Contains(' ') || serverText.Length == 0)
                 {
                     return null;
+                }
+
+                // Единый вид адреса: без скобок IPv6, без завершающей точки, punycode.
+                clone["server"] = serverText;
+                if (clone["tls"] is System.Text.Json.Nodes.JsonObject tls &&
+                    tls["server_name"] is System.Text.Json.Nodes.JsonValue serverName &&
+                    serverName.TryGetValue<string>(out var nameValue) &&
+                    !string.IsNullOrWhiteSpace(nameValue))
+                {
+                    var normalizedName = LinkParser.NormalizeHost(nameValue);
+                    tls["server_name"] = IPAddress.TryParse(normalizedName, out _)
+                        ? string.Empty
+                        : normalizedName;
                 }
 
                 var name = LinkParser.NormalizeName(

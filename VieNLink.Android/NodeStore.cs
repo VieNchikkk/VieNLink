@@ -131,6 +131,33 @@ internal static class NodeStore
             _snapshot = Nodes.ToArray();
             _loaded = true;
 
+            // Фантомы старого отката проверки: рабочий сервер одновременно лежал
+            // в отсеве, потому что статус возвращали уже после записи в отсев.
+            try
+            {
+                var workingIds = _snapshot
+                    .Where(node => node.Status == NodeStatus.Working)
+                    .Select(node => node.Id)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                if (workingIds.Count > 0)
+                {
+                    var ghosts = RejectedNodeStore.Load()
+                        .Where(item => item.Node is not null && workingIds.Contains(item.Node.Id))
+                        .Select(item => item.Node.Id)
+                        .ToList();
+                    if (ghosts.Count > 0)
+                    {
+                        RejectedNodeStore.Remove(ghosts);
+                        AppLog.Write("nodes",
+                            $"Из отсева убрано {ghosts.Count}: сервер уже в рабочем списке");
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write("nodes", "Не удалось почистить отсев от рабочих серверов", exception);
+            }
+
             Android.Util.Log.Info("VieNLink",
                 $"серверы: {Nodes.Count} из кэша, источников: {Sources.Count}, отброшено: {dropped}, дублей: {duplicates}, по лимиту: {overLimit}");
         }

@@ -20,6 +20,19 @@ internal static class NodeAvailability
         checkedAt >= nowUtc.AddMinutes(-Math.Clamp(recheckMinutes, MinRecheckMinutes, MaxRecheckMinutes));
 
     /// <summary>
+    /// Можно ли снова проверять сервер после последней попытки. После провала рабочего
+    /// сервера выдерживаем <see cref="NodeLimits.WorkingRetryMinutes"/>: иначе следующие
+    /// партии подряд добивают его до <see cref="NodeLimits.RemoveAfterFailures"/>.
+    /// Успешная проверка сбрасывает <see cref="ProxyNode.FailCount"/> в ноль, поэтому
+    /// пауза действует только после провала и не «замораживает» только что проверенные
+    /// серверы. Ручная проверка это ограничение обходит.
+    /// </summary>
+    public static bool RetryAllowed(ProxyNode node, DateTime nowUtc, int retryMinutes = NodeLimits.WorkingRetryMinutes) =>
+        node.FailCount <= 0 ||
+        node.TriedAtUtc is not { } triedAt ||
+        nowUtc - triedAt >= TimeSpan.FromMinutes(Math.Max(1, retryMinutes));
+
+    /// <summary>
     /// Момент, раньше которого рабочий сервер пора перепроверить: на
     /// <see cref="NodeLimits.RecheckLeadMinutes"/> раньше истечения окна свежести.
     /// Так сервер успевает попасть в партию до того, как счётчик перестанет его учитывать.

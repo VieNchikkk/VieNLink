@@ -232,6 +232,11 @@ internal sealed class ProxyManager : IAsyncDisposable
         var telegramOk = 0;
         var bestDomains = 0;
         var done = 0;
+        // Отдельно считаем ранее рабочие серверы: если ни один из них не открылся,
+        // это сбой проверки/сети, а не смерть всех сразу.
+        var workingTested = 0;
+        var workingSucceeded = 0;
+        var failedWorking = new List<ProxyNode>();
 
         // Снимок состояния: если ни один сервер не открылся, значит проблема в сети/ядре,
         // а не в 6 000 серверах — откатываем, чтобы не удалить весь список.
@@ -261,11 +266,23 @@ internal sealed class ProxyManager : IAsyncDisposable
                 // Статус до проверки: рабочему серверу даём вторую попытку, чтобы одна
                 // ошибка сети (или занятость бесплатного сервера) не убирала его из счётчиков.
                 var wasWorking = node.Status == NodeStatus.Working;
+                if (wasWorking)
+                {
+                    Interlocked.Increment(ref workingTested);
+                }
+
+                // Отметка попытки: после провала рабочий сервер не должен снова
+                // попасть в следующую партию раньше NodeLimits.WorkingRetryMinutes.
+                node.TriedAtUtc = DateTime.UtcNow;
+
+                // Рабочему серверу — больше времени: он уже открывал адреса,
+                // а под нагрузкой сети ответ приходит медленнее.
+                var probeTimeout = wasWorking ? Math.Max(timeoutMs, 6000) : timeoutMs;
 
                 // Два направления проверяем параллельно: вдвое быстрее при том же лимите серверов.
                 // Telegram пробуем по нескольким доменам — хватает первого ответившего.
-                var youtubeTask = api.TestDelayAsync(node.Tag, timeoutMs, cancellationToken, youtubeTarget);
-                var telegramTask = TestAnyDelayAsync(api, node.Tag, telegramTargets, timeoutMs, cancellationToken);
+                var youtubeTask = api.TestDelayAsync(node.Tag, probeTimeout, cancellationToken, youtubeTarget);
+                var telegramTask = TestAnyDelayAsync(api, node.Tag, telegramTargets, probeTimeout, cancellationToken);
                 await Task.WhenAll(youtubeTask, telegramTask);
                 var youtubeDelay = await youtubeTask;
                 var telegramDelay = await telegramTask;
@@ -273,8 +290,8 @@ internal sealed class ProxyManager : IAsyncDisposable
                 if (youtubeDelay is null && telegramDelay is null && wasWorking)
                 {
                     await Task.Delay(600, cancellationToken).ConfigureAwait(false);
-                    youtubeTask = api.TestDelayAsync(node.Tag, timeoutMs, cancellationToken, youtubeTarget);
-                    telegramTask = TestAnyDelayAsync(api, node.Tag, telegramTargets, timeoutMs, cancellationToken);
+                    youtubeTask = api.TestDelayAsync(node.Tag, probeTimeout, cancellationToken, youtubeTarget);
+                    telegramTask = TestAnyDelayAsync(api, node.Tag, telegramTargets, probeTimeout, cancellationToken);
                     await Task.WhenAll(youtubeTask, telegramTask);
                     youtubeDelay = await youtubeTask;
                     telegramDelay = await telegramTask;
@@ -298,6 +315,13 @@ internal sealed class ProxyManager : IAsyncDisposable
                     }
 
                     NodeHealth.RegisterFailure(node);
+                    if (wasWorking)
+                    {
+                        lock (failedWorking)
+                        {
+                            failedWorking.Add(node);
+                        }
+                    }
                 }
                 else
                 {
@@ -316,6 +340,11 @@ internal sealed class ProxyManager : IAsyncDisposable
                     RaiseMax(ref bestDomains, openDomains);
 
                     NodeHealth.RegisterSuccess(node);
+                    if (wasWorking)
+                    {
+                        Interlocked.Increment(ref workingSucceeded);
+                    }
+
                     Interlocked.Increment(ref working);
                 }
 
@@ -362,10 +391,24 @@ internal sealed class ProxyManager : IAsyncDisposable
 
         await Task.WhenAll(tasks);
 
-        if (working == 0 && nodes.Count > 0 && !await DirectInternetWorksAsync(cancellationToken))
+        var workingBefore = snapshots.Count(pair => pair.Value.Status == NodeStatus.Working);
+        var testedWorking = Volatile.Read(ref workingTested);
+        var succeededWorking = Volatile.Read(ref workingSucceeded);
+        var massRollback = false;
+
+        // Восстанавливает прежние отметки (в том числе FailCount) у рабочих серверов.
+        // only = null — все рабочие из снимка; список — только конкретные провалившиеся.
+        void RestoreFromSnapshots(IEnumerable<ProxyNode>? only)
         {
-            foreach (var (node, snapshot) in snapshots)
+            var targets = only ?? snapshots.Keys;
+            foreach (var node in targets)
             {
+                if (!snapshots.TryGetValue(node, out var snapshot) ||
+                    snapshot.Status != NodeStatus.Working)
+                {
+                    continue;
+                }
+
                 node.Status = snapshot.Status;
                 node.DelayMs = snapshot.DelayMs;
                 node.CheckedAtUtc = snapshot.CheckedAtUtc;
@@ -376,12 +419,52 @@ internal sealed class ProxyManager : IAsyncDisposable
                 node.OpenDomains = snapshot.OpenDomains;
                 node.FailCount = snapshot.FailCount;
             }
+        }
 
+        // Ни один из ранее рабочих серверов не открылся — это сбой проверки/сети,
+        // а не смерть всех сразу. Порог 3: пара действительно мёртвых серверов
+        // должна дойти до RemoveAfterFailures, иначе откат будет вечно возвращать их FailCount.
+        if (testedWorking >= 3 && succeededWorking == 0 &&
+            await DirectInternetWorksAsync(cancellationToken))
+        {
+            lock (failedWorking)
+            {
+                RestoreFromSnapshots(failedWorking);
+            }
+
+            massRollback = true;
+            AppLog.Write("probe",
+                $"Рабочие серверы разом не открылись ({testedWorking}) — провалы не засчитаны");
+        }
+
+        // Все серверы, которые уже были рабочими, разом не открылись — это почти наверняка
+        // проблема проверки (DNS, сеть, пробное ядро), а не смерть всех серверов.
+        // Оставляем их рабочими: иначе одна плохая партия отправляла живые в отсев.
+        if (!massRollback && working == 0 && workingBefore >= 3 &&
+            await DirectInternetWorksAsync(cancellationToken))
+        {
+            RestoreFromSnapshots(null);
+            AppLog.Write("probe",
+                $"Массовый провал: все {workingBefore} рабочих серверов не открылись — статусы не изменены");
+        }
+
+        if (!massRollback && working == 0 && nodes.Count > 0 &&
+            !await DirectInternetWorksAsync(cancellationToken))
+        {
+            RestoreFromSnapshots(null);
             AppLog.Write("test",
                 $"Откат проверки: ни один из {nodes.Count} серверов не открылся и прямой интернет недоступен");
             throw new InvalidOperationException(
                 "Ни один сервер не открылся, и прямой интернет тоже недоступен. " +
                 "Проверьте сеть, ядро и обход DPI — статусы серверов не изменены.");
+        }
+
+        if (massRollback)
+        {
+            AppLog.Write("test",
+                $"Проверка серверов: рабочие разом не открылись, провалы не засчитаны, " +
+                $"рабочих {workingBefore + working} из {nodes.Count}");
+            return new TestSummary(nodes.Count, youtubeOk, telegramOk, workingBefore + working, bestDomains);
         }
 
         AppLog.Write("test",

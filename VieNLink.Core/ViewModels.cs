@@ -129,8 +129,18 @@ internal sealed class RejectedNodeRow
     public string Protocol => Node.Protocol;
     public string SourceName => Node.SourceName;
     public string RejectedLabel => Entry.RejectedAtUtc.ToLocalTime().ToString("dd.MM HH:mm");
-    public string FailLabel => Node.FailCount + " / " + NodeLimits.RemoveAfterFailures;
+    public string FailLabel => Node.Status == NodeStatus.Working
+        ? "—"
+        : Node.FailCount + " / " + NodeLimits.RemoveAfterFailures;
     public string DelayLabel => Node.DelayMs is null ? "—" : Node.DelayMs + " мс";
+
+    /// <summary>
+    /// Состояние после перепроверки: рабочий сервер остаётся в отсеве до «Вернуть»,
+    /// поэтому колонка нужна, чтобы он не выглядел мёртвым.
+    /// </summary>
+    public string StatusLabel => Node.Status == NodeStatus.Working
+        ? Node.DelayMs is null ? "РАБОТАЕТ" : "РАБОТАЕТ · " + Node.DelayMs + " мс"
+        : "НЕ РАБОТАЕТ";
     public string YoutubeLabel => Node.YoutubeOk == true ? "✓" : "—";
     public string TelegramLabel => Node.TelegramOk == true ? "✓" : "—";
     public string DiscordLabel => Node.DiscordOk == true ? "✓" : "—";

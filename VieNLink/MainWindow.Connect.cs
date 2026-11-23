@@ -285,8 +285,7 @@ public partial class MainWindow
         }
     }
 
-    private async Task ConnectAsync(ProxyNode node, bool automatic = false, IReadOnlyList<string>? probeUrls = null,
-        bool markFailures = true)
+    private async Task ConnectAsync(ProxyNode node, bool automatic = false, IReadOnlyList<string>? probeUrls = null)
     {
         if (!automatic && !await TryTakeOverAutoAsync())
         {
@@ -443,18 +442,12 @@ public partial class MainWindow
                     }
 
                     AppLog.Write("proxy", $"Сервер «{candidate.Name}» не открыл проверочный адрес — пробую следующий");
-                    if (markFailures && explicitUrls is null &&
-                        _settings.SiteRouteMode == SiteRouteMode.All)
-                    {
-                        DropFailedNode(candidate, "не открыл " + targetLabel);
-                    }
-                    else
-                    {
-                        // Сервис/ручное переключение/ограниченный маршрут — не повод
-                        // помечать сервер мёртвым: статус меняет только прямая проверка.
-                        candidate.TriedAtUtc = DateTime.UtcNow;
-                        AppendLog($"Сервер «{candidate.Name}» не открыл {targetLabel} — оставляю в списке");
-                    }
+                    // Проверка через уже поднятый прокси — только повод переключиться.
+                    // Status и FailCount меняет лишь прямая проверка в скрытом ядре:
+                    // иначе одна неудачная попытка подключения отправляла в отсев
+                    // рабочие серверы, которые на самом деле живы.
+                    candidate.TriedAtUtc = DateTime.UtcNow;
+                    AppendLog($"Сервер «{candidate.Name}» не открыл {targetLabel} — оставляю в списке");
 
                     lastError = new InvalidOperationException("Сервер не открыл " + targetLabel);
                 }
@@ -814,7 +807,7 @@ public partial class MainWindow
             // сервиса, после него конфиг пересобран. Провал улучшения не должен
             // засчитываться серверам как проверка: это не фоновая проверка.
             SetStatus("Возвращаюсь на " + name, preferred.Name);
-            await ConnectAsync(preferred, automatic: true, markFailures: false, probeUrls: serviceUrls);
+            await ConnectAsync(preferred, automatic: true, probeUrls: serviceUrls);
             if (_manager.IsConnected)
             {
                 _coldSwitchCount++;
@@ -826,7 +819,7 @@ public partial class MainWindow
             {
                 _upgradeRetryAfter[preferred.Id] = DateTime.UtcNow.AddMinutes(15);
                 // Неудачная попытка улучшения не должна оставить без прокси.
-                await ConnectAsync(current, automatic: true, markFailures: false,
+                await ConnectAsync(current, automatic: true,
                     probeUrls: ProxyManager.VerificationUrls(current));
             }
         }
@@ -844,11 +837,6 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>
-    /// Сервер перестал открывать проверочный адрес: счётчик провалов растёт, из списка
-    /// сервер убирается только после <see cref="NodeLimits.RemoveAfterFailures"/> провалов подряд —
-    /// разовый сбой живого сервера не должен стирать его из списка.
-    /// </summary>
     /// <summary>
     /// Адреса проверки через активный прокси. При режиме «только сайты из списка»
     /// проверять Cloudflare бессмысленно: он идёт напрямую, и любой рабочий сервер
@@ -873,18 +861,6 @@ public partial class MainWindow
         }
 
         return ProxyManager.VerificationUrls(node);
-    }
-
-    private void DropFailedNode(ProxyNode node, string reason)
-    {
-        var removed = NodeHealth.RegisterFailure(node);
-        ApplyTestedNode(node);
-        // Кэш пишется в фоне: список может быть десятки тысяч серверов, не тормозим UI.
-        var snapshot = AllRows.Select(r => r.Node).ToList();
-        _ = Task.Run(() => NodeCacheWriter.Save(snapshot));
-        AppendLog(removed
-            ? $"Сервер удалён после {node.FailCount} провалов — {reason}"
-            : $"Сервер не отвечает ({node.FailCount} из {NodeLimits.RemoveAfterFailures}) — {reason}");
     }
 
     /// <summary>
@@ -945,7 +921,7 @@ public partial class MainWindow
             UpdateConnectionUi();
         }
 
-        await ConnectAsync(next, automatic: true, markFailures: false);
+        await ConnectAsync(next, automatic: true);
     }
 
     /// <summary>

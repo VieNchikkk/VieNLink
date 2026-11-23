@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -184,7 +185,13 @@ internal static class LinkParser
         {
             var tls = new JsonObject { ["enabled"] = true };
             var sni = Str(root, "sni");
-            tls["server_name"] = string.IsNullOrWhiteSpace(sni) ? host ?? server : sni;
+            var serverName = !string.IsNullOrWhiteSpace(sni)
+                ? sni
+                : !string.IsNullOrWhiteSpace(host)
+                    ? host
+                    : server;
+            var normalizedName = NormalizeHost(serverName);
+            tls["server_name"] = IPAddress.TryParse(normalizedName, out _) ? string.Empty : normalizedName;
             var alpn = Str(root, "alpn");
             if (!string.IsNullOrWhiteSpace(alpn))
             {
@@ -408,10 +415,17 @@ internal static class LinkParser
         var tls = new JsonObject { ["enabled"] = true };
         var sni = Get(query, "sni") ?? Get(query, "peer");
         var isReality = security.Equals("reality", StringComparison.OrdinalIgnoreCase);
+        var normalizedHost = NormalizeHost(host);
+        var isIp = IPAddress.TryParse(normalizedHost, out _);
 
         // Для Reality server_name — это камуфляж (SNI в белый список); без него оставляем пустым,
-        // его подставит настройка «SNI-маскировка». Для обычного TLS имя сервера — сам хост.
-        tls["server_name"] = !string.IsNullOrWhiteSpace(sni) ? sni : isReality ? string.Empty : host;
+        // его подставит настройка «SNI-маскировка». Для обычного TLS имя сервера — сам хост,
+        // но IP-адрес в SNI не отправляем: браузеры и TLS так не делают, сервер может отказать.
+        tls["server_name"] = !string.IsNullOrWhiteSpace(sni)
+            ? sni
+            : isReality || isIp
+                ? string.Empty
+                : normalizedHost;
 
         var insecure = Get(query, "allowInsecure") ?? Get(query, "insecure");
         if (insecure is "1" or "true")
@@ -493,6 +507,7 @@ internal static class LinkParser
 
     private static void ApplyTransport(JsonObject outbound, string type, string? path, string? host, string? serviceName)
     {
+        path = SanitizePath(path);
         switch (type)
         {
             case "ws":
@@ -564,8 +579,58 @@ internal static class LinkParser
         }
     }
 
+    /// <summary>
+    /// Путь транспорта (ws/http/httpupgrade) должен быть корректно закодирован: sing-box
+    /// разбирает его как URL и падает на «invalid URL escape», если в ссылке из источника
+    /// остался одиночный «%» (типично для ссылок с кириллицей). Такой сервер ломал запуск
+    /// сразу всей партии проверки. Экранируем только неполные/неверные «%»-последовательности,
+    /// корректные %XX не трогаем.
+    /// </summary>
+    private static string? SanitizePath(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || path.IndexOf('%') < 0)
+        {
+            return path;
+        }
+
+        var builder = new StringBuilder(path.Length + 8);
+        for (var index = 0; index < path.Length; index++)
+        {
+            var symbol = path[index];
+            if (symbol == '%' &&
+                (index + 2 >= path.Length ||
+                 !Uri.IsHexDigit(path[index + 1]) ||
+                 !Uri.IsHexDigit(path[index + 2])))
+            {
+                builder.Append("%25");
+                continue;
+            }
+
+            builder.Append(symbol);
+        }
+
+        return builder.ToString();
+    }
+
     private static ProxyNode? Finish(JsonObject outbound, string protocol, string server, int port, string name, string raw, string sourceName)
     {
+        // Один формат адреса для sing-box и TCP-опроса: IPv6 без квадратных скобок,
+        // IP в каноническом виде, домен без завершающей точки и в punycode.
+        var normalized = NormalizeHost(server);
+        if (!string.Equals(normalized, server, StringComparison.Ordinal))
+        {
+            outbound["server"] = normalized;
+            if (outbound["tls"] is JsonObject tls &&
+                tls["server_name"] is JsonValue serverName &&
+                serverName.TryGetValue<string>(out var nameValue) &&
+                nameValue.Equals(server, StringComparison.OrdinalIgnoreCase))
+            {
+                tls["server_name"] = normalized;
+            }
+
+            server = normalized;
+        }
+
         // В списках попадается мусор вида "https://github.com/..." вместо адреса — такие серверы бесполезны.
         if (!IsUsableHost(server) || port is <= 0 or > 65535)
         {
@@ -607,6 +672,41 @@ internal static class LinkParser
         && !host.Contains('\\')
         && !host.Contains(' ')
         && !host.Contains('"');
+
+    /// <summary>
+    /// Приводит адрес сервера к виду, который понимают sing-box и TcpClient: убирает
+    /// квадратные скобки у IPv6, канонизирует IP, отбрасывает завершающую точку домена
+    /// и переводит национальные домены в punycode. Без этого IPv6-серверы не проходили
+    /// TCP-отсев и не подключались.
+    /// </summary>
+    internal static string NormalizeHost(string? host)
+    {
+        var value = (host ?? string.Empty).Trim();
+        if (value.StartsWith('[') && value.EndsWith(']') && value.Length > 2)
+        {
+            value = value[1..^1];
+        }
+
+        value = value.TrimEnd('.');
+        if (IPAddress.TryParse(value, out var address))
+        {
+            return address.ToString();
+        }
+
+        if (value.Any(symbol => symbol > 127))
+        {
+            try
+            {
+                value = new IdnMapping().GetAscii(value);
+            }
+            catch (ArgumentException)
+            {
+                // Битая национальная доменная зона — оставляем как есть, DNS её отклонит.
+            }
+        }
+
+        return value;
+    }
 
     private static string NameFromFragment(Uri uri, string server, int port)
     {

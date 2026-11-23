@@ -171,7 +171,13 @@ internal static class ProbeClient
         // NodeLimits.WorkingRecheckMinutes (5 мин), начиная за минуту до истечения.
         // Бесплатный сервер живёт минуты, и «рабочий» из кэша без перепроверки
         // обещает кнопке сервер, которого уже нет.
-        var workingCutoff = NodeAvailability.RecheckCutoffUtc(DateTime.UtcNow);
+        var nowUtc = DateTime.UtcNow;
+        var workingCutoff = NodeAvailability.RecheckCutoffUtc(nowUtc);
+        // После провала рабочий сервер не проверяем снова в следующей же партии:
+        // иначе фон набирает три провала за пару минут и отправляет живой сервер
+        // в отсев. Ручная перепроверка (recheckWorking) паузу обходит.
+        bool RetryAllowed(ProxyNode node) =>
+            manual || recheckWorking || NodeAvailability.RetryAllowed(node, nowUtc);
         // Снимок и сортировка тысяч серверов — в фоне: на UI-потоке это давало ANR
         // при нажатии кнопок сервисов и «Универсальный».
         var ordered = await Task.Run(() =>
@@ -180,11 +186,13 @@ internal static class ProbeClient
                 .DistinctBy(node => node.Tag, StringComparer.OrdinalIgnoreCase)
                 .Where(node => workingOnly
                     ? node.Status == NodeStatus.Working &&
-                      (allWorking || (node.CheckedAtUtc is not null && node.CheckedAtUtc < workingCutoff))
+                      (allWorking || (node.CheckedAtUtc is not null && node.CheckedAtUtc < workingCutoff)) &&
+                      RetryAllowed(node)
                     : node.Status == NodeStatus.Unknown ||
                       (node.Status == NodeStatus.Working &&
                        (recheckWorking || node.CheckedAtUtc is null ||
-                        node.CheckedAtUtc < workingCutoff)))
+                        node.CheckedAtUtc < workingCutoff) &&
+                       (recheckWorking || RetryAllowed(node))))
                 // Сначала непроверенные и самые свежие из источников: бесплатные серверы живут
                 // недолго, и проверять вчерашний список полезнее, чем недельный. Затем — серверы
                 // из источников, которые уже давали живые серверы (sourceScore).
@@ -589,6 +597,7 @@ internal static class ProbeClient
                     var aliveIds = alive
                         .Select(node => node.Id)
                         .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    var precheckDead = new List<ProxyNode>();
                     foreach (var node in nodes.Where(node => !aliveIds.Contains(node.Id)))
                     {
                         // TCP-опрос — грубая проверка: мобильная сеть может не дать
@@ -601,9 +610,13 @@ internal static class ProbeClient
                         }
 
                         NodeHealth.RegisterFailure(node);
+                        precheckDead.Add(node);
                         dropped++;
                     }
 
+                    // Непроверенные, не ответившие по TCP, удаляем сразу: иначе они
+                    // висят в кэше мёртвыми и раздувают «В списке» до перезагрузки.
+                    NodeStore.DropDeadNodes(precheckDead);
                     NodeStore.SaveNodes();
                     toTest = alive;
                     if (toTest.Count == 0)
@@ -868,6 +881,7 @@ internal static class ProbeClient
             }
 
             var wasWorking = node.Status == NodeStatus.Working;
+            var failuresBefore = node.FailCount;
             node.Status = item.Status;
             node.DelayMs = item.DelayMs;
             node.CheckedAtUtc = item.CheckedAtUtc;
@@ -878,6 +892,29 @@ internal static class ProbeClient
             node.DiscordOk = item.DiscordOk;
             node.OpenDomains = item.OpenDomains;
             node.FailCount = item.FailCount;
+
+            // Провал считаем по выросшему счётчику, а не по статусу: рабочий сервер
+            // после первого провала остаётся Working, но это уже провал — раньше
+            // в журнале всегда было «0», и проблему было не видно.
+            if (wasWorking && item.FailCount > failuresBefore)
+            {
+                failedWorking++;
+            }
+
+            // Через этот сервер прямо сейчас идёт трафик: провал скрытой проверки
+            // (занятость, лимит соединений, разовый сбой) не повод убирать его.
+            // Реальную смерть заметит health-check и переключит на запасной.
+            if (node.Status == NodeStatus.Dead &&
+                TunnelService.State == TunnelState.Running &&
+                NodeStore.Selected?.Id is { } selectedId &&
+                selectedId.Equals(node.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                node.Status = NodeStatus.Working;
+                node.FailCount = 0;
+                node.TriedAtUtc = DateTime.UtcNow;
+                AppLog.Write("probe",
+                    $"«{node.Name}»: проверка не открыла адрес, но трафик идёт через него — оставляю");
+            }
 
             if (node.Status == NodeStatus.Working)
             {
@@ -910,13 +947,15 @@ internal static class ProbeClient
 
                 bestDomains = Math.Max(bestDomains, node.OpenDomains);
             }
-            else if (wasWorking)
-            {
-                // Рабочий сервер провалил одну проверку: остаётся в списке до второго
-                // провала подряд (счётчик приехал из :probe вместе с сервером).
-                failedWorking++;
-            }
         }
+
+        // Сервер мог вернуться из источника и снова стать рабочим: не держим его
+        // одновременно в рабочем списке и в отсеве. Раньше «фантомы» чистились
+        // только при запуске приложения.
+        RejectedNodeStore.Remove(result.Nodes
+            .Where(item => item.Status == NodeStatus.Working)
+            .Select(item => item.Id)
+            .ToList());
 
         var removed = NodeStore.DropDeadNodes(result.Nodes
             .Select(item => byId.TryGetValue(item.Id, out var node) ? node : null)

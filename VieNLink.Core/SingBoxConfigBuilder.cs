@@ -23,7 +23,8 @@ internal static class SingBoxConfigBuilder
         int apiPort,
         string apiSecret,
         AppSettings settings,
-        bool dnsThroughProxy = false)
+        bool dnsThroughProxy = false,
+        bool explicitDns = false)
     {
         var included = new List<ProxyNode>(nodes.Count);
         var seenTags = new HashSet<string>(StringComparer.Ordinal);
@@ -107,8 +108,9 @@ internal static class SingBoxConfigBuilder
             },
         };
 
-        // DNS нужен только TUN-режиму: без него запросы из адаптера некуда отправлять.
-        // В режиме системного прокси DNS не трогаем — иначе проверка серверов зависит от сервера.
+        // DNS: в TUN он обязателен для запросов из адаптера. В режиме системного прокси
+        // тоже задаём явный local-DNS — иначе sing-box не разрешает доменные адреса
+        // серверов («dns: lookup failed … empty result») и бракует рабочие серверы.
         if (tunEnabled)
         {
             // dnsThroughProxy: DNS по TCP через сервер. Нужно там, где локальный UDP/53
@@ -140,6 +142,27 @@ internal static class SingBoxConfigBuilder
                     },
                     ["final"] = "local",
                 };
+        }
+        else if (explicitDns)
+        {
+            // Пробные/тестовые ядра без TUN: sing-box без явного DNS не разрешает
+            // доменные адреса серверов («dns: lookup failed … empty result»), и рабочие
+            // серверы бракуются. `local`/libbox тоже даёт пустой ответ — берём UDP-DNS
+            // и только IPv4, чтобы не ждать недоступный AAAA.
+            config["dns"] = new JsonObject
+            {
+                ["servers"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["type"] = "udp",
+                        ["tag"] = "udp",
+                        ["server"] = "1.1.1.1",
+                    },
+                },
+                ["final"] = "udp",
+                ["strategy"] = "ipv4_only",
+            };
         }
 
         config["inbounds"] = inbounds;

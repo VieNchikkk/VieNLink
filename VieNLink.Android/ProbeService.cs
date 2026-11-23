@@ -296,7 +296,8 @@ public sealed class ProbeService : Service
                 CoreRuntime.MixedPort,
                 CoreRuntime.ApiPort,
                 CoreRuntime.ApiSecret,
-                settings);
+                settings,
+                explicitDns: true);
 
             AppLog.Write(Tag, $"Отдельный процесс: серверов {nodes.Count}, mixed {CoreRuntime.MixedPort}");
             if (!CoreRuntime.Start(config))
@@ -349,8 +350,11 @@ public sealed class ProbeService : Service
                         Volatile.Read(ref _progressWorking));
                 },
                 token,
-                concurrency: 8,
-                timeoutMs: 3000,
+                // Меньше одновременно проверяемых серверов и больше времени на ответ:
+                // 8 узлов × 6 адресов на мобильном канале давали ложные провалы,
+                // особенно у серверов, которые только что были рабочими.
+                concurrency: 6,
+                timeoutMs: 4000,
                 fullDomains: request?.FullDomains ?? true);
 
             foreach (var (id, node) in accepted)

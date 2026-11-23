@@ -135,7 +135,35 @@ internal sealed class HiddenProbeService : IAsyncDisposable
                 secret,
                 probeSettings);
             SingBoxConfigBuilder.WriteToFile(configPath, json);
-            await SingBoxRunner.CheckConfigAsync(configPath, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await SingBoxRunner.CheckConfigAsync(configPath, cancellationToken).ConfigureAwait(false);
+            }
+            catch (InvalidOperationException checkError)
+            {
+                // Один битый сервер не должен отменять всю партию: находим его делением
+                // списка пополам и проверяем остальные. Статусы исключённых не меняем.
+                var valid = await FilterValidNodesAsync(ordered, probeSettings, cancellationToken)
+                    .ConfigureAwait(false);
+                if (valid.Count == 0)
+                {
+                    throw new InvalidOperationException(
+                        "sing-box не принимает конфиг ни одного сервера из партии", checkError);
+                }
+
+                AppLog.Write("probe",
+                    $"Из партии исключено {ordered.Count - valid.Count} серверов: sing-box не принимает конфиг");
+                ordered = valid;
+                json = SingBoxConfigBuilder.Build(
+                    ordered,
+                    ordered[0].Tag,
+                    mixedPort,
+                    apiPort,
+                    secret,
+                    probeSettings);
+                SingBoxConfigBuilder.WriteToFile(configPath, json);
+                await SingBoxRunner.CheckConfigAsync(configPath, cancellationToken).ConfigureAwait(false);
+            }
 
             AppLog.Write("probe", $"Скрытая проверка: серверов {ordered.Count} из {originalCount}, mixed {mixedPort}, API {apiPort} (напрямую, вне VPN)");
             await _runner.StartAsync(configPath, apiPort, TimeSpan.FromSeconds(20), cancellationToken)
@@ -190,6 +218,69 @@ internal sealed class HiddenProbeService : IAsyncDisposable
     {
         await _runner.StopAsync().ConfigureAwait(false);
         _gate.Dispose();
+    }
+
+    /// <summary>
+    /// Делит список пополам, пока не останутся серверы, с которыми sing-box принимает
+    /// конфиг. Исключённые отмечаются как попробованные и в статусах не меняются:
+    /// проверка не должна доказывать «мёртвость» из-за ошибки разбора конфига.
+    /// </summary>
+    private static async Task<List<ProxyNode>> FilterValidNodesAsync(
+        List<ProxyNode> nodes,
+        AppSettings settings,
+        CancellationToken cancellationToken)
+    {
+        var result = new List<ProxyNode>(nodes.Count);
+        var queue = new Queue<List<ProxyNode>>();
+        queue.Enqueue(nodes);
+        var checks = 0;
+        var path = Path.Combine(AppPaths.RuntimeDirectory, "probe-check.json");
+        while (queue.Count > 0 && !cancellationToken.IsCancellationRequested && checks < 80)
+        {
+            var batch = queue.Dequeue();
+            if (batch.Count == 0)
+            {
+                continue;
+            }
+
+            var json = SingBoxConfigBuilder.Build(
+                batch, batch[0].Tag, settings.MixedPort, settings.ApiPort, "check", settings);
+            SingBoxConfigBuilder.WriteToFile(path, json);
+            checks++;
+            try
+            {
+                await SingBoxRunner.CheckConfigAsync(path, cancellationToken).ConfigureAwait(false);
+                result.AddRange(batch);
+            }
+            catch (InvalidOperationException)
+            {
+                if (batch.Count == 1)
+                {
+                    batch[0].TriedAtUtc = DateTime.UtcNow;
+                    AppLog.Write("probe", "Сервер исключён из конфига проверки: " + batch[0].Name);
+                    continue;
+                }
+
+                var half = batch.Count / 2;
+                queue.Enqueue(batch.Take(half).ToList());
+                queue.Enqueue(batch.Skip(half).ToList());
+            }
+        }
+
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch (IOException)
+        {
+            // Временный конфиг удалится при следующей проверке.
+        }
+
+        AppLog.Write("probe", $"Проверок конфига: {checks}, годных серверов {result.Count} из {nodes.Count}");
+        return result;
     }
 
     /// <summary>Немедленная остановка скрытого ядра при выходе из приложения.</summary>

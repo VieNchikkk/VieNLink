@@ -276,6 +276,9 @@ public partial class MainWindow
         }
 
         ReplaceNodes(snapshot.Nodes);
+        // Рабочий сервер не может одновременно лежать в отсеве: такие «фантомы»
+        // оставлял старый откат партии проверки.
+        DropWorkingFromRejected();
 
         if (snapshot.DroppedNodes > 0)
         {
@@ -425,12 +428,24 @@ public partial class MainWindow
     /// <summary>Пересобрать вкладки по текущим статусам серверов и сохранить кэш.</summary>
     private async Task RepartitionAndSaveAsync()
     {
+        // Отсев пополняем здесь, а не по одному серверу в ApplyTestedNode: если партия
+        // откатилась (нет прямого интернета), статусы уже восстановлены, и рабочие
+        // серверы не должны оставаться в отсеве.
+        foreach (var node in _droppedNodes.Where(node => node.Status == NodeStatus.Dead))
+        {
+            ArchiveRejectedNode(node);
+        }
+
         // Удалённые (10 провалов) серверы в кэш не попадают: их просто выбрасываем.
         var all = AllRows.Select(r => r.Node)
             .Concat(_droppedNodes.Where(n => n.Status != NodeStatus.Dead))
             .ToList();
         _droppedNodes.Clear();
         ReplaceNodes(all);
+
+        // Сервер мог вернуться из источника и снова стать рабочим: не держим его
+        // одновременно в рабочем списке и в отсеве.
+        DropWorkingFromRejected();
 
         // Список в таблице уже без повторов — именно его и сохраняем.
         var unique = AllRows.Select(r => r.Node).ToList();
@@ -523,6 +538,11 @@ public partial class MainWindow
 
         // Постоянная строка в шапке: её не перетирают ход проверки и сообщения операций.
         // Числа под иконками сервисов — проверенные рабочие серверы с доступом к каждому.
+        if (HeaderWorkingText is not null)
+        {
+            HeaderWorkingText.Text = working.ToString();
+        }
+
         if (HeaderNodesText is not null)
         {
             HeaderNodesText.Text = $"Серверы: {total}";

@@ -81,7 +81,40 @@ public sealed class TunnelService : VpnService
     }
     """;
 
-    public static TunnelState State { get; private set; } = TunnelState.Stopped;
+    private static TunnelState _state = TunnelState.Stopped;
+
+    /// <summary>
+    /// Состояние туннеля. Время подключения обновляется здесь же: экраны показывают,
+    /// сколько держится соединение, не заводя собственный таймер.
+    /// </summary>
+    public static TunnelState State
+    {
+        get => _state;
+        private set
+        {
+            if (_state == value)
+            {
+                return;
+            }
+
+            _state = value;
+            StartedAtUtc = value switch
+            {
+                TunnelState.Running => DateTime.UtcNow,
+                TunnelState.Stopped => null,
+                _ => StartedAtUtc,
+            };
+        }
+    }
+
+    /// <summary>Когда туннель перешёл в «работает»; null — не подключён. Для времени сессии в интерфейсе.</summary>
+    public static DateTime? StartedAtUtc { get; private set; }
+
+    /// <summary>
+    /// Последняя причина, по которой туннель не поднялся: экраны пишут её вместо
+    /// молчаливого «VPN не подключён». Сбрасывается при новом запуске и ручном отключении.
+    /// </summary>
+    public static string? LastError { get; private set; }
 
     /// <summary>
     /// Текущая служба для платформы libbox: из неё берутся TUN и protect.
@@ -871,6 +904,7 @@ public sealed class TunnelService : VpnService
             }
 
             // Пока ядро поднимает TUN, состояние «Подключаюсь…», а не «VPN не подключён».
+            LastError = null;
             State = TunnelState.Starting;
             RefreshNotification();
             TunnelWidget.Update(this);
@@ -894,8 +928,10 @@ public sealed class TunnelService : VpnService
 
             if (!CoreRuntime.Start(configJson))
             {
+                LastError = "Ядро sing-box не запустилось — проверьте журнал";
                 State = TunnelState.Stopped;
                 TunnelWidget.Update(this);
+                RefreshNotification();
                 return;
             }
 
@@ -917,6 +953,9 @@ public sealed class TunnelService : VpnService
         }
         catch (Exception exception)
         {
+            LastError = string.IsNullOrWhiteSpace(exception.Message)
+                ? "Не удалось запустить ядро"
+                : "Не удалось запустить ядро: " + exception.Message;
             State = TunnelState.Stopped;
             VieNLink.AppLog.Write("android", "Не удалось запустить ядро", exception);
             Android.Util.Log.Error("VieNLink", "Ошибка запуска ядра: " + exception);
@@ -1071,6 +1110,7 @@ public sealed class TunnelService : VpnService
         }
         catch (Exception exception)
         {
+            LastError = "Не удалось поднять TUN: " + exception.Message;
             State = TunnelState.Stopped;
             VieNLink.AppLog.Write("android", "Не удалось поднять TUN", exception);
             Android.Util.Log.Error("VieNLink", "Ошибка TUN: " + exception);
@@ -1313,6 +1353,7 @@ public sealed class TunnelService : VpnService
 
         _tunDescriptor = null;
         State = TunnelState.Stopped;
+        LastError = null;
         _nodeLabel = null;
         TunnelWidget.Update(this);
 

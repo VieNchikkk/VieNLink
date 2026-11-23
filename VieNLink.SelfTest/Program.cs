@@ -96,6 +96,9 @@ internal static class Program
             case "sourcestats":
                 RunSourceStats();
                 break;
+            case "prunesources":
+                RunPruneSources(args.Length > 1 && args[1] == "--apply");
+                break;
             case "sourceprobe":
                 if (args.Length < 2)
                 {
@@ -1691,6 +1694,22 @@ internal static class Program
             "имя: если остался только канал — показываем IP:порт");
         Check(vless?.OutboundJson.Contains("\"ws\"", StringComparison.Ordinal) == true, "vless: websocket");
 
+        var vlessV6 = LinkParser.Parse(
+            "vless://11111111-2222-3333-4444-555555555555@[2001:db8::1]:443?security=tls#V6", "test");
+        Check(vlessV6?.Server == "2001:db8::1", "vless: IPv6-адрес без квадратных скобок");
+        Check(vlessV6?.OutboundJson.Contains("\"server_name\":\"2001:db8::1\"", StringComparison.Ordinal) == false,
+            "vless: IP-адрес не подставляется в SNI");
+
+        var vlessIp = LinkParser.Parse(
+            "vless://11111111-2222-3333-4444-555555555555@1.2.3.4:443?security=tls#IP", "test");
+        Check(vlessIp?.OutboundJson.Contains("\"server_name\":\"1.2.3.4\"", StringComparison.Ordinal) == false,
+            "vless: IPv4 не подставляется в SNI");
+
+        var vlessDomain = LinkParser.Parse(
+            "vless://11111111-2222-3333-4444-555555555555@example.com:443?security=tls#D", "test");
+        Check(vlessDomain?.OutboundJson.Contains("\"server_name\":\"example.com\"", StringComparison.Ordinal) == true,
+            "vless: домен подставляется в SNI");
+
         var reality = LinkParser.Parse(
             "vless://11111111-2222-3333-4444-555555555555@1.2.3.4:443?security=reality&pbk=jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0&sid=aa&fp=chrome&sni=www.microsoft.com&type=tcp#R",
             "test");
@@ -2399,6 +2418,25 @@ internal static class Program
               !GitHubSourceFreshness.IsPushedAtFresh(null, pushedNow.UtcDateTime),
             "сбор: свежесть репозитория 24 ч и отсутствие даты отсекается");
 
+        // Пауза после провала: упавший рабочий сервер не должен снова попадать
+        // в следующую партию, иначе три провала набираются за минуту.
+        var retryNode = new ProxyNode
+        {
+            Status = NodeStatus.Working,
+            FailCount = 1,
+            CheckedAtUtc = DateTime.UtcNow.AddMinutes(-10),
+            TriedAtUtc = DateTime.UtcNow.AddMinutes(-1),
+        };
+        Check(!NodeAvailability.RetryAllowed(retryNode, DateTime.UtcNow),
+            "перепроверка: после провала рабочий сервер ждёт паузу");
+        retryNode.FailCount = 0;
+        Check(NodeAvailability.RetryAllowed(retryNode, DateTime.UtcNow),
+            "перепроверка: успешная проверка снимает паузу");
+        retryNode.FailCount = 1;
+        retryNode.TriedAtUtc = DateTime.UtcNow.AddMinutes(-NodeLimits.WorkingRetryMinutes - 1);
+        Check(NodeAvailability.RetryAllowed(retryNode, DateTime.UtcNow),
+            "перепроверка: после паузы сервер снова проверяется");
+
         // 1. Оба проверочных адреса доступны → узел рабочий, отметки стоят.
         var working = DirectNode("direct-a");
         var summary = await manager.TestNodesAsync(
@@ -2586,7 +2624,11 @@ internal static class Program
         Check(failing.Status == NodeStatus.Working && failing.FailCount == 1 &&
               failing.DelayMs == 100 && failing.UniversalOk == true,
             "провал: первый провал рабочего сервера не стирает его результат");
-        NodeHealth.RegisterFailure(failing);
+        for (var attempt = 1; attempt < NodeLimits.RemoveAfterFailures; attempt++)
+        {
+            NodeHealth.RegisterFailure(failing);
+        }
+
         Check(failing.Status == NodeStatus.Dead &&
               failing.FailCount == NodeLimits.RemoveAfterFailures,
             $"провал: после {NodeLimits.RemoveAfterFailures} провалов подряд сервер помечается мёртвым");
@@ -2873,6 +2915,19 @@ internal static class Program
             {
                 Check(false, name + " — " + exception.Message);
             }
+        }
+
+        var probeDnsConfig = SingBoxConfigBuilder.Build(
+            new[] { node }, node.Tag, 22000, 22001, "s", new AppSettings(), explicitDns: true);
+        SingBoxConfigBuilder.WriteToFile(path, probeDnsConfig);
+        try
+        {
+            await SingBoxRunner.CheckConfigAsync(path, CancellationToken.None);
+            Check(true, "пробное ядро: системный прокси + явный DNS");
+        }
+        catch (Exception exception)
+        {
+            Check(false, "пробное ядро: системный прокси + явный DNS — " + exception.Message);
         }
 
         var fragmentConfig = SingBoxConfigBuilder.Build(
@@ -3664,6 +3719,93 @@ internal static class Program
             Console.WriteLine($"  {(source.Enabled ? "+" : "-")} {(source.IsMine ? "★ " : string.Empty)}{source.Name}");
             Console.WriteLine("      " + source.Url.ReplaceLineEndings(" "));
         }
+    }
+
+    /// <summary>
+    /// Чистка списка источников: убирает проверенные, но пустые и бесполезные источники
+    /// серверов. MTProto/Telegram-источники не трогаются — у них своя задача.
+    /// Без --apply только показывает решение.
+    /// </summary>
+    private static void RunPruneSources(bool apply)
+    {
+        var sources = NodeSourceService.LoadSources();
+        var pool = NodeSourceService.LoadCache(out _, out _);
+        var working = NodeSourceService.LoadCache(
+            out _, out _, DateTime.UtcNow.AddDays(-30), AppPaths.WorkingNodesPath);
+        var all = pool.Concat(working).ToList();
+        var remove = new List<SourceDefinition>();
+
+        Console.WriteLine($"Источников: {sources.Count}, серверов в кэше: {all.Count}");
+        Console.WriteLine("Имя | Проверен | Последних | Всего | Рабочих | Решение");
+        foreach (var source in sources.OrderBy(source => source.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            if (SourceKinds.IsProxy(source))
+            {
+                Console.WriteLine($"{ShortenText(source.Name, 40)} | MTProto — не трогаем");
+                continue;
+            }
+
+            var key = SourceKey(source.Name);
+            var total = 0;
+            var currentWorking = 0;
+            foreach (var node in all)
+            {
+                if (!NodeFailover.SplitSources(node.SourceName)
+                        .Any(name => name.Contains(key, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                total++;
+                if (node.Status == NodeStatus.Working)
+                {
+                    currentWorking++;
+                }
+            }
+
+            var checkedNow = source.LastCheckedUtc is not null;
+            var drop = checkedNow && (source.LastNodeCount == 0 || (total < 10 && currentWorking == 0));
+            if (drop)
+            {
+                remove.Add(source);
+            }
+
+            var checkedLabel = source.LastCheckedUtc is { } at
+                ? at.ToLocalTime().ToString("dd.MM HH:mm")
+                : "—";
+            Console.WriteLine(
+                $"{ShortenText(source.Name, 40)} | {checkedLabel} | {source.LastNodeCount} | " +
+                $"{total} | {currentWorking} | {(drop ? "УДАЛИТЬ" : "оставить")}");
+        }
+
+        Console.WriteLine($"К удалению: {remove.Count}");
+        if (!apply)
+        {
+            Console.WriteLine("Это предварительный просмотр. Для применения: prunesources --apply");
+            return;
+        }
+
+        if (remove.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var source in remove)
+        {
+            sources.RemoveAll(item => string.Equals(item.Id, source.Id, StringComparison.OrdinalIgnoreCase));
+            Console.WriteLine("Удалён: " + source.Name);
+        }
+
+        NodeSourceService.SaveSources(sources);
+        Console.WriteLine($"Сохранено, источников осталось: {sources.Count}");
+    }
+
+    /// <summary>Ключ для сопоставления с SourceName: первое слово имени источника.</summary>
+    private static string SourceKey(string name)
+    {
+        var trimmed = name.Trim();
+        var space = trimmed.IndexOf(' ');
+        return space > 0 ? trimmed[..space] : trimmed;
     }
 
     private static string StatusName(NodeStatus status) => status switch
