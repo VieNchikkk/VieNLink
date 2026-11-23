@@ -16,6 +16,10 @@ public partial class MainWindow
 
     private readonly HiddenProbeService _probe = new();
 
+    /// <summary>Отсев проверяем раз в 5 минут, по одному серверу в порядке очереди.</summary>
+    private DateTime _lastRejectedAutoCheckUtc = DateTime.MinValue;
+    private RejectedNode? _autoRejected;
+
     /// <summary>
     /// Фоновая проверка: работает и в простое, и во время работы. Серверы проверяются
     /// через скрытое ядро на отдельных портах, поэтому не мешают текущему подключению.
@@ -234,6 +238,25 @@ public partial class MainWindow
                         .ToList();
                 }
 
+                // Отсев проверяем раз в 5 минут, по одному серверу в порядке очереди.
+                // Успех вернёт его в рабочие, провал оставит в отсеве без удаления.
+                if (hidden && DateTime.UtcNow - _lastRejectedAutoCheckUtc >= TimeSpan.FromMinutes(5))
+                {
+                    var rejected = RejectedNodeStore.Load()
+                        .Where(item => item.Node is not null)
+                        .Where(item => candidates.All(node =>
+                            !node.Id.Equals(item.Node.Id, StringComparison.OrdinalIgnoreCase)))
+                        .OrderBy(item => item.NodeData.TriedAtUtc ?? item.RejectedAtUtc)
+                        .FirstOrDefault();
+                    if (rejected is not null)
+                    {
+                        _autoRejected = rejected;
+                        candidates.Add(rejected.Node);
+                        _lastRejectedAutoCheckUtc = DateTime.UtcNow;
+                        AppendLog("Автоперепроверка отсева: " + rejected.Node.Name);
+                    }
+                }
+
                 if (candidates.Count == 0)
                 {
                     break;
@@ -275,11 +298,13 @@ public partial class MainWindow
 
                 if (summary.Total == 0)
                 {
+                    _autoRejected = null;
                     AppendLog("Фон: пробное ядро занято, такт пропущен");
                     break;
                 }
 
                 await RepartitionAndSaveAsync();
+                await ApplyAutoRejectedAsync();
                 AppendLog($"Фон: серверов проверено {summary.Total}, рабочих {summary.Working}, " +
                           $"лучший открывает доменов {summary.BestDomains}");
                 ShowBackgroundDetail($"Фон: проверено {summary.Total} серверов, свежих рабочих " +

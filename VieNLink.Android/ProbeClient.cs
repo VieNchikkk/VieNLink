@@ -116,6 +116,14 @@ internal static class ProbeClient
     private static DateTime _activityUntilUtc;
 
     /// <summary>
+    /// Отсев проверяем не в каждой партии, а раз в 5 минут: по одному серверу
+    /// в порядке очереди (самый давно проверенный — первым). Успех возвращает
+    /// сервер в рабочие, провал оставляет его в отсеве без удаления.
+    /// </summary>
+    private static readonly TimeSpan RejectedRecheckInterval = TimeSpan.FromMinutes(5);
+    private static DateTime _lastRejectedCheckUtc = DateTime.MinValue;
+
+    /// <summary>
     /// Что сейчас делает проверка (включая фоновую): строка для шапки и экрана «Серверы».
     /// Погасает сама, чтобы не застрять на экране после завершения.
     /// </summary>
@@ -214,6 +222,24 @@ internal static class ProbeClient
                 freshNodes, Math.Max(0, batchLimit - workingNodes.Count)))
             .Take(batchLimit)
             .ToList();
+
+        // Раз в 5 минут добавляем в партию один сервер из отсева: проверяем по одному
+        // в порядке очереди. Успех вернёт его в рабочие, провал оставит в отсеве.
+        if (DateTime.UtcNow - _lastRejectedCheckUtc >= RejectedRecheckInterval)
+        {
+            var rejected = RejectedNodeStore.Load()
+                .Where(item => item.Node is not null)
+                .Where(item => candidates.All(node =>
+                    !node.Id.Equals(item.Node.Id, StringComparison.OrdinalIgnoreCase)))
+                .OrderBy(item => item.NodeData.TriedAtUtc ?? item.RejectedAtUtc)
+                .FirstOrDefault();
+            if (rejected is not null)
+            {
+                candidates.Add(rejected.Node);
+                _lastRejectedCheckUtc = DateTime.UtcNow;
+                AppLog.Write("probe", $"Автоперепроверка отсева: {rejected.Node.Name}");
+            }
+        }
 
         if (candidates.Count == 0)
         {
@@ -872,11 +898,86 @@ internal static class ProbeClient
         var bestDomains = 0;
         var failedWorking = 0;
         var newWorking = 0;
+        List<RejectedNode>? rejectedItems = null;
+        var rejectedResults = new List<ProbeResultNode>();
+
+        // Результат сервера, которого уже нет в основном списке: это автоперепроверка
+        // отсева. Успех возвращает его в рабочие, провал оставляет в отсеве — ничего
+        // не удаляем.
+        bool ApplyRejected(ProbeResultNode item, out bool restored)
+        {
+            restored = false;
+            rejectedItems ??= RejectedNodeStore.Load();
+            var rejected = rejectedItems.FirstOrDefault(candidate =>
+                candidate.Node.Id.Equals(item.Id, StringComparison.OrdinalIgnoreCase));
+            if (rejected is null)
+            {
+                return false;
+            }
+
+            var node = rejected.Node;
+            node.Status = item.Status;
+            node.DelayMs = item.DelayMs;
+            node.CheckedAtUtc = item.CheckedAtUtc;
+            node.TriedAtUtc = item.TriedAtUtc ?? DateTime.UtcNow;
+            node.YoutubeOk = item.YoutubeOk;
+            node.TelegramOk = item.TelegramOk;
+            node.UniversalOk = item.UniversalOk;
+            node.DiscordOk = item.DiscordOk;
+            node.OpenDomains = item.OpenDomains;
+            node.FailCount = item.FailCount;
+
+            if (item.Status == NodeStatus.Working)
+            {
+                node.FailCount = 0;
+                node.LastSeenUtc = DateTime.UtcNow;
+                NodeStore.RestoreRejected(new[] { node });
+                rejectedItems.Remove(rejected);
+                restored = true;
+                working++;
+                newWorking++;
+                bestDomains = Math.Max(bestDomains, node.OpenDomains);
+                if (node.UniversalOk == true)
+                {
+                    universal++;
+                }
+
+                if (node.YoutubeOk == true)
+                {
+                    youtube++;
+                }
+
+                if (node.TelegramOk == true)
+                {
+                    telegram++;
+                }
+
+                if (node.DiscordOk == true)
+                {
+                    discord++;
+                }
+
+                AppLog.Write("probe", $"Из отсева возвращён в рабочие: {node.Name}");
+            }
+            else
+            {
+                rejected.Node = node;
+                rejected.NodeData = RejectedNode.ToCached(node);
+                rejected.Reason = "провал при автоперепроверке";
+                RejectedNodeStore.Save(rejectedItems);
+                AppLog.Write("probe", $"Отсев: «{node.Name}» не открылся, оставлен");
+            }
+
+            return true;
+        }
 
         foreach (var item in result.Nodes)
         {
             if (!byId.TryGetValue(item.Id, out var node))
             {
+                // Отсев обрабатываем после обычных серверов: возврат в рабочие
+                // пересобирает список (Merge), и делать это посреди цикла нельзя.
+                rejectedResults.Add(item);
                 continue;
             }
 
@@ -949,19 +1050,26 @@ internal static class ProbeClient
             }
         }
 
-        // Сервер мог вернуться из источника и снова стать рабочим: не держим его
-        // одновременно в рабочем списке и в отсеве. Раньше «фантомы» чистились
-        // только при запуске приложения.
-        RejectedNodeStore.Remove(result.Nodes
-            .Where(item => item.Status == NodeStatus.Working)
-            .Select(item => item.Id)
-            .ToList());
-
         var removed = NodeStore.DropDeadNodes(result.Nodes
             .Select(item => byId.TryGetValue(item.Id, out var node) ? node : null)
             .Where(node => node is not null)
             .Select(node => node!)
             .ToList());
+
+        // Автоперепроверка отсева: возвращаем в рабочие только после обычных серверов,
+        // чтобы RestoreRejected не пересобирал список посреди цикла.
+        foreach (var item in rejectedResults)
+        {
+            ApplyRejected(item, out _);
+        }
+
+        // Сервер мог вернуться из источника и снова стать рабочим: не держим его
+        // одновременно в рабочем списке и в отсеве.
+        RejectedNodeStore.Remove(result.Nodes
+            .Where(item => item.Status == NodeStatus.Working)
+            .Select(item => item.Id)
+            .ToList());
+
         NodeStore.SaveNodes();
         // При работающем туннеле выбор сервера принадлежит службе: она переключает
         // selector и следит за живостью. Фоновая проверка не должна менять выбор —

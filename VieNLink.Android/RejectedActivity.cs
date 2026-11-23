@@ -137,7 +137,8 @@ public sealed class RejectedActivity : BaseActivity
 
         page.AddView(Ui.Banner(P, this, P.Accent, "Что это",
             "Сюда попадают серверы, которые уже были рабочими, но перестали открывать сайт. " +
-            "Их можно перепроверить вручную и вернуть в рабочие."));
+            "Приложение автоматически проверяет их по одному раз в 5 минут и возвращает " +
+            "в рабочие, если сервер открылся. Вручную тоже можно — кнопкой «Перепроверить всё»."));
 
         page.AddView(Ui.Section(this, "Фильтр", P));
         var filterScroll = new HorizontalScrollView(this)

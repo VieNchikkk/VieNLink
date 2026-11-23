@@ -206,6 +206,24 @@ internal static class NodeSourceService
         new() { Name = "NoMoreWalls (подписка)", Url = "https://raw.githubusercontent.com/peasoft/NoMoreWalls/master/list.txt", Kind = SourceKind.Subscription },
         new() { Name = "ConfigForge V2Ray", Url = "https://raw.githubusercontent.com/ShatakVPN/ConfigForge-V2Ray/main/configs/all.txt", Kind = SourceKind.PlainList },
 
+        // Текущий избранный набор с рабочей установки (23.11.2026): эти источники
+        // уже были включены у пользователя и давали серверы. Вшиваем их в приложение,
+        // чтобы новая установка сразу была настроена так же. Два старых источника
+        // (jafarm83/ConfigV2Ray/singbox.json и SoliSpirit/SolVPN/sub6.txt) не включены:
+        // их файлы не обновлялись больше суток, сбор всё равно пропустит их по свежести.
+        new() { Name = "3inker v2ray (без РФ)", Url = "https://raw.githubusercontent.com/3inker/v2ray-subscription/main/subs/all_not_ru.txt", Kind = SourceKind.PlainList },
+        new() { Name = "amirkma proxykma", Url = "https://raw.githubusercontent.com/amirkma/proxykma/main/mix.txt", Kind = SourceKind.PlainList },
+        new() { Name = "farshid78 Free-v2ray (Clash)", Url = "https://raw.githubusercontent.com/farshid78/Free-v2ray-Configs/main/all/clash.yaml", Kind = SourceKind.PlainList },
+        new() { Name = "Fl1pse vless (подписка)", Url = "https://raw.githubusercontent.com/Fl1pse/vless-subs/main/normal.txt", Kind = SourceKind.Subscription },
+        new() { Name = "iboxz collector mix", Url = "https://raw.githubusercontent.com/iboxz/free-v2ray-collector/main/main/mix", Kind = SourceKind.PlainList },
+        new() { Name = "Mehinator Derafsh (подписка)", Url = "https://raw.githubusercontent.com/Mehinator/Derafsh/main/derafsh_sub.txt", Kind = SourceKind.Subscription },
+        new() { Name = "NamiraNet V2Configs (подписка)", Url = "https://raw.githubusercontent.com/NamiraNet/V2Configs/main/results.txt", Kind = SourceKind.Subscription },
+        new() { Name = "SylphNet (подписка)", Url = "https://raw.githubusercontent.com/ProblemTheCode/SylphNet-public/main/sub/sub.txt", Kind = SourceKind.Subscription },
+        new() { Name = "SoliSpirit all configs", Url = "https://raw.githubusercontent.com/SoliSpirit/v2ray-configs/main/all_configs.txt", Kind = SourceKind.PlainList },
+        new() { Name = "TigerVpn Sup", Url = "https://raw.githubusercontent.com/TigerVpnGit/TigerVpn-Sup-Free/main/Sup.txt", Kind = SourceKind.PlainList },
+        new() { Name = "V2HUBIR (подписка)", Url = "https://raw.githubusercontent.com/V2HUBIR/V2HUBIR-Free-V2Ray-Configs-free-Sub/main/sub_base64.txt", Kind = SourceKind.Subscription },
+        new() { Name = "zxcursedzxc vless", Url = "https://raw.githubusercontent.com/zxcursedzxc0721/vless-subscriptions/main/all/vless.txt", Kind = SourceKind.PlainList },
+
         // Каналы Telegram открываются только при уже работающем обходе блокировок.
         // @proxy_mtproto включён: после первого успешного подключения приложение само прочитает его.
         new() { Name = "Telegram: @proxy_mtproto", Url = "https://t.me/s/proxy_mtproto", Kind = SourceKind.Telegram },

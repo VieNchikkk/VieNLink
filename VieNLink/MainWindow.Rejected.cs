@@ -322,6 +322,48 @@ public partial class MainWindow
             : detail);
     }
 
+    /// <summary>
+    /// Итог автоперепроверки одного сервера из отсева. Успех — возврат в рабочие,
+    /// провал — запись остаётся в отсеве, ничего не удаляем.
+    /// </summary>
+    private async Task ApplyAutoRejectedAsync()
+    {
+        var rejected = _autoRejected;
+        _autoRejected = null;
+        if (rejected is null)
+        {
+            return;
+        }
+
+        var node = rejected.Node;
+        var items = RejectedNodeStore.Load();
+        var entry = items.FirstOrDefault(item =>
+            item.Node.Id.Equals(node.Id, StringComparison.OrdinalIgnoreCase));
+        if (entry is null)
+        {
+            return;
+        }
+
+        if (node.Status == NodeStatus.Working)
+        {
+            RestoreRejectedNodes(new[] { node }, "Автоперепроверка отсева", "Вернулся в рабочие");
+            AppendLog($"Из отсева возвращён: {node.Name}");
+            await RepartitionAndSaveAsync();
+            return;
+        }
+
+        entry.Node = node;
+        entry.NodeData = RejectedNode.ToCached(node);
+        entry.Reason = "провал при автоперепроверке";
+        if (entry.NodeData.TriedAtUtc is null)
+        {
+            entry.NodeData.TriedAtUtc = DateTime.UtcNow;
+        }
+
+        RejectedNodeStore.Save(items);
+        AppendLog($"Отсев: «{node.Name}» не открылся, оставлен");
+    }
+
     private void OnRemoveRejectedClick(object sender, RoutedEventArgs e)
     {
         var rows = RejectedGrid?.SelectedItems?.OfType<RejectedNodeRow>().ToList() ?? new List<RejectedNodeRow>();
