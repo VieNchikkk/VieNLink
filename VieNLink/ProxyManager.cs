@@ -301,8 +301,8 @@ internal sealed class ProxyManager : IAsyncDisposable
                 {
                     // Провал не трогает результат последней удачной проверки и не удаляет
                     // сервер сразу: считаем провалы и убираем только после
-                    // NodeLimits.RemoveAfterFailures подряд. Для непроверенного сервера
-                    // отметок и так нет — фиксируем только сам провал.
+                    // NodeLimits.RemoveAfterFailures подряд. Для рабочего сервера провал
+                    // сначала подтверждается отдельной проверкой после партии.
                     if (!wasWorking)
                     {
                         node.CheckedAtUtc = DateTime.UtcNow;
@@ -312,10 +312,9 @@ internal sealed class ProxyManager : IAsyncDisposable
                         node.UniversalOk = false;
                         node.DiscordOk = false;
                         node.OpenDomains = 0;
+                        NodeHealth.RegisterFailure(node);
                     }
-
-                    NodeHealth.RegisterFailure(node);
-                    if (wasWorking)
+                    else
                     {
                         lock (failedWorking)
                         {
@@ -390,6 +389,42 @@ internal sealed class ProxyManager : IAsyncDisposable
         });
 
         await Task.WhenAll(tasks);
+
+        // Рабочие серверы, не открывшие адреса в общей партии, проверяем ещё раз
+        // поодиночке, без нагрузки: партия сама даёт ложные провалы. Только после
+        // этой проверки растёт FailCount.
+        List<ProxyNode> failedWorkingNow;
+        lock (failedWorking)
+        {
+            failedWorkingNow = failedWorking.Distinct().ToList();
+        }
+
+        if (failedWorkingNow.Count > 0)
+        {
+            var (recovered, stillFailed) = await ConfirmFailedWorkingAsync(
+                api, failedWorkingNow, cancellationToken);
+
+            foreach (var node in recovered)
+            {
+                Interlocked.Increment(ref working);
+                Interlocked.Increment(ref workingSucceeded);
+                if (node.YoutubeOk == true)
+                {
+                    Interlocked.Increment(ref youtubeOk);
+                }
+
+                if (node.TelegramOk == true)
+                {
+                    Interlocked.Increment(ref telegramOk);
+                }
+            }
+
+            lock (failedWorking)
+            {
+                failedWorking.Clear();
+                failedWorking.AddRange(stillFailed);
+            }
+        }
 
         var workingBefore = snapshots.Count(pair => pair.Value.Status == NodeStatus.Working);
         var testedWorking = Volatile.Read(ref workingTested);
@@ -471,6 +506,104 @@ internal sealed class ProxyManager : IAsyncDisposable
             $"Проверка серверов: YouTube {youtubeOk}, Telegram {telegramOk}, " +
             $"лучший открывает доменов {bestDomains}, рабочих {working} из {nodes.Count}");
         return new TestSummary(nodes.Count, youtubeOk, telegramOk, working, bestDomains);
+    }
+
+    /// <summary>
+    /// Подтверждает провал рабочего сервера отдельной проверкой после партии.
+    /// Проверяем YouTube, затем Telegram по доменам: если сервер открыл хотя бы один,
+    /// провал не засчитывается. Только после этой проверки растёт FailCount.
+    /// </summary>
+    private static async Task<(List<ProxyNode> Recovered, List<ProxyNode> Failed)> ConfirmFailedWorkingAsync(
+        ClashApiClient api,
+        IReadOnlyList<ProxyNode> nodes,
+        CancellationToken cancellationToken)
+    {
+        var recovered = new List<ProxyNode>();
+        var failed = new List<ProxyNode>();
+        const int timeoutMs = 8000;
+
+        AppLog.Write("test", $"Подтверждаю провал {nodes.Count} рабочих серверов");
+        using var limiter = new SemaphoreSlim(10);
+        var tasks = nodes.Select(async node =>
+        {
+            await limiter.WaitAsync(cancellationToken);
+            try
+            {
+                var service = "Cloudflare";
+                var delay = await api.TestDelayAsync(
+                    node.Tag, timeoutMs, cancellationToken, UniversalTestUrl);
+                if (delay is null)
+                {
+                    service = "YouTube";
+                    delay = await api.TestDelayAsync(
+                        node.Tag, timeoutMs, cancellationToken, YoutubeTestUrl);
+                }
+
+                if (delay is null)
+                {
+                    service = "Telegram";
+                    foreach (var target in TelegramTestUrls)
+                    {
+                        delay = await api.TestDelayAsync(
+                            node.Tag, timeoutMs, cancellationToken, target);
+                        if (delay is not null)
+                        {
+                            break;
+                        }
+                    }
+                }
+
+                if (delay is not null)
+                {
+                    node.CheckedAtUtc = DateTime.UtcNow;
+                    node.TriedAtUtc = DateTime.UtcNow;
+                    node.DelayMs = delay;
+                    if (service == "Cloudflare")
+                    {
+                        node.UniversalOk = true;
+                    }
+                    else if (service == "YouTube")
+                    {
+                        node.YoutubeOk = true;
+                    }
+                    else
+                    {
+                        node.TelegramOk = true;
+                    }
+
+                    NodeHealth.RegisterSuccess(node);
+                    lock (recovered)
+                    {
+                        recovered.Add(node);
+                    }
+
+                    AppLog.Write("test",
+                        $"«{node.Name}»: подтверждён после провала партии ({service}, {delay} мс)");
+                }
+                else
+                {
+                    node.TriedAtUtc = DateTime.UtcNow;
+                    NodeHealth.RegisterFailure(node);
+                    lock (failed)
+                    {
+                        failed.Add(node);
+                    }
+
+                    AppLog.Write("test", $"«{node.Name}»: провал подтверждён");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Партию остановили: провал не засчитываем.
+            }
+            finally
+            {
+                limiter.Release();
+            }
+        });
+
+        await Task.WhenAll(tasks);
+        return (recovered, failed);
     }
 
     /// <summary>

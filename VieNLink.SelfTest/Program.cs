@@ -2494,6 +2494,23 @@ internal static class Program
         Check(retried.Status == NodeStatus.Working && retried.FailCount == 0,
             "успешная проверка обнуляет счётчик");
 
+        // «Моргающий» сервер: провалов больше порога, но последний успех был недавно —
+        // в мёртвые не переводим, иначе VLESS/Reality уезжает в отсев, хотя ещё жив.
+        var flaky = DirectNode("direct-flaky");
+        NodeHealth.RegisterSuccess(flaky);
+        flaky.CheckedAtUtc = DateTime.UtcNow.AddMinutes(-10);
+        for (var attempt = 0; attempt < NodeLimits.RemoveAfterFailures + 2; attempt++)
+        {
+            NodeHealth.RegisterFailure(flaky);
+        }
+
+        Check(flaky.Status == NodeStatus.Working,
+            "моргающий сервер не уходит в мёртвые, пока недавно открывал сайт");
+        flaky.CheckedAtUtc = DateTime.UtcNow.AddMinutes(-NodeLimits.WorkingDeadAfterMinutes - 5);
+        NodeHealth.RegisterFailure(flaky);
+        Check(flaky.Status == NodeStatus.Dead,
+            "после часа без успеха и повторных провалов сервер удаляется");
+
         // Проверка через поднятый прокси: Cloudflare первым и сервис, который сервер
         // уже открывал. Только YouTube браковал рабочий сервер на провайдере, где
         // YouTube режется по IP, — и после пяти подключений сервер удалялся.
@@ -2629,9 +2646,14 @@ internal static class Program
             NodeHealth.RegisterFailure(failing);
         }
 
-        Check(failing.Status == NodeStatus.Dead &&
+        Check(failing.Status == NodeStatus.Working &&
               failing.FailCount == NodeLimits.RemoveAfterFailures,
-            $"провал: после {NodeLimits.RemoveAfterFailures} провалов подряд сервер помечается мёртвым");
+            $"провал: {NodeLimits.RemoveAfterFailures} провалов за час не отправляют " +
+            "недавно работавший сервер в мёртвые");
+        failing.CheckedAtUtc = DateTime.UtcNow.AddMinutes(-NodeLimits.WorkingDeadAfterMinutes - 5);
+        NodeHealth.RegisterFailure(failing);
+        Check(failing.Status == NodeStatus.Dead,
+            "провал: после часа без успеха сервер помечается мёртвым");
         var unproven = new ProxyNode { Status = NodeStatus.Unknown };
         NodeHealth.RegisterFailure(unproven);
         Check(unproven.Status == NodeStatus.Dead,

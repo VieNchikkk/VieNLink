@@ -553,10 +553,10 @@ internal static class NodeTester
                 }
                 else if (wasWorking)
                 {
-                    // Рабочий сервер провалил проверку: результат последней удачной
-                    // проверки оставляем, время успеха не обновляем. Сервер сам выпадет
-                    // из «свежих» для выбора, но из рабочего списка не исчезнет.
-                    NodeHealth.RegisterFailure(node);
+                    // Рабочий сервер провалил партию: провал пока не засчитываем.
+                    // После партии проверим его отдельно, без нагрузки: на мобильном
+                    // канале 8 узлов × 6 адресов дают ложные провалы, и живой сервер
+                    // уходил в отсев после нескольких таких партий.
                     lock (failedWorking)
                     {
                         failedWorking.Add(node);
@@ -594,6 +594,52 @@ internal static class NodeTester
         });
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
+
+        // Рабочие серверы, не открывшие адреса в общей партии, проверяем ещё раз
+        // поодиночке, без нагрузки: на мобильном канале партия из 8 узлов × 6 адресов
+        // сама даёт ложные провалы. Провал засчитывается только после этой проверки.
+        List<ProxyNode> failed;
+        lock (failedWorking)
+        {
+            failed = failedWorking.Distinct().ToList();
+        }
+
+        if (failed.Count > 0)
+        {
+            var (recovered, stillFailed) = await ConfirmFailedWorkingAsync(
+                api, failed, cancellationToken, progress).ConfigureAwait(false);
+
+            foreach (var node in recovered)
+            {
+                Interlocked.Increment(ref working);
+                Interlocked.Increment(ref workingSucceeded);
+                if (node.UniversalOk == true)
+                {
+                    Interlocked.Increment(ref universal);
+                }
+
+                if (node.YoutubeOk == true)
+                {
+                    Interlocked.Increment(ref youtube);
+                }
+
+                if (node.TelegramOk == true)
+                {
+                    Interlocked.Increment(ref telegram);
+                }
+
+                if (node.DiscordOk == true)
+                {
+                    Interlocked.Increment(ref discord);
+                }
+            }
+
+            lock (failedWorking)
+            {
+                failedWorking.Clear();
+                failedWorking.AddRange(stillFailed);
+            }
+        }
 
         var workingBefore = snapshot.Count(pair => pair.Value.Status == NodeStatus.Working);
         var testedWorking = Volatile.Read(ref workingTested);
@@ -736,6 +782,94 @@ internal static class NodeTester
         {
             node.TriedAtUtc = now;
         }
+    }
+
+    /// <summary>
+    /// Подтверждает провал рабочего сервера отдельной проверкой после партии.
+    /// Адреса проверяются по одному, без общей нагрузки: если сервер открыл хотя бы
+    /// один, провал не засчитывается. Только после этой проверки растёт FailCount.
+    /// </summary>
+    private static async Task<(List<ProxyNode> Recovered, List<ProxyNode> Failed)> ConfirmFailedWorkingAsync(
+        ClashApiClient api,
+        IReadOnlyList<ProxyNode> nodes,
+        CancellationToken cancellationToken,
+        IProgress<string>? progress)
+    {
+        var recovered = new List<ProxyNode>();
+        var failed = new List<ProxyNode>();
+        var timeoutMs = Math.Max(WorkingTimeoutMs, 6000);
+        var urls = new (string Service, string Url)[]
+        {
+            ("Cloudflare", "https://cp.cloudflare.com/generate_204"),
+            ("YouTube", "https://www.youtube.com/"),
+        };
+
+        progress?.Report($"Подтверждаю провал {nodes.Count} рабочих серверов…");
+        AppLog.Write("test", $"Подтверждаю провал {nodes.Count} рабочих серверов");
+        using var limiter = new SemaphoreSlim(10);
+        var tasks = nodes.Select(async node =>
+        {
+            await limiter.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                (string Service, int? Delay)? opened = null;
+                foreach (var probe in urls)
+                {
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+
+                    var delay = await api.TestDelayAsync(node.Tag, timeoutMs, cancellationToken, probe.Url)
+                        .ConfigureAwait(false);
+                    if (delay is not null)
+                    {
+                        opened = (probe.Service, delay);
+                        break;
+                    }
+                }
+
+                if (opened is { } hit)
+                {
+                    node.CheckedAtUtc = DateTime.UtcNow;
+                    node.TriedAtUtc = DateTime.UtcNow;
+                    node.DelayMs = hit.Delay;
+                    node.UniversalOk = node.UniversalOk == true || hit.Service == "Cloudflare";
+                    node.YoutubeOk = node.YoutubeOk == true || hit.Service == "YouTube";
+                    node.TelegramOk = node.TelegramOk == true || hit.Service == "Telegram";
+                    NodeHealth.RegisterSuccess(node);
+                    lock (recovered)
+                    {
+                        recovered.Add(node);
+                    }
+
+                    AppLog.Write("test",
+                        $"«{node.Name}»: подтверждён после провала партии ({hit.Service}, {hit.Delay} мс)");
+                }
+                else
+                {
+                    node.TriedAtUtc = DateTime.UtcNow;
+                    NodeHealth.RegisterFailure(node);
+                    lock (failed)
+                    {
+                        failed.Add(node);
+                    }
+
+                    AppLog.Write("test", $"«{node.Name}»: провал подтверждён");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Партию остановили: провал не засчитываем.
+            }
+            finally
+            {
+                limiter.Release();
+            }
+        });
+
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+        return (recovered, failed);
     }
 
     /// <summary>Сколько доменов из списка заблокированных открывает сервер.</summary>

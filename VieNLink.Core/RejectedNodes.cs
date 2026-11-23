@@ -108,6 +108,14 @@ internal static class RejectedNodeStore
         var result = new List<RejectedNode>();
         foreach (var item in items.OrderByDescending(item => item.RejectedAtUtc))
         {
+            // Записи, созданные старым порогом (3 провала), — это ложный отсев
+            // из версий до 1.3.25. Новый порог — NodeLimits.RemoveAfterFailures (5);
+            // всё, что ниже, в отсеве не показываем и при следующем сохранении убираем.
+            if (item.NodeData.FailCount < NodeLimits.RemoveAfterFailures)
+            {
+                continue;
+            }
+
             var node = RejectedNode.FromCached(item.NodeData);
             if (node is null && item.LegacyNode is not null)
             {
