@@ -255,6 +255,38 @@ internal static class ProbeClient
     /// проверять нечего или пользователь нажал «Остановить поиск». Возвращает суммарную
     /// сводку (Tested — всего за все партии) и число выполненных партий.
     /// </summary>
+    /// <summary>
+    /// Одиночная проверка серверов из отсева через отдельный процесс :probe.
+    /// DNS идёт через сам сервер (как кнопка «Подключение»), текущий VPN не трогается.
+    /// </summary>
+    public static async Task RecheckRejectedAsync(
+        IReadOnlyList<RejectedNode> items,
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
+    {
+        foreach (var item in items)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+
+            progress?.Report($"Проверяю из отсева: {item.Node.Name}");
+            for (var attempt = 0; attempt < 10; attempt++)
+            {
+                var summary = await RunAsync(
+                    new[] { item.Node }, cancellationToken, null,
+                    fullDomains: false, dnsThroughProxy: true).ConfigureAwait(false);
+                if (summary.Error != BusyError || cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                await Task.Delay(500, cancellationToken).ConfigureAwait(false);
+            }
+        }
+    }
+
     public static async Task<(NodeTestSummary Summary, int Batches)> RunBatchesAsync(
         int batches,
         int batchSize,
@@ -544,7 +576,8 @@ internal static class ProbeClient
         IReadOnlyList<ProxyNode> nodes,
         CancellationToken cancellationToken,
         IProgress<ProbeProgress>? progress = null,
-        bool fullDomains = true)
+        bool fullDomains = true,
+        bool dnsThroughProxy = false)
     {
         if (nodes.Count == 0)
         {
@@ -634,6 +667,7 @@ internal static class ProbeClient
             var request = new ProbeRequest
             {
                 FullDomains = fullDomains,
+                DnsThroughProxy = dnsThroughProxy,
                 Nodes = toTest
                     .Select(node => new ProbeRequestNode
                     {
@@ -874,13 +908,56 @@ internal static class ProbeClient
         var bestDomains = 0;
         var failedWorking = 0;
         var newWorking = 0;
+        var rejectedResults = new List<ProbeResultNode>();
+        List<RejectedNode>? rejectedItems = null;
+
+        // Результат сервера, которого нет в основном списке: одиночная проверка отсева
+        // через :probe. Успех возвращает в рабочие, провал оставляет в отсеве.
+        void ApplyRejected(ProbeResultNode item)
+        {
+            rejectedItems ??= RejectedNodeStore.Load();
+            var rejected = rejectedItems.FirstOrDefault(candidate =>
+                candidate.Node.Id.Equals(item.Id, StringComparison.OrdinalIgnoreCase));
+            if (rejected is null)
+            {
+                return;
+            }
+
+            var node = rejected.Node;
+            node.Status = item.Status;
+            node.DelayMs = item.DelayMs;
+            node.CheckedAtUtc = item.CheckedAtUtc;
+            node.TriedAtUtc = item.TriedAtUtc ?? DateTime.UtcNow;
+            node.YoutubeOk = item.YoutubeOk;
+            node.TelegramOk = item.TelegramOk;
+            node.UniversalOk = item.UniversalOk;
+            node.DiscordOk = item.DiscordOk;
+            node.OpenDomains = item.OpenDomains;
+            node.FailCount = item.FailCount;
+
+            if (item.Status == NodeStatus.Working)
+            {
+                node.FailCount = 0;
+                node.LastSeenUtc = DateTime.UtcNow;
+                NodeStore.RestoreRejected(new[] { node });
+                rejectedItems.Remove(rejected);
+                AppLog.Write("probe", $"Из отсева возвращён в рабочие: {node.Name}");
+            }
+            else
+            {
+                rejected.Node = node;
+                rejected.NodeData = RejectedNode.ToCached(node);
+                rejected.Reason = "не открылся при проверке отсева";
+                RejectedNodeStore.Save(rejectedItems);
+                AppLog.Write("probe", $"Отсев: «{node.Name}» не открылся, оставлен");
+            }
+        }
 
         foreach (var item in result.Nodes)
         {
             if (!byId.TryGetValue(item.Id, out var node))
             {
-                // Отсев в автоматические партии не попадает: только ручная
-                // «Перепроверить всё» на экране отсева.
+                rejectedResults.Add(item);
                 continue;
             }
 
@@ -951,6 +1028,11 @@ internal static class ProbeClient
 
                 bestDomains = Math.Max(bestDomains, node.OpenDomains);
             }
+        }
+
+        foreach (var item in rejectedResults)
+        {
+            ApplyRejected(item);
         }
 
         var removed = NodeStore.DropDeadNodes(result.Nodes

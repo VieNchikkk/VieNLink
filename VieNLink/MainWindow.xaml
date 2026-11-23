@@ -1370,7 +1370,7 @@
                             <Button x:Name="RejectedAutoButton" Content="● Авто-перепроверка: вкл"
                                     Style="{StaticResource AccentSmallButton}" Margin="0,0,8,0"
                                     Click="OnToggleRejectedAutoClick"
-                                    ToolTip="Автоматически перепроверять отсев раз в 5 минут" />
+                                    ToolTip="Автоматически перепроверять отсев раз в минуту" />
                             <Button Content="Перепроверить выбранный" Style="{StaticResource AccentSmallButton}"
                                     Margin="0,0,8,0" Click="OnRecheckRejectedClick"
                                     ToolTip="Проверить выбранные серверы через скрытое ядро и вернуть рабочие в список" />

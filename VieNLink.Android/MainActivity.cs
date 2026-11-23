@@ -1386,6 +1386,13 @@ public sealed partial class MainActivity : BaseActivity
             return;
         }
 
+        if (RejectedCheckService.IsRunning || NodeTester.IsRunning ||
+            RejectedBootCheckService.IsRunning)
+        {
+            Ui.Toast(this, "Дождитесь окончания перепроверки отсева");
+            return;
+        }
+
         _connecting = true;
         var cts = new CancellationTokenSource();
         _connectCts = cts;

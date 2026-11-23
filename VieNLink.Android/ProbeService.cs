@@ -290,17 +290,27 @@ public sealed class ProbeService : Service
             settings.AppRouteMode = AppRouteMode.All;
             settings.AppList = string.Empty;
 
-            var config = SingBoxConfigBuilder.Build(
-                nodes,
-                nodes[0].Tag,
-                CoreRuntime.MixedPort,
-                CoreRuntime.ApiPort,
-                CoreRuntime.ApiSecret,
-                settings,
-                // Пакетная проверка: DNS 77.88.8.8 (Яндекс) — 1.1.1.1 у части
-                // мобильных операторов блокируется. Одиночная перепроверка отсева
-                // идёт иначе — через DNS самого сервера (RejectedCheckService).
-                explicitDns: true);
+            var config = request?.DnsThroughProxy == true
+                ? SingBoxConfigBuilder.Build(
+                    nodes,
+                    nodes[0].Tag,
+                    CoreRuntime.MixedPort,
+                    CoreRuntime.ApiPort,
+                    CoreRuntime.ApiSecret,
+                    settings,
+                    // Одиночная проверка отсева — как кнопка «Подключение»:
+                    // DNS через сам сервер.
+                    dnsThroughProxy: true)
+                : SingBoxConfigBuilder.Build(
+                    nodes,
+                    nodes[0].Tag,
+                    CoreRuntime.MixedPort,
+                    CoreRuntime.ApiPort,
+                    CoreRuntime.ApiSecret,
+                    settings,
+                    // Пакетная проверка: DNS 77.88.8.8 (Яндекс) — 1.1.1.1 у части
+                    // мобильных операторов блокируется.
+                    explicitDns: true);
 
             AppLog.Write(Tag, $"Отдельный процесс: серверов {nodes.Count}, mixed {CoreRuntime.MixedPort}");
             if (!CoreRuntime.Start(config))

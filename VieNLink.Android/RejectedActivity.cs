@@ -137,9 +137,9 @@ public sealed class RejectedActivity : BaseActivity
 
         page.AddView(Ui.Banner(P, this, P.Accent, "Что это",
             "Сюда попадают серверы, которые уже были рабочими, но перестали открывать сайт. " +
-            "Перепроверка запускается кнопкой «Перепроверить всё» и автоматически раз в 5 минут " +
-            "(когда VPN отключён): серверы, которые открылись, возвращаются в рабочие, " +
-            "остальные остаются в отсеве."));
+            "Перепроверка запускается кнопкой «Перепроверить всё» и автоматически при " +
+            "запуске приложения (через отдельный процесс, не трогая VPN): серверы, которые " +
+            "открылись, возвращаются в рабочие, остальные остаются в отсеве."));
 
         page.AddView(Ui.Section(this, "Фильтр", P));
         var filterScroll = new HorizontalScrollView(this)
@@ -841,6 +841,13 @@ public sealed class RejectedActivity : BaseActivity
             return;
         }
 
+        if (RejectedCheckService.IsRunning || NodeTester.IsRunning ||
+            RejectedBootCheckService.IsRunning)
+        {
+            SetStatus("Дождитесь окончания перепроверки отсева");
+            return;
+        }
+
         var settings = SettingsStore.Current.Clone();
         // Android подключается через VpnService: конфиг обязан содержать TUN,
         // иначе служба стартует без перехвата трафика.
@@ -929,6 +936,12 @@ public sealed class RejectedActivity : BaseActivity
         if (_busy)
         {
             SetStatus("Перепроверка уже идёт");
+            return;
+        }
+
+        if (RejectedBootCheckService.IsRunning)
+        {
+            SetStatus("Идёт автоподключение отсева, дождитесь окончания");
             return;
         }
 

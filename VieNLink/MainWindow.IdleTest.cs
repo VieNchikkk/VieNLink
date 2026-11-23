@@ -16,7 +16,7 @@ public partial class MainWindow
 
     private readonly HiddenProbeService _probe = new();
 
-    /// <summary>Автоперепроверка отсева раз в 5 минут — тем же путём, что и кнопка.</summary>
+    /// <summary>Автоперепроверка отсева раз в минуту — тем же путём, что и кнопка.</summary>
     private DateTime _lastRejectedAutoCheckUtc = DateTime.MinValue;
 
     /// <summary>
@@ -99,7 +99,7 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Автоперепроверка отсева: раз в 5 минут берём все записи и прогоняем тем же
+    /// Автоперепроверка отсева: раз в минуту берём все записи и прогоняем тем же
     /// RecheckRejectedAsync, что и кнопка «Перепроверить всё». Успешные возвращаются
     /// в рабочие, остальные остаются. При выключенной автоматике/занятости — пропуск.
     /// </summary>
@@ -112,7 +112,7 @@ public partial class MainWindow
             return;
         }
 
-        if (DateTime.UtcNow - _lastRejectedAutoCheckUtc < TimeSpan.FromMinutes(5))
+        if (DateTime.UtcNow - _lastRejectedAutoCheckUtc < TimeSpan.FromMinutes(1))
         {
             return;
         }

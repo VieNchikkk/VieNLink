@@ -12,6 +12,12 @@ internal sealed class ProbeRequest
     /// 18 заблокированных доменов (для пятиминутного освежения счётчиков).
     /// </summary>
     public bool FullDomains { get; set; } = true;
+
+    /// <summary>
+    /// DNS через сам проверяемый сервер. Для одиночной проверки отсева — как кнопка
+    /// «Подключение»: локальный UDP/53 и 1.1.1.1 на мобильных сетях часто режутся.
+    /// </summary>
+    public bool DnsThroughProxy { get; set; }
 }
 
 internal sealed class ProbeRequestNode
