@@ -38,7 +38,14 @@
   `SiteList`, позиции окна и виджета не переносятся — это состояние пользователя.
 - Проверка рабочих серверов снова раз в **5 минут** (`WorkingRecheckMinutes = 5`);
   временная минутная проверка из 1.3.25–1.3.26 отключена.
-- Релиз 1.3.27: Windows/Android/магазинные — собрать и опубликовать.
+- Релиз 1.3.27: Windows — `release\VieNLink-1.3.27-setup.exe` (подпись `CN=VieN`) +
+  `VieNLink-1.3.27-win-x64.zip` + `SHA256SUMS.txt` →
+  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.27-beta; Android —
+  `release\VieNLink-1.3.27-android.apk` + `.apk.sha256` →
+  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.27-android. Магазинные —
+  `release\VieNLink-1.3.27-store.apk/.aab` (в RuStore/Play не публикуем). На телефоне
+  1.3.27 (`versionCode=10327`): автоперепроверка отсева сработала — AetrisVPN проверен
+  отдельно, не открылся и **оставлен** в отсеве; источников 33+8, старые записи видны.
 
 ## Состояние на 23.11.2026 (1.3.26)
 
