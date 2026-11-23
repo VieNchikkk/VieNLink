@@ -24,7 +24,13 @@
 - Android без изменений: пакетные пробы — 77.88.8.8, одиночная перепроверка отсева —
   DNS через сам сервер (`dnsThroughProxy`).
 - Квоты 20/20, авто-перепроверка отсева (ПК/Android), 31+8 источников сохранены.
-- Релиз 1.3.31: Windows/Android/магазинные — собрать и опубликовать.
+- Релиз 1.3.31: Windows — `release\VieNLink-1.3.31-setup.exe` (подпись `CN=VieN`) +
+  `VieNLink-1.3.31-win-x64.zip` + `SHA256SUMS.txt` →
+  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.31-beta; Android —
+  `release\VieNLink-1.3.31-android.apk` + `.apk.sha256` →
+  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.31-android. Магазинные —
+  `release\VieNLink-1.3.31-store.apk/.aab` (в RuStore/Play не публикуем). APK 1.3.31
+  установлен на телефон (`versionCode=10331`).
 
 ## Состояние на 23.11.2026 (1.3.30)
 
