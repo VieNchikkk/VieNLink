@@ -449,6 +449,19 @@ public sealed partial class MainActivity : BaseActivity
             ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
         card.AddView(actions);
 
+        // «Авто-проверка» — та же кнопка, которую приложение нажимает само:
+        // фоновая проверка серверов и отсева. По умолчанию включена и активируется
+        // при запуске; нажатие выключает или снова включает.
+        var autoRow = Ui.Row(this);
+        autoRow.SetPadding(0, Ui.Dp(this, 8), 0, 0);
+        _autoButton = Ui.Pill(this, P, "Авто-проверка: вкл", UiButtonKind.Secondary,
+            ToggleAutoCheck, Resource.Drawable.ic_refresh);
+        CompactWideHeaderButton(_autoButton);
+        _autoButton.TextSize = 12.5f;
+        autoRow.AddView(_autoButton, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        card.AddView(autoRow);
+
         _actionsRow2 = Ui.Row(this);
         _actionsRow2.SetPadding(0, Ui.Dp(this, 10), 0, 0);
         _nextNodeButton = Ui.Pill(this, P, "Сменить сервер", UiButtonKind.Accent,
@@ -759,6 +772,7 @@ public sealed partial class MainActivity : BaseActivity
         if (_connectionStatus is not null)
         {
             UpdateProbeBadge();
+            UpdateAutoButton();
             if (!NodeStore.IsLoaded)
             {
                 _connectionStatus.Text = _headerDetail is not null &&
@@ -1158,9 +1172,47 @@ public sealed partial class MainActivity : BaseActivity
         }
     }
 
-    private void UpdateFindButton(string text) => RunOnUiThread(() =>
+    /// <summary>
+    /// Кнопка авто-проверки: показывает, включена ли она, и переключает её.
+    /// Включена — приложение само проверяет серверы и отсев; выключена — только вручную.
+    /// </summary>
+    private void UpdateAutoButton()
     {
-        if (_findButton is not null)
+        if (_autoButton is null)
+        {
+            return;
+        }
+
+        var enabled = SettingsStore.Current.IdleTestEnabled &&
+                      AndroidSettingsStore.Current.AutoProbe;
+        _autoButton.Text = enabled ? "● Авто-проверка: вкл" : "○ Авто-проверка: выкл";
+        _autoButton.SetTextColor(enabled ? P.Positive : P.MutedStrong);
+    }
+
+    private void ToggleAutoCheck()
+    {
+        var settings = SettingsStore.Current;
+        var enabled = !settings.IdleTestEnabled;
+        settings.IdleTestEnabled = enabled;
+        AndroidSettingsStore.Current.AutoProbe = enabled;
+        SettingsStore.Save();
+        AndroidSettingsStore.Save();
+        if (enabled)
+        {
+            ProbeScheduler.Start(this);
+        }
+        else
+        {
+            ProbeScheduler.Stop();
+        }
+
+        UpdateAutoButton();
+        Ui.Toast(this, enabled ? "Авто-проверка включена" : "Авто-проверка выключена");
+        RefreshHeader();
+    }
+
+    private void UpdateFindButton(string text) => RunOnUiThread(() =>
+    {        if (_findButton is not null)
         {
             _findButton.Text = text;
         }
@@ -1197,6 +1249,7 @@ public sealed partial class MainActivity : BaseActivity
     private string? _headerDetail;
     private DateTime _headerDetailUntil = DateTime.MinValue;
     private TextView? _findButton;
+    private TextView? _autoButton;
 
     private TextView? _nextNodeButton;
 

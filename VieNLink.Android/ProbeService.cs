@@ -297,10 +297,10 @@ public sealed class ProbeService : Service
                 CoreRuntime.ApiPort,
                 CoreRuntime.ApiSecret,
                 settings,
-                // DNS — через сервер, как при подключении кнопкой: локальный UDP/53
-                // и 1.1.1.1 на мобильных сетях часто зарезаны, из-за чего живые
-                // VLESS/Reality-серверы браковались при проверке.
-                dnsThroughProxy: true);
+                // Пакетная проверка: DNS 77.88.8.8 (Яндекс) — 1.1.1.1 у части
+                // мобильных операторов блокируется. Одиночная перепроверка отсева
+                // идёт иначе — через DNS самого сервера (RejectedCheckService).
+                explicitDns: true);
 
             AppLog.Write(Tag, $"Отдельный процесс: серверов {nodes.Count}, mixed {CoreRuntime.MixedPort}");
             if (!CoreRuntime.Start(config))
