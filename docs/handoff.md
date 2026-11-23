@@ -25,7 +25,13 @@
   (`RestoreRejectedNodes`), остальные остаются; ничего не удаляется.
 - Android: кнопка «● Авто-проверка: вкл» и DNS-исправления из 1.3.29 сохранены.
 - Квоты 20/20, `WorkingRecheckMinutes = 5`, 31+8 источников.
-- Релиз 1.3.30: Windows/Android/магазинные — собрать и опубликовать.
+- Релиз 1.3.30: Windows — `release\VieNLink-1.3.30-setup.exe` (подпись `CN=VieN`) +
+  `VieNLink-1.3.30-win-x64.zip` + `SHA256SUMS.txt` →
+  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.30-beta; Android —
+  `release\VieNLink-1.3.30-android.apk` + `.apk.sha256` →
+  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.30-android. Магазинные —
+  `release\VieNLink-1.3.30-store.apk/.aab` (в RuStore/Play не публикуем). APK 1.3.30
+  установлен на телефон (`versionCode=10330`).
 
 ## Состояние на 23.11.2026 (1.3.29)
 
