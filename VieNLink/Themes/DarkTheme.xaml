@@ -29,6 +29,21 @@
     <SolidColorBrush x:Key="ChipBrush" Color="#E62B2F34" />
     <SolidColorBrush x:Key="InnerBrush" Color="#E6222528" />
     <SolidColorBrush x:Key="SecondaryButtonBrush" Color="#E62E3236" />
+    <LinearGradientBrush x:Key="ButtonSurfaceBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#FF353A3F" Offset="0" />
+        <GradientStop Color="#FF272B2F" Offset="1" />
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="PrimarySurfaceBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#FFA9D8BD" Offset="0" />
+        <GradientStop Color="#FF86C2A2" Offset="1" />
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="PrimaryHoverBrush" Color="#FFB7E2CA" />
+    <SolidColorBrush x:Key="PrimaryPressedBrush" Color="#FF78B593" />
+    <SolidColorBrush x:Key="SelectionSurfaceBrush" Color="#33355F8C" />
+    <SolidColorBrush x:Key="SelectionBorderBrush" Color="#776FA8D8" />
+    <SolidColorBrush x:Key="SelectionTextBrush" Color="#FF9CC8F0" />
+    <SolidColorBrush x:Key="StrategyChipSurfaceBrush" Color="#FF2F3A46" />
+    <SolidColorBrush x:Key="StrategyChipBorderBrush" Color="#FF3E4C5C" />
 
     <SolidColorBrush x:Key="BorderBrush" Color="#FF34383D" />
     <SolidColorBrush x:Key="BorderSoftBrush" Color="#FF3F444A" />

@@ -221,7 +221,7 @@ public sealed class NodesActivity : BaseActivity
 
         if (_summary is not null)
         {
-            _summary.Text = $"{summary.Total} серверов · рабочих {summary.Fresh}";
+            _summary.Text = $"{summary.Total} серверов · доступных {summary.Available}";
         }
 
         if (_detail is not null)
@@ -230,7 +230,7 @@ public sealed class NodesActivity : BaseActivity
                 ? "проверок ещё не было"
                 : "проверено " + summary.LastChecked.Value.ToLocalTime().ToString("dd.MM HH:mm");
             _detail.Text = $"Доступ: универсальный {summary.Universal}, YouTube {summary.Youtube}, Telegram {summary.Telegram}, Discord {summary.Discord}\n" +
-                           $"Всего рабочих в списке: {summary.Working} · мои подписки: {summary.Mine} · " +
+                           $"Всего рабочих: {summary.Working} · доступных: {summary.Available} · мои подписки: {summary.Mine} · " +
                            $"лимит {NodeStore.Settings.MaxTotalNodes} · " +
                            $"макс. доменов {summary.BestDomains} · {checkedText}";
         }

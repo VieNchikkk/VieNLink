@@ -20,8 +20,11 @@ public sealed class ProbeService : Service
     private const string ChannelId = "vienlink-probe";
 
     private readonly object _progressLock = new();
+    private readonly object _liveLock = new();
+    private readonly Dictionary<string, ProbeResultNode> _live = new(StringComparer.OrdinalIgnoreCase);
     private readonly CancellationTokenSource _workCts = new();
     private DateTime _lastProgressWrite = DateTime.MinValue;
+    private DateTime _lastLiveWrite = DateTime.MinValue;
     private DateTime _lastProgressUtc = DateTime.UtcNow;
     private System.Threading.Timer? _watchdog;
     private int _progressTested;
@@ -218,6 +221,56 @@ public sealed class ProbeService : Service
         }
     }
 
+    /// <summary>
+    /// Пишет готовые результаты по ходу проверки: основной процесс применяет их сразу,
+    /// поэтому счётчики в шапке меняются по мере проверки, а не только в конце партии.
+    /// Не чаще двух раз в секунду и через временный файл: второй процесс не должен
+    /// прочитать недописанный JSON.
+    /// </summary>
+    private void QueueLiveResult(string id, ProxyNode node)
+    {
+        ProbeResultNode[] items;
+        lock (_liveLock)
+        {
+            _live[id] = new ProbeResultNode
+            {
+                Id = id,
+                Status = node.Status,
+                DelayMs = node.DelayMs,
+                CheckedAtUtc = node.CheckedAtUtc,
+                TriedAtUtc = node.TriedAtUtc,
+                YoutubeOk = node.YoutubeOk,
+                TelegramOk = node.TelegramOk,
+                UniversalOk = node.UniversalOk,
+                DiscordOk = node.DiscordOk,
+                OpenDomains = node.OpenDomains,
+                FailCount = node.FailCount,
+            };
+
+            if (DateTime.UtcNow - _lastLiveWrite < TimeSpan.FromMilliseconds(700))
+            {
+                return;
+            }
+
+            _lastLiveWrite = DateTime.UtcNow;
+            items = _live.Values.ToArray();
+        }
+
+        try
+        {
+            Directory.CreateDirectory(AppPaths.DataDirectory);
+            var temp = ProbeProtocol.LivePath + ".tmp";
+            var file = new ProbeResultFile { Nodes = items.ToList() };
+            File.WriteAllText(temp, JsonSerializer.Serialize(file, ProbeProtocol.Json),
+                new UTF8Encoding(false));
+            File.Move(temp, ProbeProtocol.LivePath, true);
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write(Tag, "Не удалось записать промежуточные результаты", exception);
+        }
+    }
+
     private async Task RunAsync(string? requestPath)
     {
         var result = new ProbeResultFile();
@@ -225,8 +278,25 @@ public sealed class ProbeService : Service
         // Первая отметка пишется сразу: по её появлению основной процесс понимает,
         // что служба действительно запустилась, а не пропала без ответа.
         WriteProgress("Запускаю проверку…", 0, 0, 0, force: true);
+        // Промежуточные результаты прошлой партии больше не нужны, а новые начнутся
+        // с чистого файла: иначе основной процесс применил бы чужие записи.
+        lock (_liveLock)
+        {
+            _live.Clear();
+            _lastLiveWrite = DateTime.MinValue;
+        }
+
         try
         {
+            try
+            {
+                File.Delete(ProbeProtocol.LivePath);
+            }
+            catch (IOException)
+            {
+                // Файла могло не быть.
+            }
+
             CoreRuntime.EnsureSetup(this);
             if (string.IsNullOrWhiteSpace(requestPath) || !File.Exists(requestPath))
             {
@@ -342,6 +412,9 @@ public sealed class ProbeService : Service
             var accepted = parsed
                 .Where(pair => loaded.Contains(pair.Node.Tag))
                 .ToList();
+            // Сопоставление объектов серверов с их Id: NodeTester отдаёт в onTested
+            // тот же объект, что получил, поэтому промежуточный результат можно записать сразу.
+            var idByNode = accepted.ToDictionary(pair => pair.Node, pair => pair.Id);
             _progressTotal = accepted.Count;
             Interlocked.Exchange(ref _progressTested, 0);
             Interlocked.Exchange(ref _progressWorking, 0);
@@ -361,6 +434,10 @@ public sealed class ProbeService : Service
 
                     WriteProgress("Проверяю серверы…", tested, _progressTotal,
                         Volatile.Read(ref _progressWorking));
+                    if (idByNode.TryGetValue(node, out var id))
+                    {
+                        QueueLiveResult(id, node);
+                    }
                 },
                 token,
                 // Меньше одновременно проверяемых серверов и больше времени на ответ:
@@ -431,6 +508,16 @@ public sealed class ProbeService : Service
             catch (Exception exception)
             {
                 AppLog.Write(Tag, "Не удалось записать результаты проверки", exception);
+            }
+
+            // Промежуточный файл больше не нужен: основной процесс применит итог.
+            try
+            {
+                File.Delete(ProbeProtocol.LivePath);
+            }
+            catch (IOException)
+            {
+                // Файла могло не быть.
             }
 
             try

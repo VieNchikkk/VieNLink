@@ -3,8 +3,8 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="VieNLink (бета) — свободные серверы"
         Icon="pack://application:,,,/Assets/VieNLink.ico"
-        Height="820" Width="1240"
-        MinHeight="620" MinWidth="820"
+        Height="680" Width="980"
+        MinHeight="620" MinWidth="953"
         WindowStartupLocation="CenterScreen"
         ResizeMode="CanResize"
         Background="{DynamicResource AppBackgroundBrush}"
@@ -73,7 +73,7 @@
                                 <Border Background="{DynamicResource AccentSurfaceBrush}"
                                         BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1"
                                         CornerRadius="7" Padding="5,2" Margin="0,0,5,0"
-                                        ToolTip="Рабочие серверы: проверка прошла, сайт через них открывается">
+                                        ToolTip="Рабочие серверы с последней удачной проверкой: счётчик не обнуляется по таймеру, сервер убирается из него после подтверждённого провала">
                                     <StackPanel Orientation="Horizontal">
                                         <Viewbox Width="12" Height="12" Margin="0,0,3,0" VerticalAlignment="Center">
                                             <Path Width="24" Height="24" Stretch="Uniform"
@@ -152,8 +152,8 @@
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="24,0,0,0">
                     <Border x:Name="HeaderConnectionPanel" Background="{DynamicResource HeaderInfoBackgroundBrush}"
                             BorderBrush="{DynamicResource HeaderInfoBorderBrush}" BorderThickness="1"
-                            CornerRadius="10" Padding="12,7" Margin="0,0,12,0"
-                            VerticalAlignment="Center" Visibility="Collapsed">
+                            CornerRadius="10" Padding="12,7" Margin="0,0,12,0" Width="300"
+                            VerticalAlignment="Center" Visibility="Hidden">
                         <DockPanel>
                             <Border x:Name="HeaderConnectionAccent" DockPanel.Dock="Left" Width="3" CornerRadius="2"
                                     Margin="0,0,10,0" Background="{DynamicResource AccentBrush}" />
@@ -162,7 +162,7 @@
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <StackPanel Grid.Column="0" MaxWidth="320">
+                                <StackPanel Grid.Column="0" MaxWidth="220">
                                     <TextBlock x:Name="HeaderConnectionText" FontSize="12.5" FontWeight="SemiBold"
                                                Foreground="{DynamicResource TextStrongBrush}" TextTrimming="CharacterEllipsis" />
                                     <TextBlock x:Name="HeaderConnectionQualityText" Style="{StaticResource HintText}"
@@ -226,7 +226,7 @@
         <TabControl x:Name="MainTabs" Grid.Row="1" SelectionChanged="OnMainTabsSelectionChanged">
 
             <!-- ПОДКЛЮЧЕНИЕ: быстрое подключение и Telegram -->
-            <TabItem x:Name="ConnectionTab" Style="{StaticResource AppTabItem}">
+            <TabItem x:Name="ConnectionTab" Style="{StaticResource AppTabItem}" Tag="{DynamicResource AccentBrush}">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal">
                         <Path Style="{StaticResource TabIcon}"
@@ -346,7 +346,7 @@
                     </Border>
 
                     <TabControl x:Name="MtProtoTabs">
-                        <TabItem x:Name="MtProtoWorkingTab" Header="Список" Style="{StaticResource AppTabItem}">
+                        <TabItem x:Name="MtProtoWorkingTab" Header="Список" Style="{StaticResource AppTabItem}" Tag="{DynamicResource AccentBrush}">
                             <Grid>
                                 <DataGrid x:Name="MtProtoGrid" Style="{StaticResource AppDataGrid}" MouseDoubleClick="OnMtProtoDoubleClick">
                                     <DataGrid.Columns>
@@ -377,7 +377,7 @@
                             </Grid>
                         </TabItem>
 
-                        <TabItem x:Name="MtProtoDeadTab" Header="Нерабочие" Style="{StaticResource AppTabItem}">
+                        <TabItem x:Name="MtProtoDeadTab" Header="Нерабочие" Style="{StaticResource AppTabItem}" Tag="{DynamicResource DangerBrush}">
                             <DockPanel>
                                 <TextBlock x:Name="MtProtoDeadSummary" DockPanel.Dock="Top" Style="{StaticResource HintText}" Margin="8,8,8,0"
                                            Text="Сюда попадают прокси, не ответившие при проверке. Удаляются через 24 часа, иногда проверяются на оживание." />
@@ -418,7 +418,7 @@
     </TabItem>
 
             <!-- ОБХОД БЛОКИРОВОК: zapret, свой обход DPI и TUN-обход -->
-            <TabItem x:Name="BypassTab" Style="{StaticResource AppTabItem}">
+            <TabItem x:Name="BypassTab" Style="{StaticResource AppTabItem}" Tag="{DynamicResource WarningBrush}">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal">
                         <Path Style="{StaticResource TabIcon}"
@@ -432,7 +432,7 @@
                                    Text="Способы обойти блокировки без прокси-сервера. Зелёная заливка — главное действие, зелёный контур — важный следующий шаг." />
                     </Border>
                     <TabControl x:Name="BypassTabs">
-            <TabItem x:Name="ZapretTab" Style="{StaticResource AppTabItem}">
+            <TabItem x:Name="ZapretTab" Style="{StaticResource AppTabItem}" Tag="{DynamicResource YouTubeBrush}">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal">
                         <Path Style="{StaticResource TabIcon}" Data="M7,2V13H10V22L17,10H13L17,2H7Z" />
@@ -447,11 +447,14 @@
                         <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                             <Button x:Name="BypassButton" Content="Включить обход" Style="{StaticResource PrimaryButton}"
                                     Click="OnBypassButtonClick" ToolTip="Включить или остановить обход DPI (zapret)" />
+                            <Button x:Name="ZapretTuneButton" Content="Подобрать заново" Style="{StaticResource AccentSmallButton}"
+                                    Margin="8,0,0,0" Click="OnZapretTuneClick"
+                                    ToolTip="Перебрать все пресеты zapret заново и выбрать лучший по YouTube" />
                         </StackPanel>
 
-                        <TextBlock Style="{StaticResource SectionTitle}" Text="Стратегии (автоматически, лучшая — первой)" Margin="0,20,0,6" />
+                        <TextBlock Style="{StaticResource SectionTitle}" Text="Стратегии (лучшая — первой)" Margin="0,20,0,6" />
                         <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,6"
-                                   Text="Выбор не нужен: при включении приложение само перебирает варианты, запоминает рабочий и поднимает его в начало списка." />
+                                   Text="Нажмите на пресет, чтобы применить его вручную. «Подобрать заново» переберёт все варианты и поднимет рабочий наверх." />
                         <ScrollViewer MaxHeight="300" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
                             <UniformGrid x:Name="ZapretPresetPanel" Rows="5" />
                         </ScrollViewer>
@@ -486,7 +489,7 @@
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
-                <TabItem x:Name="DesyncTab" Style="{StaticResource AppTabItem}">
+                <TabItem x:Name="DesyncTab" Style="{StaticResource AppTabItem}" Tag="{DynamicResource TelegramBrush}">
                     <TabItem.Header>
                         <StackPanel Orientation="Horizontal">
                             <Path Style="{StaticResource TabIcon}" Data="M21,9L17,5V8H10V10H17V13M7,11L3,15L7,19V16H14V14H7V11Z" />
@@ -501,11 +504,14 @@
                             <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
                                 <Button x:Name="DesyncToggleButton" Content="Включить обход" Style="{StaticResource PrimaryButton}"
                                         Click="OnDesyncToggleClick" ToolTip="Включить или остановить собственный обход DPI" />
+                                <Button x:Name="DesyncTuneButton" Content="Подобрать заново" Style="{StaticResource AccentSmallButton}"
+                                        Margin="8,0,0,0" Click="OnDesyncTuneClick"
+                                        ToolTip="Перебрать все стратегии заново и выбрать лучшую по YouTube и видео" />
                             </StackPanel>
 
-                            <TextBlock Style="{StaticResource SectionTitle}" Text="Стратегии (автоматически, лучшая — первой)" Margin="0,20,0,6" />
+                            <TextBlock Style="{StaticResource SectionTitle}" Text="Стратегии (лучшая — первой)" Margin="0,20,0,6" />
                             <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,6"
-                                       Text="Выбор не нужен: при включении приложение само перебирает варианты, запоминает рабочий и поднимает его в начало списка." />
+                                       Text="Нажмите на стратегию, чтобы применить её вручную. «Подобрать заново» переберёт все варианты и поднимет рабочую наверх." />
                             <ScrollViewer MaxHeight="300" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
                                 <UniformGrid x:Name="DesyncStrategyPanel" Rows="5" />
                             </ScrollViewer>
@@ -540,7 +546,7 @@
                         </StackPanel>
                     </ScrollViewer>
                 </TabItem>
-<TabItem x:Name="TunBypassTab" Style="{StaticResource AppTabItem}">
+<TabItem x:Name="TunBypassTab" Style="{StaticResource AppTabItem}" Tag="{DynamicResource DiscordBrush}">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal">
                         <Path Style="{StaticResource TabIcon}"
@@ -607,7 +613,7 @@
                 </DockPanel>
             </TabItem>
 
-            <TabItem x:Name="ToolsTab" Style="{StaticResource AppTabItem}">
+            <TabItem x:Name="ToolsTab" Style="{StaticResource AppTabItem}" Tag="{DynamicResource UniversalBrush}">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal">
                         <Path Style="{StaticResource TabIcon}"
@@ -622,7 +628,7 @@
                     </Border>
                     <TabControl x:Name="ToolsTabs" SelectionChanged="OnToolsTabsSelectionChanged">
             <!-- СЕРВЕРЫ -->
-            <TabItem x:Name="NodesTab" Header="Серверы" Style="{StaticResource AppTabItem}">
+            <TabItem x:Name="NodesTab" Header="Серверы" Style="{StaticResource AppTabItem}" Tag="{DynamicResource AccentBrush}">
                 <DockPanel>
                     <Border DockPanel.Dock="Top" Padding="16,12,16,8">
                         <StackPanel>
@@ -678,7 +684,9 @@
 
                     <Border DockPanel.Dock="Top" Padding="16,8,16,8">
                         <StackPanel>
-                            <TextBlock x:Name="NodesSummaryText" FontSize="16" FontWeight="SemiBold" Text="Загрузка…" />
+                            <TextBlock x:Name="NodesSummaryText" FontSize="16" FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextStrongBrush}" Text="Загрузка…"
+                                       ToolTip="Рабочие — записи со статусом «рабочий». Доступные — те из них, чья последняя проверка прошла и кого не убрал подтверждённый провал: из них считаются значки сервисов в шапке. Свежие — проверенные за последние 5 минут: только они выбираются для подключения." />
                             <TextBlock x:Name="NodesAccessText" Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,4,0,0" />
                             <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,4,0,0"
                                        Text="Сортировка скрыта: рабочие → больше открытых доменов → меньшая задержка. Точные адреса и имена серверов не показываются." />
@@ -686,7 +694,7 @@
                     </Border>
 
                     <TabControl x:Name="NodesTabs" SelectionChanged="OnNodesTabChanged" Visibility="Collapsed">
-                        <TabItem x:Name="NodesUntestedTab" Header="Непроверенные" Style="{StaticResource AppTabItem}">
+                        <TabItem x:Name="NodesUntestedTab" Header="Непроверенные" Style="{StaticResource AppTabItem}" Tag="{DynamicResource MutedStrongBrush}">
                             <Grid Margin="16,0,16,16">
                                 <DataGrid x:Name="NodesGrid" Style="{StaticResource AppDataGrid}" RowStyle="{StaticResource NodeRowStyle}"
                                           MouseDoubleClick="OnNodesGridDoubleClick">
@@ -721,7 +729,7 @@
                             </Grid>
                         </TabItem>
 
-                        <TabItem x:Name="NodesWorkingTab" Header="Рабочие" Style="{StaticResource AppTabItem}">
+                        <TabItem x:Name="NodesWorkingTab" Header="Рабочие" Style="{StaticResource AppTabItem}" Tag="{DynamicResource AccentBrush}">
                             <DockPanel>
                                 <TextBlock DockPanel.Dock="Top" Style="{StaticResource HintText}" Margin="16,8,16,0"
                                            Text="Серверы, открывшие хотя бы один проверочный сервис: ✓ — сервис открылся, — — нет. Если рабочий сервер перестал отвечать, у него остаётся до 10 попыток подряд — только после них он удаляется." />
@@ -769,7 +777,7 @@
             </TabItem>
 
             <!-- ИСТОЧНИКИ -->
-            <TabItem x:Name="SourcesTab" Header="Источники" Style="{StaticResource AppTabItem}">
+            <TabItem x:Name="SourcesTab" Header="Источники" Style="{StaticResource AppTabItem}" Tag="{DynamicResource TelegramBrush}">
                 <DockPanel Margin="16,8,16,10">
                     <Border DockPanel.Dock="Bottom" Margin="0,6,0,0"
                             Background="{DynamicResource PanelBrush}"
@@ -895,7 +903,7 @@
                 </DockPanel>
             </TabItem>
 
-            <TabItem x:Name="TunTab" Header="Туннелирование" Style="{StaticResource AppTabItem}">
+            <TabItem x:Name="TunTab" Header="Туннелирование" Style="{StaticResource AppTabItem}" Tag="{DynamicResource DiscordBrush}">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel Margin="16,12,16,24" MaxWidth="720" HorizontalAlignment="Left">
                         <TextBlock Style="{StaticResource SectionTitle}" Text="Туннелирование" />
@@ -1037,7 +1045,7 @@
                     </StackPanel>
                 </ScrollViewer>
             </TabItem>
-                        <TabItem x:Name="ConnectionSettingsTab" Header="Настройки" Style="{StaticResource AppTabItem}">
+                        <TabItem x:Name="ConnectionSettingsTab" Header="Настройки" Style="{StaticResource AppTabItem}" Tag="{DynamicResource MutedStrongBrush}">
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
                                 <StackPanel Margin="16,12,16,24" MaxWidth="700" HorizontalAlignment="Left">
                                     <TextBlock Style="{StaticResource HintText}" TextWrapping="Wrap" Margin="0,0,0,12"
@@ -1249,7 +1257,7 @@
                             </ScrollViewer>
                         </TabItem>
 
-                        <TabItem x:Name="GeneralTab" Style="{StaticResource AppTabItem}">
+                        <TabItem x:Name="GeneralTab" Style="{StaticResource AppTabItem}" Tag="{DynamicResource TelegramBrush}">
                             <TabItem.Header>
                                 <StackPanel Orientation="Horizontal">
                                     <Path Style="{StaticResource TabIcon}"
@@ -1323,7 +1331,7 @@
 
 
 
-            <TabItem x:Name="RejectedTab" Style="{StaticResource AppTabItem}">
+            <TabItem x:Name="RejectedTab" Style="{StaticResource AppTabItem}" Tag="{DynamicResource DangerBrush}">
                 <TabItem.Header>
                     <StackPanel Orientation="Horizontal">
                         <Path Style="{StaticResource TabIcon}"

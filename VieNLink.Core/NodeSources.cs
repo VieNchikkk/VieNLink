@@ -696,9 +696,12 @@ internal static class NodeSourceService
                 item.UniversalOk != true && item.DiscordOk != true)
             {
                 // В текущей схеме это рабочий сервер, проваливший проверку: он остаётся
-                // в списке до RemoveAfterFailures провалов подряд (счётчик FailCount).
-                // Выбрасываем только записи старой схемы и записи без счётчика.
-                if (cache.SchemaVersion < SchemaVersions.NodeCache || item.FailCount <= 0)
+                // в списке до RemoveAfterFailures провалов подряд (счётчик FailCount),
+                // и его судьбу решает следующая перепроверка. Не выбрасываем его молча:
+                // иначе «рабочие» исчезают из кэша, не попадая в отсев.
+                // Убираем только записи старой схемы или совсем без счётчика/отметки.
+                if (cache.SchemaVersion < SchemaVersions.NodeCache &&
+                    item.FailCount <= 0 && item.OpenDomains <= 0 && item.CheckedAtUtc is null)
                 {
                     dropped++;
                     continue;

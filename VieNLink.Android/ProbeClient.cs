@@ -716,6 +716,25 @@ internal static class ProbeClient
                 // Прошлый ход проверки перезапишется.
             }
 
+            try
+            {
+                File.Delete(ProbeProtocol.LivePath);
+            }
+            catch (IOException)
+            {
+                // Прошлые промежуточные результаты не нужны.
+            }
+
+            // Готовые результаты :probe пишет по ходу партии: применяем каждый сразу,
+            // чтобы счётчики в шапке менялись, а не стояли до конца проверки.
+            var liveById = toTest
+                .GroupBy(node => node.Id, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(group => group.Key, group => group.First(),
+                    StringComparer.OrdinalIgnoreCase);
+            var liveApplied = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var liveWriteStamp = DateTime.MinValue;
+            var lastLiveCheck = DateTime.MinValue;
+
             // Прошлый :probe мог остаться жить после таймаута — иначе он писал бы
             // прогресс и результат параллельно с новой партией.
             TryKillProbeProcess();
@@ -798,6 +817,16 @@ internal static class ProbeClient
                         "Отдельный процесс проверки не запустился — нажмите «Проверить» ещё раз");
                 }
 
+                // Промежуточные результаты :probe: применяем те, что ещё не применяли,
+                // и счётчики в шапке обновляются по ходу проверки. Файл читаем только
+                // когда он изменился, не чаще раза в секунду: лишний разбор JSON
+                // и запись в снимок на каждой итерации только грузили GC.
+                if (DateTime.UtcNow - lastLiveCheck >= TimeSpan.FromMilliseconds(900))
+                {
+                    lastLiveCheck = DateTime.UtcNow;
+                    ApplyLiveResults(liveById, liveApplied, ref liveWriteStamp);
+                }
+
                 if (lastProgress is not null &&
                     DateTime.UtcNow - lastProgressAt > TimeSpan.FromSeconds(100))
                 {
@@ -872,6 +901,61 @@ internal static class ProbeClient
         catch (Exception exception) when (exception is IOException or JsonException or UnauthorizedAccessException)
         {
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Применяет промежуточные результаты :probe к NodeStore сразу, как они появились.
+    /// Так счётчики в шапке меняются по ходу партии, а не только после её конца.
+    /// Файл читается только после изменения; счётчики источников и удаление мёртвых
+    /// остаются итоговому <see cref="Apply"/>, чтобы не брать замок на каждом шаге
+    /// и не грузить главный процесс лишним разбором JSON.
+    /// </summary>
+    private static void ApplyLiveResults(
+        IReadOnlyDictionary<string, ProxyNode> byId,
+        HashSet<string> applied,
+        ref DateTime lastWriteUtc)
+    {
+        ProbeResultFile? live;
+        try
+        {
+            var info = new FileInfo(ProbeProtocol.LivePath);
+            if (!info.Exists || info.LastWriteTimeUtc <= lastWriteUtc)
+            {
+                return;
+            }
+
+            lastWriteUtc = info.LastWriteTimeUtc;
+            live = JsonSerializer.Deserialize<ProbeResultFile>(
+                File.ReadAllText(info.FullName), ProbeProtocol.Json);
+        }
+        catch (Exception exception) when (exception is IOException or JsonException or UnauthorizedAccessException)
+        {
+            return;
+        }
+
+        if (live is null)
+        {
+            return;
+        }
+
+        foreach (var item in live.Nodes)
+        {
+            if (!applied.Add(item.Id) || !byId.TryGetValue(item.Id, out var node))
+            {
+                continue;
+            }
+
+            node.Status = item.Status;
+            node.DelayMs = item.DelayMs;
+            node.CheckedAtUtc = item.CheckedAtUtc;
+            node.TriedAtUtc = item.TriedAtUtc;
+            node.YoutubeOk = item.YoutubeOk;
+            node.TelegramOk = item.TelegramOk;
+            node.UniversalOk = item.UniversalOk;
+            node.DiscordOk = item.DiscordOk;
+            node.OpenDomains = item.OpenDomains;
+            node.FailCount = item.FailCount;
         }
     }
 

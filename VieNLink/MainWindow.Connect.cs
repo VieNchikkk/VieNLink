@@ -263,7 +263,13 @@ public partial class MainWindow
             await RepartitionAndSaveAsync();
             if (summary.Total == 0)
             {
-                return null;
+                // Пробное ядро занято фоновой партией. Значки сервисов эти же серверы
+                // продолжают показывать, поэтому кнопка не должна отвечать «нет серверов»:
+                // берём лучшего из них и пробуем подключиться (health-check переключит).
+                return candidates
+                    .Where(node => NodeAvailability.IsCountable(node, _settings.ConnectOnlyMine, DateTime.UtcNow))
+                    .OrderBy(node => node.DelayMs ?? int.MaxValue)
+                    .FirstOrDefault();
             }
 
             AppendLog($"Поиск сервера: проверено {summary.Total}, рабочих {summary.Working}");

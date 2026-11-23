@@ -469,6 +469,7 @@ public partial class MainWindow
         var onlyMine = _settings.ConnectOnlyMine;
         var total = 0;
         var working = 0;
+        var countable = 0;
         var fresh = 0;
         var universal = 0;
         var youtube = 0;
@@ -485,17 +486,26 @@ public partial class MainWindow
             if (node.Status == NodeStatus.Working)
             {
                 working++;
+                if (NodeAvailability.IsFresh(node, recheckMinutes, now) &&
+                    NodeAvailability.HasSuccess(node) &&
+                    (!onlyMine || node.IsMine))
+                {
+                    fresh++;
+                }
             }
 
-            // Значки сервисов показывают только то, что реально возьмёт кнопка: рабочий
-            // сервер со свежей проверкой и тем же фильтром «только мои». Устаревшая запись
-            // из кэша иначе обещает сервер, который уже не отвечает.
-            if (!NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now))
+            // Значки сервисов и щит считают по одному мягкому правилу
+            // NodeAvailability.IsCountable: последняя удачная проверка не стирается
+            // по таймеру 5 минут (партия перепроверки занимает минуты, и значки иначе
+            // обнулялись бы на ровном месте), а уменьшают их подтверждённый провал
+            // и давность больше часа. Подключение предпочитает свежие, а если их нет —
+            // проверяет этих же серверов скрытым ядром на месте.
+            if (!NodeAvailability.IsCountable(node, onlyMine, now))
             {
                 continue;
             }
 
-            fresh++;
+            countable++;
             if (node.OpenDomains > bestDomains)
             {
                 bestDomains = node.OpenDomains;
@@ -528,7 +538,8 @@ public partial class MainWindow
         DiscordNodeCount = discord;
 
         NodesSummaryText.Text = $"В списке: {total} серверов · рабочих: {working} · " +
-                                $"свежих: {fresh} (проверены за {recheckMinutes} мин)";
+                                $"доступных: {countable} · свежих: {fresh} " +
+                                $"(проверены за {recheckMinutes} мин)";
         if (NodesAccessText is not null)
         {
             NodesAccessText.Text = $"Доступ: универс. {universal}, YouTube {youtube}, " +
@@ -537,10 +548,10 @@ public partial class MainWindow
         }
 
         // Постоянная строка в шапке: её не перетирают ход проверки и сообщения операций.
-        // Числа под иконками сервисов — проверенные рабочие серверы с доступом к каждому.
+        // Щит и числа под иконками сервисов — рабочие серверы с последней удачной проверкой.
         if (HeaderWorkingText is not null)
         {
-            HeaderWorkingText.Text = working.ToString();
+            HeaderWorkingText.Text = countable.ToString();
         }
 
         if (HeaderNodesText is not null)

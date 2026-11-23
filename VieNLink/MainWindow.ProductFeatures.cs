@@ -129,7 +129,8 @@ public partial class MainWindow
         {
             if (!TryShowBypassHeader())
             {
-                HeaderConnectionPanel.Visibility = Visibility.Collapsed;
+                // Hidden, а не Collapsed: слот в шапке сохраняется, кнопки не прыгают.
+                HeaderConnectionPanel.Visibility = Visibility.Hidden;
                 _bypassSpeedMode = string.Empty;
                 _bypassSpeedMbps = null;
             }
@@ -146,7 +147,9 @@ public partial class MainWindow
         var location = flag.Length == 0
             ? string.Empty
             : (country.Length > 0 ? $"{flag} {country}" : flag) + " · ";
-        var title = connecting ? $"Подключаюсь: {location}{endpoint}" : $"Сервер: {location}{endpoint}";
+        // В шапке сервер называется один раз: имя, а адрес — отдельной строкой (если отличается).
+        var display = string.IsNullOrWhiteSpace(name) ? endpoint : name;
+        var title = connecting ? $"Подключаюсь: {location}{display}" : $"{location}{display}";
 
         var domain = NodeRanking.CamouflageHost(node);
         if (string.IsNullOrWhiteSpace(domain))
@@ -174,7 +177,12 @@ public partial class MainWindow
             ? label
             : new string('★', stars) + new string('☆', 5 - stars) + " " + label;
 
-        var details = new List<string> { title, "Сервер: " + name };
+        var details = new List<string> { title };
+        if (!string.Equals(endpoint, display, StringComparison.OrdinalIgnoreCase))
+        {
+            details.Add("Адрес: " + endpoint);
+        }
+
         if (country.Length > 0)
         {
             details.Add("Страна: " + country);
@@ -192,9 +200,14 @@ public partial class MainWindow
             details.Add(HeaderStatsText.Text);
         }
 
+        var subtitle = !string.Equals(endpoint, display, StringComparison.OrdinalIgnoreCase)
+            ? endpoint
+            : !string.Equals(domain, display, StringComparison.OrdinalIgnoreCase)
+                ? "Домен: " + domain
+                : node.Protocol.ToUpperInvariant();
         ApplyHeaderCard(
             title,
-            $"Домен: {domain}",
+            subtitle,
             $"Пинг: {ping} · Скорость: {speed}",
             $"Качество: {rating}",
             brushKey,

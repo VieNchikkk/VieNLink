@@ -269,9 +269,7 @@ internal static class NodeStore
         {
             if (requireFresh
                     ? !NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now)
-                    : node.Status != NodeStatus.Working ||
-                      !NodeAvailability.HasSuccess(node) ||
-                      (onlyMine && !node.IsMine))
+                    : !NodeAvailability.IsCountable(node, onlyMine, now))
             {
                 continue;
             }
@@ -305,7 +303,7 @@ internal static class NodeStore
     public readonly record struct NodeSummary(
         int Total,
         int Working,
-        int Fresh,
+        int Available,
         int Universal,
         int Youtube,
         int Telegram,
@@ -318,10 +316,9 @@ internal static class NodeStore
     {
         var snapshot = _snapshot;
         var now = DateTime.UtcNow;
-        var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
         var onlyMine = Settings.ConnectOnlyMine;
         var working = 0;
-        var fresh = 0;
+        var available = 0;
         var universal = 0;
         var youtube = 0;
         var telegram = 0;
@@ -347,12 +344,15 @@ internal static class NodeStore
                 working++;
             }
 
-            if (!NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now))
+            // Те же серверы, что и в счётчиках шапки: последняя удачная проверка прошла,
+            // подтверждённого провала не было. Иначе экран «Серверы» показывал бы
+            // «рабочих 0», пока в шапке висят числа.
+            if (!NodeAvailability.IsCountable(node, onlyMine, now))
             {
                 continue;
             }
 
-            fresh++;
+            available++;
             bestDomains = Math.Max(bestDomains, node.OpenDomains);
             if (NodeAvailability.OpenedFor(node, "universal"))
             {
@@ -375,7 +375,7 @@ internal static class NodeStore
             }
         }
 
-        return new NodeSummary(snapshot.Length, working, fresh, universal, youtube, telegram, discord,
+        return new NodeSummary(snapshot.Length, working, available, universal, youtube, telegram, discord,
             mine, bestDomains, lastChecked);
     }
 
@@ -911,13 +911,17 @@ internal static class NodeStore
     {
         var settings = Settings;
         var now = DateTime.UtcNow;
-        var ranked = RankedVerified()
+        var ranked = RankedVerified();
+        var usable = ranked
             .Where(node => NodeAvailability.IsUsable(
                 node, NodeLimits.WorkingRecheckMinutes, settings.ConnectOnlyMine, now))
             .ToList();
-        var quick = ranked.FirstOrDefault(
+        var quick = usable.FirstOrDefault(
             node => node.DelayMs is not null && node.DelayMs <= settings.MaxDelayMs);
-        return quick ?? ranked.FirstOrDefault() ?? fallback;
+        return quick ?? usable.FirstOrDefault()
+            // Свежих нет, но счётчики показывают рабочих: не отвечаем «серверов нет».
+            ?? ranked.FirstOrDefault(node => NodeAvailability.IsCountable(node, settings.ConnectOnlyMine, now))
+            ?? fallback;
     }
 
     /// <summary>
@@ -982,20 +986,28 @@ internal static class NodeStore
     }
 
     /// <summary>
-    /// Сервер для быстрого подключения к сервису: только свежие проверенные серверы,
-    /// отсортированные скрытно от пользователя — сначала самые быстрые. Правило то же,
-    /// что у счётчиков: число на значке и результат кнопки не должны расходиться.
-    /// null — подходящих серверов нет.
+    /// Сервер для быстрого подключения к сервису: сначала свежие проверенные серверы,
+    /// затем — те, кого продолжают показывать счётчики (последняя удачная проверка прошла,
+    /// подтверждённого провала не было). Правило счётчиков и кнопки одно: число на значке
+    /// не должно расходиться с результатом нажатия. Живость выбранного всё равно проверяет
+    /// :probe перед подключением. null — подходящих серверов нет.
     /// </summary>
     public static ProxyNode? PickForService(QuickService service, string? avoidId = null)
     {
         var now = DateTime.UtcNow;
         var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
         var onlyMine = Settings.ConnectOnlyMine;
-        return _snapshot
+        var candidates = _snapshot
             .Where(node => (avoidId is null || !node.Id.Equals(avoidId, StringComparison.OrdinalIgnoreCase)) &&
-                           NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now) &&
                            OpenedFor(node, service))
+            .ToList();
+
+        return Best(candidates.Where(node =>
+                   NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now)))
+               ?? Best(candidates.Where(node =>
+                   NodeAvailability.IsCountable(node, onlyMine, now)));
+
+        static ProxyNode? Best(IEnumerable<ProxyNode> nodes) => nodes
             .OrderBy(node => node.DelayMs ?? int.MaxValue)
             .ThenByDescending(node => node.OpenDomains)
             .ThenByDescending(node => node.IsMine)

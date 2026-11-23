@@ -293,31 +293,31 @@ public sealed class MaintenanceReceiver : BroadcastReceiver
             return;
         }
 
-        if (SettingsStore.Current.AutomationPaused)
-        {
-            // Автоматика выключена пользователем: не будим процесс и не ставим
-            // следующий будильник (его поставит кнопка «Запустить автоматику»).
-            return;
-        }
-
-        // Следующий будильник ставим сразу: если процесс убьют во время долгой
-        // проверки, цепочка обслуживания всё равно продолжится.
-        Maintenance.EnsureScheduled(context);
-
-        var pending = GoAsync();
+        // В OnReceive нельзя читать настройки, планировать будильник и тем более
+        // запускать обслуживание: это главный поток, а полный проход (источники,
+        // MTProto, пробная партия) идёт дольше лимита broadcast. Из-за этого система
+        // показывала ANR «Broadcast of Intent … MAINTENANCE», и приложение зависало
+        // после возврата из фона. Приёмник сразу уходит, работа — в фоне.
+        var appContext = context.ApplicationContext;
         _ = Task.Run(async () =>
         {
             try
             {
-                await Maintenance.RunAsync(context).ConfigureAwait(false);
+                if (SettingsStore.Current.AutomationPaused)
+                {
+                    // Автоматика выключена пользователем: не будим процесс
+                    // и не ставим следующий будильник.
+                    return;
+                }
+
+                // Следующий будильник ставим сразу: если процесс убьют во время
+                // долгой проверки, цепочка обслуживания продолжится.
+                Maintenance.EnsureScheduled(appContext);
+                await Maintenance.RunAsync(appContext).ConfigureAwait(false);
             }
             catch (Exception exception)
             {
                 VieNLink.AppLog.Write("maintenance", "Ошибка фонового обслуживания", exception);
-            }
-            finally
-            {
-                pending?.Finish();
             }
         });
     }

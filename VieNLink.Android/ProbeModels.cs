@@ -107,6 +107,12 @@ internal static class ProbeProtocol
     /// <summary>Файл хода проверки: обновляется процессом :probe во время работы.</summary>
     public static string ProgressPath => Path.Combine(AppPaths.DataDirectory, "probe-progress.json");
 
+    /// <summary>
+    /// Готовые результаты по мере проверки: основной процесс применяет их сразу,
+    /// поэтому счётчики в шапке меняются по ходу партии, а не только в конце.
+    /// </summary>
+    public static string LivePath => Path.Combine(AppPaths.DataDirectory, "probe-live.json");
+
     public static readonly JsonSerializerOptions Json = new()
     {
         WriteIndented = false,

@@ -5,6 +5,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 
@@ -14,9 +15,11 @@ public partial class MainWindow
 {
     // ---------- свой обход DPI (WinDivert) ----------
 
+    private bool _updatingStrategyList;
+
     /// <summary>
-    /// Список стратегий — только для информации. Порядок автоматический: лучшие по
-    /// накопленному качеству сверху, остальные — в обычном порядке перебора.
+    /// Список стратегий: кликабельные плашки-переключатели. Порядок автоматический:
+    /// лучшие по накопленному качеству сверху, остальные — в обычном порядке перебора.
     /// </summary>
     private void BuildDesyncStrategyList()
     {
@@ -25,35 +28,45 @@ public partial class MainWindow
             return;
         }
 
-        DesyncStrategyPanel.Children.Clear();
-        var order = DesyncService.GetPriorityOrder();
-        var columns = Math.Max(1, (order.Count + StrategyRows - 1) / StrategyRows);
-        DesyncStrategyPanel.Rows = StrategyRows;
-        DesyncStrategyPanel.Columns = columns;
-
-        var cells = new TextBlock?[StrategyRows * columns];
-        for (var position = 0; position < order.Count; position++)
+        _updatingStrategyList = true;
+        try
         {
-            var index = order[position];
-            var strategy = DesyncService.Strategies[index];
-            var item = new TextBlock
+            DesyncStrategyPanel.Children.Clear();
+            var order = DesyncService.GetPriorityOrder();
+            var columns = Math.Max(1, (order.Count + StrategyRows - 1) / StrategyRows);
+            DesyncStrategyPanel.Rows = StrategyRows;
+            DesyncStrategyPanel.Columns = columns;
+
+            var cells = new RadioButton?[StrategyRows * columns];
+            for (var position = 0; position < order.Count; position++)
             {
-                Tag = (Index: index, Number: position + 1),
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 1, 12, 1),
-                FontSize = 11.5,
-                VerticalAlignment = VerticalAlignment.Top,
-                ToolTip = strategy.Description,
-            };
-            cells[(position % StrategyRows) * columns + position / StrategyRows] = item;
-        }
+                var index = order[position];
+                var strategy = DesyncService.Strategies[index];
+                var item = new RadioButton
+                {
+                    Tag = (Index: index, Number: position + 1),
+                    GroupName = "DesyncStrategy",
+                    Style = (Style)FindResource("StrategyRadioButton"),
+                    Content = $"{position + 1}. {strategy.Name}",
+                    IsChecked = index == _settings.DesyncStrategy,
+                    ToolTip = strategy.Description + "\n\nНажмите, чтобы применить стратегию вручную.",
+                };
+                item.Checked += OnDesyncStrategyChecked;
+                cells[(position % StrategyRows) * columns + position / StrategyRows] = item;
+            }
 
-        for (var cell = 0; cell < cells.Length; cell++)
+            for (var cell = 0; cell < cells.Length; cell++)
+            {
+                DesyncStrategyPanel.Children.Add(cells[cell] ??
+                    new RadioButton { Visibility = Visibility.Hidden });
+            }
+
+            UpdateDesyncStrategyInfo(_settings.DesyncStrategy);
+        }
+        finally
         {
-            DesyncStrategyPanel.Children.Add(cells[cell] ?? new TextBlock { Visibility = Visibility.Hidden });
+            _updatingStrategyList = false;
         }
-
-        UpdateDesyncStrategyInfo(_settings.DesyncStrategy);
     }
 
     private void UpdateDesyncStrategyInfo(int index)
@@ -63,21 +76,137 @@ public partial class MainWindow
             return;
         }
 
-        var green = (Brush)FindResource("AccentBrush");
-        var muted = (Brush)FindResource("MutedStrongBrush");
-        foreach (var item in DesyncStrategyPanel.Children.OfType<TextBlock>())
+        var wasUpdating = _updatingStrategyList;
+        _updatingStrategyList = true;
+        try
         {
-            if (item.Tag is not (int strategyIndex, int number) ||
-                strategyIndex < 0 || strategyIndex >= DesyncService.Strategies.Count)
+            var green = (Brush)FindResource("AccentBrush");
+            var muted = (Brush)FindResource("MutedStrongBrush");
+            foreach (var item in DesyncStrategyPanel.Children.OfType<RadioButton>())
             {
-                continue;
+                if (item.Tag is not (int strategyIndex, int number) ||
+                    strategyIndex < 0 || strategyIndex >= DesyncService.Strategies.Count)
+                {
+                    continue;
+                }
+
+                var chosen = strategyIndex == index;
+                item.Content = $"{number}. {(chosen ? "★ " : string.Empty)}{DesyncService.Strategies[strategyIndex].Name}";
+                item.Foreground = chosen ? green : muted;
+                item.FontWeight = chosen ? FontWeights.SemiBold : FontWeights.Normal;
+                item.IsChecked = chosen;
+            }
+        }
+        finally
+        {
+            _updatingStrategyList = wasUpdating;
+        }
+    }
+
+    private async void OnDesyncStrategyChecked(object sender, RoutedEventArgs e)
+    {
+        if (_updatingStrategyList || _loadingSettings ||
+            sender is not RadioButton { Tag: (int index, int _), IsChecked: true })
+        {
+            return;
+        }
+
+        await ApplyDesyncStrategyAsync(index);
+    }
+
+    private async void OnDesyncTuneClick(object sender, RoutedEventArgs e)
+    {
+        if (_desync.IsRunning)
+        {
+            _desync.Stop();
+            UpdateDesyncUi();
+        }
+
+        await StartDesyncFlowAsync(true);
+    }
+
+    /// <summary>
+    /// Ручной выбор стратегии: сразу перезапускает движок, не дожидаясь автоподбора.
+    /// Нужен, когда автоподбор ошибается (например, видео идёт только с одной стратегией).
+    /// </summary>
+    private async Task ApplyDesyncStrategyAsync(int index)
+    {
+        if (index < 0 || index >= DesyncService.Strategies.Count)
+        {
+            return;
+        }
+
+        var strategy = DesyncService.Strategies[index];
+        _settings.DesyncStrategy = index;
+        _settings.DesyncManual = true;
+        // «Только QUIC-фейк» требует разрешённого QUIC: иначе UDP просто блокируется.
+        if (strategy.Tcp == DesyncTcpMode.None && _settings.DesyncBlockQuic)
+        {
+            _settings.DesyncBlockQuic = false;
+            if (DesyncBlockQuicCheck is not null)
+            {
+                DesyncBlockQuicCheck.IsChecked = false;
+            }
+        }
+
+        SaveSettings();
+        if (_manager.IsConnected)
+        {
+            await _manager.DisconnectAsync();
+            UpdateConnectionUi();
+        }
+
+        if (_zapret.IsRunning)
+        {
+            _zapret.Stop();
+            UpdateZapretUi();
+        }
+
+        if (_tunBypass.IsRunning)
+        {
+            await _tunBypass.StopAsync();
+            UpdateTunBypassUi();
+        }
+
+        if (_desync.IsRunning)
+        {
+            if (!BeginOperation("переключение стратегии обхода DPI"))
+            {
+                return;
             }
 
-            var chosen = strategyIndex == index;
-            item.Text = $"{number}. {(chosen ? "★ " : string.Empty)}{DesyncService.Strategies[strategyIndex].Name}";
-            item.Foreground = chosen ? green : muted;
-            item.FontWeight = chosen ? FontWeights.SemiBold : FontWeights.Normal;
+            try
+            {
+                SetStatus("Переключаю стратегию обхода DPI", strategy.Name);
+                _desync.Stop();
+                var progress = new Progress<string>(line =>
+                {
+                    StatusDetail.Text = line;
+                    AppendLog(line);
+                });
+                _desync.Start(strategy, progress, _settings.DesyncBlockQuic);
+                BypassProfileStore.Record(StartedProfile(
+                    "desync", index, strategy.Name, gameMode: false, _settings.DesyncBlockQuic));
+                SetStatus("Свой обход DPI включён", $"Стратегия: {strategy.Name} (выбрана вручную)");
+                AppendLog($"Свой обход DPI: вручную выбрана «{strategy.Name}»");
+            }
+            catch (Exception exception)
+            {
+                ReportError("Не удалось применить стратегию обхода DPI", exception);
+            }
+            finally
+            {
+                EndOperation();
+            }
         }
+        else
+        {
+            SetStatus("Стратегия выбрана", $"{strategy.Name} — нажмите «Включить обход»");
+        }
+
+        DesyncTuneText.Text = $"Выбрана вручную: «{strategy.Name}». {strategy.Description}";
+        BuildDesyncStrategyList();
+        UpdateDesyncUi();
     }
 
     private void UpdateDesyncUi()
@@ -215,6 +344,7 @@ public partial class MainWindow
 
         try
         {
+            var videoWorks = false;
             if (_manager.IsConnected)
             {
                 SetStatus("Отключаю прокси-сервер", "Для своего обхода DPI нужен прямой трафик…");
@@ -250,22 +380,27 @@ public partial class MainWindow
                 }
             });
 
-            if (!forceTune)
+            if (!forceTune && !_settings.DesyncManual)
             {
                 TryApplyBestDesyncProfile();
             }
 
+            var previousManual = _settings.DesyncManual && _settings.DesyncStrategy >= 0;
             if (forceTune || _settings.DesyncStrategy < 0)
             {
+                _settings.DesyncManual = false;
                 SetStatus("Подбираю стратегию", $"Перебираю {DesyncService.Strategies.Count} стратегий: YouTube и Telegram…");
-                var results = await _desync.AutoTuneAsync(progress, _operation!.Token, _settings.DesyncBlockQuic);
+                var results = await _desync.AutoTuneAsync(
+                    progress, _operation!.Token, _settings.DesyncBlockQuic,
+                    _settings.DesyncStrategy >= 0 ? _settings.DesyncStrategy : null);
                 BypassProfileStore.RecordMany(results
                     .Where(result => result.Ok > 0)
-                    .Select(result => DesyncProfile(result, _settings.DesyncBlockQuic, "desync")));
+                    .Select(result => DesyncProfile(result, result.BlockQuic, "desync")));
                 var best = results
                     .Where(result => result.Ok > 0)
                     .OrderByDescending(result => result.VideoOk)
                     .ThenByDescending(result => result.YoutubeOk)
+                    .ThenByDescending(result => result.TelegramOk)
                     .ThenByDescending(result => result.Ok)
                     .ThenBy(result => result.AverageMs)
                     .FirstOrDefault();
@@ -291,13 +426,56 @@ public partial class MainWindow
                 }
                 else
                 {
-                    _settings.DesyncStrategy = best.Index;
-                    DesyncTuneText.Text = best.VideoOk
-                        ? $"Выбран: «{best.Name}» — YouTube {Mark(best.YoutubeOk)}, видео {Mark(best.VideoOk)}, " +
-                          $"Telegram {Mark(best.TelegramOk)}"
-                        : $"Выбран: «{best.Name}» — страница YouTube {Mark(best.YoutubeOk)}, видео {Mark(best.VideoOk)}. " +
-                          "Если страница открывается, а видео нет — включите блокировку QUIC или подключите прокси-сервер.";
-                    AppendLog($"Автоподбор своего обхода: выбран «{best.Name}» ({best.Ok}/{best.Total})");
+                    // Если стратегия была выбрана вручную и автоподбор не подтвердил видео,
+                    // не ломаем рабочий выбор страничной стратегией «по задержке».
+                    var keepManual = previousManual && !best.VideoOk &&
+                                     best.Index != _settings.DesyncStrategy;
+                    if (keepManual)
+                    {
+                        _settings.DesyncManual = true;
+                        var manualName = DesyncService.Strategies[
+                            Math.Clamp(_settings.DesyncStrategy, 0, DesyncService.Strategies.Count - 1)].Name;
+                        DesyncTuneText.Text = $"Автоподбор не подтвердил видео. Оставлена выбранная вручную «{manualName}».";
+                        AppendLog($"Автоподбор своего обхода: видео не подтверждено, оставлена ручная стратегия «{manualName}»");
+                    }
+                    else
+                    {
+                        _settings.DesyncStrategy = best.Index;
+                        _settings.DesyncManual = previousManual && !best.VideoOk;
+                        videoWorks = best.VideoOk;
+                        if (best.BlockQuic != _settings.DesyncBlockQuic)
+                        {
+                            _settings.DesyncBlockQuic = best.BlockQuic;
+                            if (DesyncBlockQuicCheck is not null)
+                            {
+                                DesyncBlockQuicCheck.IsChecked = best.BlockQuic;
+                            }
+
+                            AppendLog(best.BlockQuic
+                                ? "Автоподбор: включена блокировка QUIC"
+                                : "Автоподбор: блокировка QUIC выключена — выбрана QUIC-стратегия");
+                        }
+
+                        var quicOnly = DesyncService.Strategies[best.Index].Tcp == DesyncTcpMode.None;
+                        DesyncTuneText.Text = quicOnly
+                            ? best.VideoOk
+                                ? $"Выбран: «{best.Name}» — YouTube и видео идут по QUIC (HTTP/3, UDP/443). " +
+                                  "Блокировка QUIC выключена, TCP не изменяется."
+                                : $"Выбран: «{best.Name}» — YouTube по QUIC {Mark(best.YoutubeOk)}, " +
+                                  $"видео {Mark(best.VideoOk)}. Если видео не идёт — подключите прокси-сервер."
+                            : best.VideoOk
+                                ? $"Выбран: «{best.Name}» — YouTube {Mark(best.YoutubeOk)}, видео {Mark(best.VideoOk)}, " +
+                                  $"Telegram {Mark(best.TelegramOk)}"
+                                : best.YoutubeOk
+                                    ? $"Выбран: «{best.Name}» — страница YouTube {Mark(best.YoutubeOk)}, " +
+                                      $"Telegram {Mark(best.TelegramOk)}, видео — нет: видео-узлы googlevideo не отдают поток " +
+                                      (_settings.DesyncBlockQuic
+                                          ? "(блокировка QUIC уже включена; для видео нужен прокси-сервер)."
+                                          : "(включите блокировку QUIC или подключите прокси-сервер).")
+                                    : $"Выбран: «{best.Name}» — YouTube {Mark(best.YoutubeOk)}, " +
+                                      $"Telegram {Mark(best.TelegramOk)}. Для видео и заблокированных сайтов нужен прокси-сервер.";
+                        AppendLog($"Автоподбор своего обхода: выбран «{best.Name}» ({best.Ok}/{best.Total})");
+                    }
                 }
 
                 SaveSettings();
@@ -310,8 +488,12 @@ public partial class MainWindow
             BypassProfileStore.Record(StartedProfile(
                 "desync", Math.Clamp(_settings.DesyncStrategy, 0, DesyncService.Strategies.Count - 1),
                 strategy.Name, gameMode: false, _settings.DesyncBlockQuic));
-            SetStatus("Свой обход DPI включён",
-                "Стратегия подобрана автоматически. Если видео не идёт — включите блокировку QUIC или прокси-сервер.");
+            SetStatus("Свой обход DPI включён", _settings.DesyncManual
+                ? "Оставлена выбранная вручную стратегия. Если видео не идёт — подключите прокси-сервер."
+                : videoWorks
+                    ? "Стратегия подобрана автоматически: YouTube и видео открываются через обход."
+                    : "Стратегия подобрана автоматически. Видео YouTube через обход не проверено — " +
+                      "если не идёт, подключите прокси-сервер (видео-узлы часто блокируются по IP).");
             FooterText.Text = "Свой обход DPI включён (WinDivert, без прокси-сервера)";
         }
         catch (OperationCanceledException)

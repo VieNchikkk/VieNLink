@@ -23,7 +23,8 @@ internal sealed record ZapretProbeResult(
     int AverageMs,
     bool YoutubeOk = false,
     bool TelegramOk = false,
-    bool DiscordOk = false);
+    bool DiscordOk = false,
+    bool VideoOk = false);
 
 /// <summary>
 /// Накопленная статистика по стратегиям: какие чаще открывали YouTube и работали полностью.
@@ -399,7 +400,7 @@ internal sealed class ZapretService : IDisposable
     /// Порядок показа и перебора: сначала стратегии с лучшим сохранённым качеством,
     /// затем — по истории удачных запусков (YouTube и полный успех).
     /// </summary>
-    public static IReadOnlyList<int> GetPriorityOrder()
+    public static IReadOnlyList<int> GetPriorityOrder(int? preferredIndex = null)
     {
         var historyOrder = GetHistoryOrder();
         var historyPosition = historyOrder
@@ -412,11 +413,18 @@ internal sealed class ZapretService : IDisposable
                 group => group.Max(profile => profile.Quality),
                 StringComparer.OrdinalIgnoreCase);
 
-        return Enumerable.Range(0, Presets.Count)
+        var order = Enumerable.Range(0, Presets.Count)
             .OrderByDescending(index => quality.TryGetValue(Presets[index].Name, out var value) ? value : 0)
             .ThenBy(index => historyPosition.TryGetValue(index, out var position) ? position : int.MaxValue)
             .ThenBy(index => index)
             .ToList();
+        if (preferredIndex is { } preferred && preferred >= 0 && preferred < Presets.Count)
+        {
+            order.Remove(preferred);
+            order.Insert(0, preferred);
+        }
+
+        return order;
     }
 
     private static void SaveHistory(List<ZapretHistoryEntry> history)
@@ -660,11 +668,29 @@ internal sealed class ZapretService : IDisposable
 
     public async Task<IReadOnlyList<ZapretProbeResult>> AutoTuneAsync(
         IProgress<string>? progress,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int? preferredIndex = null)
     {
         if (!IsInstalled)
         {
             throw new InvalidOperationException("zapret не установлен.");
+        }
+
+        var ytDlpReady = YtDlpVideoProbe.IsInstalled;
+        if (!ytDlpReady)
+        {
+            try
+            {
+                ytDlpReady = await YtDlpVideoProbe.EnsureAsync(progress, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write("zapret", "yt-dlp не подготовлен, проверяю видео только по redirector", exception);
+            }
         }
 
         // Автоподбор гоняет десинк только по целевым доменам: посторонний трафик
@@ -685,7 +711,7 @@ internal sealed class ZapretService : IDisposable
         {
             using var http = CreateDirectClient(TimeSpan.FromSeconds(15), TimeSpan.FromSeconds(10));
             var history = LoadHistory().ToList();
-            var order = GetPriorityOrder();
+            var order = GetPriorityOrder(preferredIndex);
             var probeLimit = ProbeUrls.Length;
             var results = new List<ZapretProbeResult>();
             for (var position = 0; position < order.Count; position++)
@@ -710,7 +736,7 @@ internal sealed class ZapretService : IDisposable
                 var ok = 0;
                 var latency = 0;
                 var youtubePageOk = false;
-                var youtubeVideoOk = false;
+                var youtubeServiceOk = false;
                 var telegramOk = false;
                 var discordOk = false;
                 for (var probeIndex = 0; probeIndex < probeLimit; probeIndex++)
@@ -740,7 +766,7 @@ internal sealed class ZapretService : IDisposable
                                 youtubePageOk = true;
                                 break;
                             case 1:
-                                youtubeVideoOk = true;
+                                youtubeServiceOk = true;
                                 break;
                             case 2:
                                 telegramOk = true;
@@ -750,8 +776,8 @@ internal sealed class ZapretService : IDisposable
                                 break;
                         }
 
-                        // Видео уже скачалось — не тратим время на t.me/Discord: пользователю нужно видео.
-                        if (probeIndex == 1 && youtubeVideoOk)
+                        // Сервер видео открылся — не тратим время на t.me/Discord.
+                        if (probeIndex == 1 && youtubeServiceOk)
                         {
                             break;
                         }
@@ -772,11 +798,24 @@ internal sealed class ZapretService : IDisposable
                     }
                 }
 
-                // YouTube считается рабочим, только если открылись и страница, и сервер видео (googlevideo).
+                // YouTube считается рабочим только если открылась страница и реально пошло
+                // видео. redirector.googlevideo.com — быстрый индикатор; если yt-dlp доступен,
+                // он подтверждает видео настоящей загрузкой (curl/.NET получают 0 из-за n-sig).
+                var youtubeVideoOk = youtubeServiceOk;
+                if (youtubePageOk && ytDlpReady)
+                {
+                    var bytes = await YtDlpVideoProbe.MeasureAsync(cancellationToken);
+                    youtubeVideoOk = bytes >= 64 * 1024;
+                    if (youtubeVideoOk)
+                    {
+                        AppLog.Write("zapret", $"Видео YouTube подтверждено yt-dlp: {bytes} байт");
+                    }
+                }
+
                 var youtubeOk = youtubePageOk && youtubeVideoOk;
                 var result = new ZapretProbeResult(
                     index, preset.Name, ok, probeLimit, ok > 0 ? latency / ok : 0,
-                    youtubeOk, telegramOk, discordOk);
+                    youtubeOk, telegramOk, discordOk, youtubeVideoOk);
                 results.Add(result);
                 progress?.Report($"  {preset.Name}: {ok}/{probeLimit}, {result.AverageMs} мс");
 

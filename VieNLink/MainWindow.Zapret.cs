@@ -16,10 +16,11 @@ public partial class MainWindow
     // ---------- обход DPI (zapret) ----------
 
     private const int StrategyRows = 5;
+    private bool _updatingZapretList;
 
     /// <summary>
-    /// Список стратегий — только для информации. Порядок автоматический: лучшие по
-    /// накопленному качеству сверху, остальные — по истории удачных запусков.
+    /// Список пресетов: кликабельные плашки-переключатели. Порядок автоматический:
+    /// лучшие по накопленному качеству сверху, остальные — по истории удачных запусков.
     /// </summary>
     private void BuildZapretPresetList()
     {
@@ -28,37 +29,47 @@ public partial class MainWindow
             return;
         }
 
-        ZapretPresetPanel.Children.Clear();
-        var order = ZapretService.GetPriorityOrder();
-        var columns = Math.Max(1, (order.Count + StrategyRows - 1) / StrategyRows);
-        ZapretPresetPanel.Rows = StrategyRows;
-        ZapretPresetPanel.Columns = columns;
-
-        // UniformGrid заполняет построчно, а нужен «столбиками» по 5: раскладываем
-        // элементы в массив по колонкам и добавляем в построчном порядке.
-        var cells = new TextBlock?[StrategyRows * columns];
-        for (var position = 0; position < order.Count; position++)
+        _updatingZapretList = true;
+        try
         {
-            var index = order[position];
-            var preset = ZapretService.Presets[index];
-            var item = new TextBlock
+            ZapretPresetPanel.Children.Clear();
+            var order = ZapretService.GetPriorityOrder();
+            var columns = Math.Max(1, (order.Count + StrategyRows - 1) / StrategyRows);
+            ZapretPresetPanel.Rows = StrategyRows;
+            ZapretPresetPanel.Columns = columns;
+
+            // UniformGrid заполняет построчно, а нужен «столбиками» по 5: раскладываем
+            // элементы в массив по колонкам и добавляем в построчном порядке.
+            var cells = new RadioButton?[StrategyRows * columns];
+            for (var position = 0; position < order.Count; position++)
             {
-                Tag = (Index: index, Number: position + 1),
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 1, 12, 1),
-                FontSize = 11.5,
-                VerticalAlignment = VerticalAlignment.Top,
-                ToolTip = preset.Name,
-            };
-            cells[(position % StrategyRows) * columns + position / StrategyRows] = item;
-        }
+                var index = order[position];
+                var preset = ZapretService.Presets[index];
+                var item = new RadioButton
+                {
+                    Tag = (Index: index, Number: position + 1),
+                    GroupName = "ZapretPreset",
+                    Style = (Style)FindResource("StrategyRadioButton"),
+                    Content = $"{position + 1}. {preset.Name}",
+                    IsChecked = index == _settings.ZapretPreset,
+                    ToolTip = preset.Name + "\n\nНажмите, чтобы применить пресет вручную.",
+                };
+                item.Checked += OnZapretPresetChecked;
+                cells[(position % StrategyRows) * columns + position / StrategyRows] = item;
+            }
 
-        for (var cell = 0; cell < cells.Length; cell++)
+            for (var cell = 0; cell < cells.Length; cell++)
+            {
+                ZapretPresetPanel.Children.Add(cells[cell] ??
+                    new RadioButton { Visibility = Visibility.Hidden });
+            }
+
+            UpdateZapretStrategyInfo(_settings.ZapretPreset);
+        }
+        finally
         {
-            ZapretPresetPanel.Children.Add(cells[cell] ?? new TextBlock { Visibility = Visibility.Hidden });
+            _updatingZapretList = false;
         }
-
-        UpdateZapretStrategyInfo(_settings.ZapretPreset);
     }
 
     private void UpdateZapretStrategyInfo(int index)
@@ -68,20 +79,128 @@ public partial class MainWindow
             return;
         }
 
-        var green = (Brush)FindResource("AccentBrush");
-        var muted = (Brush)FindResource("MutedStrongBrush");
-        foreach (var item in ZapretPresetPanel.Children.OfType<TextBlock>())
+        var wasUpdating = _updatingZapretList;
+        _updatingZapretList = true;
+        try
         {
-            if (item.Tag is not (int presetIndex, int number) ||
-                presetIndex < 0 || presetIndex >= ZapretService.Presets.Count)
+            var green = (Brush)FindResource("AccentBrush");
+            var muted = (Brush)FindResource("MutedStrongBrush");
+            foreach (var item in ZapretPresetPanel.Children.OfType<RadioButton>())
             {
-                continue;
+                if (item.Tag is not (int presetIndex, int number) ||
+                    presetIndex < 0 || presetIndex >= ZapretService.Presets.Count)
+                {
+                    continue;
+                }
+
+                var chosen = presetIndex == index;
+                item.Content = $"{number}. {(chosen ? "★ " : string.Empty)}{ZapretService.Presets[presetIndex].Name}";
+                item.Foreground = chosen ? green : muted;
+                item.FontWeight = chosen ? FontWeights.SemiBold : FontWeights.Normal;
+                item.IsChecked = chosen;
+            }
+        }
+        finally
+        {
+            _updatingZapretList = wasUpdating;
+        }
+    }
+
+    private async void OnZapretPresetChecked(object sender, RoutedEventArgs e)
+    {
+        if (_updatingZapretList || _loadingSettings ||
+            sender is not RadioButton { Tag: (int index, int _), IsChecked: true })
+        {
+            return;
+        }
+
+        await ApplyZapretPresetAsync(index);
+    }
+
+    private async void OnZapretTuneClick(object sender, RoutedEventArgs e)
+    {
+        if (_zapret.IsRunning)
+        {
+            _zapret.Stop();
+            UpdateZapretUi();
+        }
+
+        await StartZapretAsync(true);
+    }
+
+    /// <summary>
+    /// Ручной выбор пресета zapret: сразу перезапускает winws, не дожидаясь
+    /// автоподбора (он может ошибиться, если проверка видео врёт).
+    /// </summary>
+    private async Task ApplyZapretPresetAsync(int index)
+    {
+        if (index < 0 || index >= ZapretService.Presets.Count)
+        {
+            return;
+        }
+
+        var preset = ZapretService.Presets[index];
+        _settings.ZapretPreset = index;
+        _settings.ZapretManual = true;
+        SaveSettings();
+
+        if (!_zapret.IsRunning)
+        {
+            UpdateZapretStrategyInfo(index);
+            ZapretTuneText.Text = $"Выбран вручную: «{preset.Name}». Нажмите «Включить обход».";
+            SetStatus("Пресет zapret выбран", preset.Name);
+            return;
+        }
+
+        if (!BeginOperation("переключение пресета zapret"))
+        {
+            return;
+        }
+
+        try
+        {
+            if (_desync.IsRunning)
+            {
+                _desync.Stop();
+                _tunBypassStartedDesync = false;
+                UpdateDesyncUi();
             }
 
-            var chosen = presetIndex == index;
-            item.Text = $"{number}. {(chosen ? "★ " : string.Empty)}{ZapretService.Presets[presetIndex].Name}";
-            item.Foreground = chosen ? green : muted;
-            item.FontWeight = chosen ? FontWeights.SemiBold : FontWeights.Normal;
+            if (_tunBypass.IsRunning)
+            {
+                await _tunBypass.StopAsync();
+                UpdateTunBypassUi();
+            }
+
+            if (_manager.IsConnected)
+            {
+                await _manager.DisconnectAsync();
+                UpdateConnectionUi();
+            }
+
+            _zapret.Stop();
+            var progress = new Progress<string>(line =>
+            {
+                StatusDetail.Text = line;
+                AppendLog(line);
+            });
+            await _zapret.StartAsync(
+                progress, _operation!.Token, index, gameMode: false, blockQuic: _settings.ZapretBlockQuic);
+            BypassProfileStore.Record(StartedProfile(
+                "zapret", index, preset.Name, gameMode: false, _settings.ZapretBlockQuic));
+            UpdateZapretStrategyInfo(index);
+            ZapretTuneText.Text = $"Выбран вручную: «{preset.Name}».";
+            SetStatus("Обход DPI включён", $"zapret: «{preset.Name}» (выбран вручную)");
+            AppendLog($"zapret: вручную выбран пресет «{preset.Name}»");
+        }
+        catch (Exception exception)
+        {
+            ReportError("Не удалось применить пресет zapret", exception);
+        }
+        finally
+        {
+            EndOperation();
+            UpdateZapretUi();
         }
     }
 
@@ -529,22 +648,26 @@ public partial class MainWindow
                 }
             });
 
-            if (!forceTune)
+            if (!forceTune && !_settings.ZapretManual)
             {
                 TryApplyBestZapretProfile();
             }
 
             if (forceTune || _settings.ZapretPreset < 0)
             {
+                _settings.ZapretManual = false;
                 SetStatus("Подбираю стратегию обхода",
                     $"Перебираю {ZapretService.Presets.Count} стратегий zapret: YouTube, t.me, Discord…");
-                var results = await _zapret.AutoTuneAsync(progress, _operation!.Token);
+                var results = await _zapret.AutoTuneAsync(
+                    progress, _operation!.Token,
+                    _settings.ZapretPreset >= 0 ? _settings.ZapretPreset : null);
                 BypassProfileStore.RecordMany(results
                     .Where(result => result.Ok > 0)
                     .Select(result => ZapretProfile(result, false, _settings.ZapretBlockQuic)));
                 var best = results
                     .Where(result => result.Ok > 0)
-                    .OrderByDescending(result => result.YoutubeOk)
+                    .OrderByDescending(result => result.VideoOk)
+                    .ThenByDescending(result => result.YoutubeOk)
                     .ThenByDescending(result => result.Ok)
                     .ThenBy(result => result.AverageMs)
                     .FirstOrDefault();
@@ -565,7 +688,8 @@ public partial class MainWindow
                     _settings.ZapretPreset = best.Index;
                     ZapretTuneText.Text =
                         $"Выбран: «{best.Name}» — YouTube {Mark(best.YoutubeOk)}, " +
-                        $"Telegram {Mark(best.TelegramOk)}, Discord {Mark(best.DiscordOk)}";
+                        $"видео {Mark(best.VideoOk)}, Telegram {Mark(best.TelegramOk)}, " +
+                        $"Discord {Mark(best.DiscordOk)}";
                     AppendLog($"Автоподбор zapret: выбран «{best.Name}» ({best.Ok}/{best.Total})");
                 }
 

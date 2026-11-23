@@ -231,7 +231,7 @@ public partial class MainWindow
                     var desyncResults = await _desync.AutoTuneAsync(progress, _operation!.Token, _settings.DesyncBlockQuic);
                     BypassProfileStore.RecordMany(desyncResults
                         .Where(result => result.Ok > 0)
-                        .Select(result => DesyncProfile(result, _settings.DesyncBlockQuic, "tun-desync")));
+                        .Select(result => DesyncProfile(result, result.BlockQuic, "tun-desync")));
                     var desyncBest = desyncResults
                         .Where(result => result.Ok > 0)
                         .OrderByDescending(result => result.VideoOk)
@@ -242,6 +242,15 @@ public partial class MainWindow
                     if (desyncBest is not null && (desyncBest.YoutubeOk || desyncBest.VideoOk || desyncBest.TelegramOk))
                     {
                         _settings.DesyncStrategy = desyncBest.Index;
+                        if (desyncBest.BlockQuic != _settings.DesyncBlockQuic)
+                        {
+                            _settings.DesyncBlockQuic = desyncBest.BlockQuic;
+                            if (DesyncBlockQuicCheck is not null)
+                            {
+                                DesyncBlockQuicCheck.IsChecked = desyncBest.BlockQuic;
+                            }
+                        }
+
                         UpdateDesyncStrategyInfo(desyncBest.Index);
                         SaveSettings();
                         var desyncStrategy = DesyncService.Strategies[desyncBest.Index];

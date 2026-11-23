@@ -4,6 +4,7 @@ using System.IO;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http;
+using System.Net.Quic;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -62,7 +63,8 @@ internal sealed record DesyncProbeResult(
     int AverageMs,
     bool YoutubeOk,
     bool TelegramOk,
-    bool VideoOk = false);
+    bool VideoOk = false,
+    bool BlockQuic = false);
 
 /// <summary>Тип блокировки на уровне сети/TLS.</summary>
 internal enum BlockKind
@@ -240,7 +242,7 @@ internal sealed class DesyncService : IDisposable
     /// Порядок показа и перебора: сначала стратегии с лучшим сохранённым качеством,
     /// затем — в обычном порядке (от мягких к более агрессивным).
     /// </summary>
-    public static IReadOnlyList<int> GetPriorityOrder()
+    public static IReadOnlyList<int> GetPriorityOrder(int? preferredIndex = null)
     {
         var quality = BypassProfileStore.Ranked("desync")
             .GroupBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
@@ -249,10 +251,17 @@ internal sealed class DesyncService : IDisposable
                 group => group.Max(profile => profile.Quality),
                 StringComparer.OrdinalIgnoreCase);
 
-        return Enumerable.Range(0, Strategies.Count)
+        var order = Enumerable.Range(0, Strategies.Count)
             .OrderByDescending(index => quality.TryGetValue(Strategies[index].Name, out var value) ? value : 0)
             .ThenBy(index => index)
             .ToList();
+        if (preferredIndex is { } preferred && preferred >= 0 && preferred < Strategies.Count)
+        {
+            order.Remove(preferred);
+            order.Insert(0, preferred);
+        }
+
+        return order;
     }
 
     public static string Directory => AppPaths.DesyncDirectory;
@@ -1140,32 +1149,97 @@ internal sealed class DesyncService : IDisposable
     public async Task<IReadOnlyList<DesyncProbeResult>> AutoTuneAsync(
         IProgress<string>? progress,
         CancellationToken cancellationToken,
-        bool blockQuic = false)
+        bool blockQuic = false,
+        int? preferredIndex = null)
     {
         var results = new List<DesyncProbeResult>();
-        var order = GetPriorityOrder();
+        var order = GetPriorityOrder(preferredIndex);
+        var videoFailures = 0;
+        var skipVideoProbe = false;
+        var ytDlpReady = YtDlpVideoProbe.IsInstalled;
+        if (!ytDlpReady)
+        {
+            try
+            {
+                ytDlpReady = await YtDlpVideoProbe.EnsureAsync(progress, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write("desync", "yt-dlp не подготовлен, проверяю видео только curl", exception);
+            }
+        }
+
         for (var position = 0; position < order.Count; position++)
         {
             var index = order[position];
             var strategy = Strategies[index];
-            // QUIC-фейк нельзя проверить обычным HTTPS-запросом — оставляем его для ручного выбора.
-            if (strategy.Tcp == DesyncTcpMode.None)
-            {
-                continue;
-            }
+            var quicOnly = strategy.Tcp == DesyncTcpMode.None;
+            // Стратегия «Только QUIC-фейк» не трогает TCP: её нельзя проверить HTTPS-запросом,
+            // поэтому проверяем QUIC-рукопожатие и всегда с выключенной блокировкой QUIC.
+            var strategyBlockQuic = quicOnly ? false : blockQuic;
 
             cancellationToken.ThrowIfCancellationRequested();
             progress?.Report($"Стратегия {position + 1}/{Strategies.Count}: «{strategy.Name}»…");
             try
             {
-                Start(strategy, progress, blockQuic);
+                Start(strategy, progress, strategyBlockQuic);
                 await Task.Delay(250, cancellationToken);
-                var result = await ProbeAsync(index, strategy.Name, cancellationToken);
+                DesyncProbeResult result;
                 VideoProbeDetail? video = null;
-                if (result.YoutubeOk)
+                if (quicOnly)
                 {
-                    video = await ProbeVideoDetailAsync(cancellationToken);
-                    result = result with { VideoOk = video.Ok };
+                    var youtubeQuic = await ProbeQuicAsync("www.youtube.com", cancellationToken);
+                    var videoQuic = youtubeQuic && await ProbeQuicAsync("redirector.googlevideo.com", cancellationToken);
+                    result = new DesyncProbeResult(
+                        index, strategy.Name, youtubeQuic ? 1 : 0, 1, 0,
+                        youtubeQuic, false, videoQuic, BlockQuic: false);
+                    AppLog.Write("desync",
+                        $"Автоподбор: {strategy.Name} — QUIC YouTube {(youtubeQuic ? "да" : "нет")}, " +
+                        $"googlevideo {(videoQuic ? "да" : "нет")}");
+                }
+                else
+                {
+                    result = await ProbeAsync(index, strategy.Name, cancellationToken) with { BlockQuic = blockQuic };
+                    if (result.YoutubeOk && !skipVideoProbe)
+                    {
+                        video = await ProbeVideoDetailAsync(cancellationToken);
+                        if (!video.Ok && ytDlpReady)
+                        {
+                            // yt-dlp сам получает подписанный адрес потока (n-sig/PO-токен)
+                            // и качает видео своим клиентом — curl/.NET на этом провайдере
+                            // получают 0 байт, хотя браузер и yt-dlp видео видят.
+                            var bytes = await YtDlpVideoProbe.MeasureAsync(cancellationToken);
+                            if (bytes >= VideoOkBytes)
+                            {
+                                video = new VideoProbeDetail(
+                                    true, true, null, 200, bytes,
+                                    $"yt-dlp: {bytes} байт видео");
+                            }
+                        }
+
+                        result = result with { VideoOk = video.Ok };
+                        if (!video.Ok && video.Code == 0 && video.Bytes == 0)
+                        {
+                            videoFailures++;
+                            // Если yt-dlp доступен, он проверяет видео надёжно — не пропускаем
+                            // остальные стратегии. Без него ограничиваем время перебора.
+                            if (!ytDlpReady && videoFailures >= VideoProbeFailuresBeforeSkip)
+                            {
+                                skipVideoProbe = true;
+                                AppLog.Write("desync",
+                                    "Автоподбор: видео не отдаётся curl, yt-dlp недоступен — " +
+                                    "дальше видео не проверяю, выбираю по странице и сервисам");
+                            }
+                        }
+                    }
+                    else if (skipVideoProbe)
+                    {
+                        Trace?.Invoke("автоподбор: проверка видео пропущена (узел не отдаёт поток)");
+                    }
                 }
 
                 results.Add(result);
@@ -1174,6 +1248,13 @@ internal sealed class DesyncService : IDisposable
                     $"(YouTube {(result.YoutubeOk ? "да" : "нет")}, Telegram {(result.TelegramOk ? "да" : "нет")}, " +
                     $"видео {(result.VideoOk ? "да" : "нет")}), {result.AverageMs} мс" +
                     (video is null ? "" : $" — {video.Detail}"));
+
+                // Видео — главная цель: нашли рабочую стратегию, дальше не перебираем.
+                if (result.VideoOk)
+                {
+                    progress?.Report($"Видео YouTube пошло — перебор остановлен на «{strategy.Name}»");
+                    break;
+                }
             }
             catch (OperationCanceledException)
             {
@@ -1182,7 +1263,8 @@ internal sealed class DesyncService : IDisposable
             catch (Exception exception)
             {
                 AppLog.Write("desync", $"Стратегия «{strategy.Name}» не запустилась", exception);
-                results.Add(new DesyncProbeResult(index, strategy.Name, 0, ProbeUrls.Length, 0, false, false));
+                results.Add(new DesyncProbeResult(index, strategy.Name, 0, ProbeUrls.Length, 0, false, false,
+                    BlockQuic: strategyBlockQuic));
             }
             finally
             {
@@ -1191,6 +1273,66 @@ internal sealed class DesyncService : IDisposable
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// Проверяет QUIC-рукопожатие (HTTP/3) до хоста. Обычный HTTPS-запрос это не видит,
+    /// поэтому стратегия «Только QUIC-фейк» раньше вообще не проверялась. QUIC нужен
+    /// для видео YouTube: браузер грузит страницу и поток по HTTP/3, а ТСПУ режет UDP.
+    /// </summary>
+    public static async Task<bool> ProbeQuicAsync(string host, CancellationToken cancellationToken)
+    {
+        IPAddress[] addresses;
+        try
+        {
+            addresses = await Dns.GetHostAddressesAsync(host, cancellationToken);
+        }
+        catch (Exception exception) when (exception is SocketException or OperationCanceledException)
+        {
+            return false;
+        }
+
+        var address = addresses.FirstOrDefault(item => item.AddressFamily == AddressFamily.InterNetwork)
+                      ?? addresses.FirstOrDefault();
+        if (address is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            limit.CancelAfter(TimeSpan.FromSeconds(6));
+            await using var connection = await QuicConnection.ConnectAsync(
+                new QuicClientConnectionOptions
+                {
+                    RemoteEndPoint = new IPEndPoint(address, 443),
+                    DefaultCloseErrorCode = 0,
+                    DefaultStreamErrorCode = 0,
+                    ClientAuthenticationOptions = new SslClientAuthenticationOptions
+                    {
+                        TargetHost = host,
+                        ApplicationProtocols = new List<SslApplicationProtocol>
+                        {
+                            new("h3"),
+                        },
+                    },
+                },
+                limit.Token);
+            // ConnectAsync завершается только после QUIC-рукопожатия (или бросает исключение).
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is QuicException or SocketException or IOException
+                                              or AuthenticationException or OperationCanceledException
+                                              or NotSupportedException or DllNotFoundException)
+        {
+            Trace?.Invoke($"quic {host}: {exception.GetType().Name} — {exception.Message}");
+            return false;
+        }
     }
 
     /// <summary>
@@ -1291,7 +1433,7 @@ internal sealed class DesyncService : IDisposable
         using var handler = new SocketsHttpHandler
         {
             UseProxy = false,
-            ConnectTimeout = TimeSpan.FromSeconds(5),
+            ConnectTimeout = TimeSpan.FromSeconds(4),
             AutomaticDecompression = DecompressionMethods.All,
         };
         // WinDivert-движок обрабатывает IPv4; не даём HttpClient уйти в IPv6,
@@ -1313,7 +1455,7 @@ internal sealed class DesyncService : IDisposable
             await socket.ConnectAsync(new IPEndPoint(address, context.DnsEndPoint.Port), ct);
             return new NetworkStream(socket, ownsSocket: true);
         };
-        using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(8) };
+        using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(6) };
 
         var ok = 0;
         var youtube = false;
@@ -1358,6 +1500,26 @@ internal sealed class DesyncService : IDisposable
 
     private static readonly string[] VideoIds = { "jNQXAC9IVRw", "aqz-KE-bpKQ" };
 
+    /// <summary>
+    /// Сколько байт видео-потока считается доказательством, что видео действительно идёт.
+    /// Порог 1 КБ (было) проходил даже тогда, когда ТСПУ «морозит» поток после первых
+    /// 20–30 пакетов: проба успевала скачать заголовки и объявляла видео рабочим.
+    /// </summary>
+    private const int VideoOkBytes = 64 * 1024;
+
+    /// <summary>
+    /// Сколько разных видео-хостов проверять. У разных форматов потока бывают разные
+    /// узлы googlevideo, и локальный GGC провайдера часто режется по IP, а другой узел
+    /// при этом отдаёт видео.
+    /// </summary>
+    private const int MaxVideoHosts = 2;
+
+    /// <summary>Предел на один видео-хост: рабочий узел отвечает за секунды.</summary>
+    private const int VideoHostMaxSeconds = 8;
+
+    /// <summary>Сколько подряд неудачных проверок видео достаточно, чтобы не тратить время дальше.</summary>
+    private const int VideoProbeFailuresBeforeSkip = 3;
+
     private static readonly Regex VideoUrlRegex = new(
         @"https://[^""\\\s]+googlevideo\.com/videoplayback[^""\\\s]+",
         RegexOptions.Compiled);
@@ -1401,37 +1563,64 @@ internal sealed class DesyncService : IDisposable
     internal static async Task<VideoProbeDetail> ProbeVideoDetailAsync(CancellationToken cancellationToken)
     {
         VideoProbeDetail? last = null;
+        var hostsLeft = MaxVideoHosts;
+        var triedHosts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var id in VideoIds)
         {
+            if (hostsLeft <= 0)
+            {
+                break;
+            }
+
             cancellationToken.ThrowIfCancellationRequested();
-            var page = await CurlTextAsync($"https://www.youtube.com/watch?v={id}", 25, cancellationToken);
+            var page = await CurlTextAsync($"https://www.youtube.com/watch?v={id}", 12, cancellationToken);
             if (string.IsNullOrEmpty(page))
             {
-                last = new VideoProbeDetail(false, false, null, 0, 0, "страница YouTube не открылась");
+                last ??= new VideoProbeDetail(false, false, null, 0, 0, "страница YouTube не открылась");
                 Trace?.Invoke("видео: страница не получена");
                 continue;
             }
 
-            var videoUrl = FindVideoUrl(page);
-            if (videoUrl is null)
+            // Берём все форматы из страницы и проверяем по одному адресу на каждый хост:
+            // первый в списке — обычно локальный GGC провайдера, и он может быть
+            // заблокирован по IP, хотя другой узел googlevideo отдаёт поток.
+            var hosts = FindVideoUrls(page)
+                .Select(url => (Url: url, Host: new Uri(url).Host))
+                .Where(item => !triedHosts.Contains(item.Host))
+                .GroupBy(item => item.Host, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .Take(hostsLeft)
+                .ToList();
+            if (hosts.Count == 0)
             {
-                var hasPlayer = page.Contains("ytInitialPlayerResponse", StringComparison.Ordinal);
-                last = new VideoProbeDetail(false, true, null, 0, 0,
-                    $"страница {page.Length} симв., videoplayback не найден" +
-                    (hasPlayer ? "" : " (нет ytInitialPlayerResponse)"));
-                Trace?.Invoke("видео: " + last.Detail);
+                if (last is null)
+                {
+                    var hasPlayer = page.Contains("ytInitialPlayerResponse", StringComparison.Ordinal);
+                    last = new VideoProbeDetail(false, true, null, 0, 0,
+                        $"страница {page.Length} симв., videoplayback не найден" +
+                        (hasPlayer ? "" : " (нет ytInitialPlayerResponse)"));
+                    Trace?.Invoke("видео: " + last.Detail);
+                }
+
                 continue;
             }
 
-            var host = new Uri(videoUrl).Host;
-            var (code, bytes) = await CurlRangeAsync(videoUrl, 25, cancellationToken);
-            var detail = $"страница {page.Length} симв., {host}: HTTP {code}, {bytes} байт";
-            last = new VideoProbeDetail(
-                code is 200 or 206 && bytes > 1000, true, host, code, bytes, detail, videoUrl);
-            Trace?.Invoke("видео: " + detail);
-            if (last.Ok)
+            foreach (var candidate in hosts)
             {
-                return last;
+                cancellationToken.ThrowIfCancellationRequested();
+                hostsLeft--;
+                triedHosts.Add(candidate.Host);
+                var (code, bytes) = await CurlRangeAsync(candidate.Url, VideoHostMaxSeconds, cancellationToken);
+                var ok = code is 200 or 206 && bytes >= VideoOkBytes;
+                var tried = MaxVideoHosts - hostsLeft;
+                var detail = $"страница {page.Length} симв., {candidate.Host}: HTTP {code}, {bytes} байт" +
+                             (MaxVideoHosts > 1 ? $" (хостов проверено: {tried})" : string.Empty);
+                last = new VideoProbeDetail(ok, true, candidate.Host, code, bytes, detail, candidate.Url);
+                Trace?.Invoke("видео: " + detail);
+                if (ok)
+                {
+                    return last;
+                }
             }
         }
 

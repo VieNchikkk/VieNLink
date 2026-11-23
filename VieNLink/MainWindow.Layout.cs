@@ -1,4 +1,6 @@
+using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Interop;
 using System.Windows.Threading;
 
 namespace VieNLink;
@@ -10,34 +12,39 @@ namespace VieNLink;
 /// </summary>
 public partial class MainWindow
 {
-    /// <summary>Оптимальная ширина окна: помещается на 1080p и не распахивается на весь экран.</summary>
-    private const double PreferredWindowWidth = 1240;
+    /// <summary>Фиксированный размер окна: подобран так, чтобы шапка и кнопки помещались.</summary>
+    private const double PreferredWindowWidth = 980;
 
-    /// <summary>Оптимальная высота окна: вкладки и таблицы видны без прокрутки на 1080p.</summary>
-    private const double PreferredWindowHeight = 820;
+    private const double PreferredWindowHeight = 680;
 
-    private const double MinimumWindowWidth = 820;
+    private const double MinimumWindowWidth = 953;
     private const double MinimumWindowHeight = 620;
 
     private readonly DispatcherTimer _placementSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
 
-    /// <summary>Подгоняет размер окна под экран, затем фиксирует его.</summary>
+    /// <summary>Подгоняет размер окна под экран и фиксирует его (только свернуть/восстановить).</summary>
     private void InitializeWindowGeometry()
     {
         var area = SystemParameters.WorkArea;
         var width = Math.Clamp(PreferredWindowWidth, MinimumWindowWidth, Math.Max(MinimumWindowWidth, area.Width - 40));
-        var height = Math.Clamp(PreferredWindowHeight, MinimumWindowHeight, Math.Max(MinimumWindowHeight, area.Height - 40));
+        var height = Math.Clamp(PreferredWindowHeight, MinimumWindowHeight, Math.Max(MinimumWindowHeight, area.Height - 60));
 
         // Размер в DIPs одинаков на любом масштабе экрана, поэтому окно не «прыгает» при смене DPI.
+        // Обычный размер фиксирован: растянуть окно нельзя, но свернуть и развернуть можно.
         Width = width;
         Height = height;
-        // Стартовый размер — рекомендуемый, но пользователь может свернуть,
-        // развернуть на весь экран и изменить размер окна.
-        MinWidth = MinimumWindowWidth;
-        MinHeight = MinimumWindowHeight;
+        MinWidth = width;
         MaxWidth = double.PositiveInfinity;
+        MinHeight = height;
         MaxHeight = double.PositiveInfinity;
         ResizeMode = ResizeMode.CanResize;
+        SourceInitialized += (_, _) =>
+        {
+            if (PresentationSource.FromVisual(this) is HwndSource source)
+            {
+                source.AddHook(HookWindowMessages);
+            }
+        };
 
         RestoreWindowPosition();
 
@@ -49,6 +56,51 @@ public partial class MainWindow
 
         LocationChanged += (_, _) => SchedulePlacementSave();
         StateChanged += (_, _) => SchedulePlacementSave();
+    }
+
+    private const int WmNcHitTest = 0x0084;
+    private const int HtBorder = 18;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetWindowRect(IntPtr hwnd, out NativeRect rect);
+
+    /// <summary>
+    /// Убирает рамку изменения размера: у краёв окна возвращаем HTBORDER, поэтому
+    /// растянуть его мышью нельзя. Кнопки «свернуть» и «развернуть» остаются рабочими —
+    /// они не попадают в 6-пиксельную зону края.
+    /// </summary>
+    private IntPtr HookWindowMessages(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled)
+    {
+        if (message != WmNcHitTest)
+        {
+            return IntPtr.Zero;
+        }
+
+        var x = (short)(lParam.ToInt64() & 0xFFFF);
+        var y = (short)((lParam.ToInt64() >> 16) & 0xFFFF);
+        if (!GetWindowRect(hwnd, out var rect))
+        {
+            return IntPtr.Zero;
+        }
+
+        const int grip = 6;
+        if (x < rect.Left + grip || x >= rect.Right - grip ||
+            y < rect.Top + grip || y >= rect.Bottom - grip)
+        {
+            handled = true;
+            return new IntPtr(HtBorder);
+        }
+
+        return IntPtr.Zero;
     }
 
     private void RestoreWindowPosition()
@@ -81,10 +133,12 @@ public partial class MainWindow
     /// <summary>Пишет положение главного окна в settings.json; вызывается и при выходе.</summary>
     internal void SaveWindowPlacement()
     {
-        if (double.IsFinite(Left) && double.IsFinite(Top))
+        var left = WindowState == WindowState.Normal ? Left : RestoreBounds.Left;
+        var top = WindowState == WindowState.Normal ? Top : RestoreBounds.Top;
+        if (double.IsFinite(left) && double.IsFinite(top))
         {
-            _settings.WindowLeft = Left;
-            _settings.WindowTop = Top;
+            _settings.WindowLeft = left;
+            _settings.WindowTop = top;
             JsonFileStore.Write(AppPaths.SettingsPath, _settings);
         }
     }

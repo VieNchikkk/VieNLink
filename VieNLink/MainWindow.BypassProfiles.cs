@@ -129,12 +129,13 @@ public partial class MainWindow
         BlockQuic = blockQuic,
         Quality = BypassProfileStore.Score(
             result.Ok, result.Total, result.AverageMs,
-            result.YoutubeOk, result.TelegramOk, video: false, result.DiscordOk),
+            result.YoutubeOk, result.TelegramOk, result.VideoOk, result.DiscordOk),
         Ok = result.Ok,
         Total = result.Total,
         YoutubeOk = result.YoutubeOk,
         TelegramOk = result.TelegramOk,
         DiscordOk = result.DiscordOk,
+        VideoOk = result.VideoOk,
         AverageMs = result.AverageMs,
     };
 

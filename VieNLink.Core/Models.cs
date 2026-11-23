@@ -728,6 +728,12 @@ internal sealed class AppSettings
     /// <summary>Выбранная стратегия zapret; -1 — ещё не подбиралась.</summary>
     public int ZapretPreset { get; set; } = -1;
 
+    /// <summary>
+    /// Пресет zapret выбран вручную: при включении не заменять его сохранённым профилем
+    /// автоподбора.
+    /// </summary>
+    public bool ZapretManual { get; set; }
+
     /// <summary>Добавлять обход UDP для игр: QUIC, STUN, WireGuard.</summary>
     public bool ZapretGameMode { get; set; }
 
@@ -779,6 +785,12 @@ internal sealed class AppSettings
 
     /// <summary>Блокировать QUIC (UDP/443) в своём обходе, чтобы видео YouTube шло по TCP.</summary>
     public bool DesyncBlockQuic { get; set; } = true;
+
+    /// <summary>
+    /// Стратегия собственного обхода DPI выбрана вручную: при включении не заменять её
+    /// сохранённым профилем автоподбора.
+    /// </summary>
+    public bool DesyncManual { get; set; }
 
     /// <summary>Выбранный режим TUN-обхода (StreamFragmentMode): разрез SNI, 1 байт, перестановка, мультиразрез.</summary>
     public int TunBypassStrategy { get; set; }

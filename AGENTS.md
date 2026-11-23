@@ -57,10 +57,18 @@ CoreLog, TrayState, ProductFeatures, BypassProfiles, Layout); сервисы `Si
   в пробное ядро попадают только отвечающие адреса; UDP-протоколы не трогаются.
   Проверка через уже поднятый прокси (health-check, проверка после подключения) — только повод
   переключиться; `Working`/`FailCount` меняет лишь прямая проверка в скрытом ядре.
-- Одно правило показа и выбора: `NodeAvailability.IsUsable` — статус `Working`, есть задержка,
-  проверка не старше `NodeLimits.WorkingRecheckMinutes` (5 мин), фильтр «Только мои».
-  Фоновая проверка перепроверяет рабочие с истекающим окном (`RecheckCutoffUtc`), поэтому
-  счётчики не врут. Счётчики в UI обновляются раз в минуту.
+- Показ и выбор (23.11.2026): счётчики в шапке — `NodeAvailability.IsCountable` (статус
+  `Working`, последняя удачная проверка прошла, подтверждённого провала не было, результат
+  не старше `NodeLimits.WorkingDeadAfterMinutes` — 60 мин, фильтр «Только мои»); выбор для
+  подключения — `NodeAvailability.IsUsable` (то же + проверка не старше
+  `NodeLimits.WorkingRecheckMinutes`, 5 мин). Счётчики не обнуляются по таймеру 5 минут:
+  партия перепроверки занимает минуты, и значки иначе падали бы в ноль на каждой проверке;
+  уменьшает их только подтверждённый провал. Если свежих нет, кнопка сервиса проверяет
+  серверы, которые показывают счётчики, скрытым ядром на месте (ПК —
+  `FindNodeForServiceAsync`, Android — `PickVerifiedAsync`), поэтому число на значке и
+  результат нажатия не расходятся. Фоновая проверка перепроверяет рабочие с истекающим
+  окном (`RecheckCutoffUtc`). Счётчики в UI: ПК — каждые 3 с, Android — каждые 3 с и по
+  ходу партии (`:probe` пишет `probe-live.json`, основной процесс применяет сразу).
 - Переключение (`NodeFailover.Rank`): сначала серверы выбранного сервиса («Универсальный»,
   YouTube, Telegram, Discord), затем лучшие из других. Сервис сохраняется при сбое и на кнопке
   «Сменить сервер». Новый сервер выбранного сервиса встаёт первым; если работаем на запасном
@@ -102,6 +110,14 @@ CoreLog, TrayState, ProductFeatures, BypassProfiles, Layout); сервисы `Si
   Все взаимоисключающие с прокси-узлом и друг с другом; требуют админа. В TUN-обходе обязательно
   правило `process_name: VieNLink.exe → direct` (иначе петля), DNS/`resolve` — `ipv4_only`.
   Удачные конфиги копятся в `bypass-profiles.json` и применяются первыми.
+  Автоподбор проверяет видео по нескольким хостам googlevideo (до 2) и требует ≥64 КБ
+  потока; если curl/HttpClient получают 0 (YouTube подписывает поток в JS, n-sig/PO-токен),
+  вызывается **yt-dlp** (`YtDlpVideoProbe`, клиент `android`), который качает реальные
+  байты. `yt-dlp.exe` скачивается один раз в `%LOCALAPPDATA%\VieNLink`. При ≥64 КБ
+  стратегия получает `VideoOk`, перебор останавливается, профиль пишется с Quality 100.
+  Список стратегий — кликабельные плашки (`StrategyRadioButton`), ручной выбор сохраняется
+  (`DesyncManual`); «Только QUIC-фейк» проверяется QUIC-рукопожатием. Проверено
+  23.11.2026: видео идёт по TCP со стратегией №2, yt-dlp скачал 629 172 байта.
 - TUN на Windows требует `wintun.dll` и админа; системный прокси — WinINET (реестр +
   `InternetSetOption`), прежние настройки в `proxy-backup.json`, восстановление при старте.
 - `AppSettings.KillSwitch`: при падении ядра прокси не снимается (трафик не уходит напрямую).
@@ -183,6 +199,7 @@ dotnet run --project VieNLink.SelfTest -- checkconfigs  # все вариант�
 dotnet run --project VieNLink.SelfTest -- cache|sources
 dotnet run --project VieNLink.SelfTest -- statuslogic
 dotnet run --project VieNLink.SelfTest -- hiddenprobe 5 # скрытая проверка рабочих серверов
+dotnet run --project VieNLink.SelfTest -- videoprobe   # проба видео автоподбора (нужен админ)
 dotnet run --project VieNLink.SelfTest -- liveness 60 <url>
 dotnet run --project VieNLink.SelfTest -- mtprotocheck 40
 ```

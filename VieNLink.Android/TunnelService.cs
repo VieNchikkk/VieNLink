@@ -34,9 +34,6 @@ public sealed class TunnelService : VpnService
     public const string ActionStart = "com.vienlink.app.START";
     public const string ActionStop = "com.vienlink.app.STOP";
 
-    /// <summary>Выбрать лучший проверенный сервер и переключиться без пересоздания TUN.</summary>
-    public const string ActionBest = "com.vienlink.app.BEST";
-
     /// <summary>Автозапуск (загрузка, плитка, восстановление): конфиг собирается внутри службы.</summary>
     public const string ActionAuto = "com.vienlink.app.AUTO";
 
@@ -169,12 +166,6 @@ public sealed class TunnelService : VpnService
             return RestoreAfterSystemRestart()
                 ? StartCommandResult.Sticky
                 : StartCommandResult.NotSticky;
-        }
-
-        if (intent.Action == ActionBest)
-        {
-            _ = SwitchToBestAsync();
-            return StartCommandResult.Sticky;
         }
 
         if (intent?.Action == ActionBypass)
@@ -406,12 +397,15 @@ public sealed class TunnelService : VpnService
             builder.SetContentIntent(open);
         }
 
-        var best = PendingIntent.GetService(
-            this, 4, new Intent(this, typeof(TunnelService)).SetAction(ActionBest),
+        var next = PendingIntent.GetActivity(
+            this, 4,
+            new Intent(this, typeof(MainActivity))
+                .PutExtra("nextNode", true)
+                .AddFlags(ActivityFlags.NewTask | ActivityFlags.SingleTop),
             PendingIntentFlags.Immutable | PendingIntentFlags.UpdateCurrent);
-        if (best is not null)
+        if (next is not null)
         {
-            builder.AddAction(0, "Лучший", best);
+            builder.AddAction(0, "Следующий", next);
         }
 
         var nodes = PendingIntent.GetActivity(
@@ -469,47 +463,6 @@ public sealed class TunnelService : VpnService
     {
         var name = NodeDisplay.Name(node);
         return name.Length > 42 ? name[..41] + "…" : name;
-    }
-
-    /// <summary>Действие «Лучший» в уведомлении: проверенный сервер с максимальным доступом.</summary>
-    private async Task SwitchToBestAsync()
-    {
-        try
-        {
-            NodeStore.EnsureLoaded();
-            var best = NodeStore.SelectBestWorking();
-            if (best is null)
-            {
-                AppLog.Write("health", "Кнопка «Лучший»: живых проверенных серверов нет");
-                return;
-            }
-
-            if (State == TunnelState.Running && CoreRuntime.IsRunning &&
-                CoreRuntime.LoadedTags.Contains(best.Tag))
-            {
-                using var api = new ClashApiClient(CoreRuntime.ApiPort, CoreRuntime.ApiSecret);
-                await api.SelectAsync(SingBoxConfigBuilder.SelectorTag, best.Tag, CancellationToken.None)
-                    .ConfigureAwait(false);
-                UpdateNodeLabel(best.DisplayDelay);
-                AppLog.Write("health", "Уведомление: выбран лучший сервер " + best.Name);
-                return;
-            }
-
-            var config = NodeStore.BuildTunnelConfig(out var error, preferWorking: true);
-            if (config is null)
-            {
-                AppLog.Write("health", "Кнопка «Лучший»: " + error);
-                return;
-            }
-
-            StartCore(config);
-            UpdateNodeLabel(NodeStore.Selected?.DisplayDelay);
-            AppLog.Write("health", "Уведомление: туннель пересобран на лучший сервер");
-        }
-        catch (Exception exception)
-        {
-            AppLog.Write("health", "Кнопка «Лучший» не сработала", exception);
-        }
     }
 
     /// <summary>

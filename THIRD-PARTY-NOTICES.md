@@ -14,6 +14,7 @@ VieNLink распространяется под **GPL-3.0** (см. `LICENSE`). 
 | **zapret** (`winws.exe` и вспомогательные файлы) | «Обход запрет» | MIT, © 2016–2024 bol-van | **подтверждено 21.11.2026** (`docs/LICENSE.txt` в `bol-van/zapret`) | включить текст MIT с копирайтом (ниже); исходники — `https://github.com/bol-van/zapret` |
 | **zapret-win-bundle** (откуда берутся готовые файлы) | источник `winws.exe`, `cygwin1.dll`, WinDivert и фильтров | не отдельная лицензия: набор zapret + минимальный Cygwin + WinDivert | подтверждено | у каждого файла своя лицензия; ниже перечислено, что именно скачивается |
 | **Cygwin runtime** (`cygwin1.dll`) | нужен `winws.exe` (сборка zapret под Cygwin) | LGPL-3.0-or-later (Cygwin API library, `https://cygwin.com/licensing.html`) | подтверждено | поставлять отдельной неизменённой DLL; исходники — `https://cygwin.com/` |
+| **yt-dlp** (`yt-dlp.exe`) | проверка видео YouTube в «Своём обходе DPI» (получает подписанный адрес потока) | Unlicense (yt-dlp), PSF-2.0 (Python runtime) и лицензии встроенных библиотек | подтверждено 23.11.2026 | не модифицировать exe; указать ссылки на `https://github.com/yt-dlp/yt-dlp` и тексты лицензий; файл скачивается с GitHub при первом подборе |
 | **.NET 10 / WPF / WinForms** | приложение Windows | MIT | подтверждено | текст MIT в поставке не обязателен, но желателен |
 | **AndroidX / .NET for Android** | приложение Android | Apache-2.0 / MIT | подтверждено | сохранить уведомления об авторстве |
 | **MAUI или Avalonia** (если появятся) | UI Android | MIT | — | добавить в этот список при подключении |
@@ -33,6 +34,16 @@ VieNLink распространяется под **GPL-3.0** (см. `LICENSE`). 
 Если релиз собирается с папкой `zapret\` (параметр `publish-release.ps1`), все эти файлы
 попадают к пользователю; полный текст GPL-3.0 лежит в `LICENSE`, текст MIT для zapret —
 ниже в этом файле.
+
+## yt-dlp (проверка видео)
+
+`YtDlpVideoProbe` при первом автоподборе скачивает `yt-dlp.exe` с GitHub
+(`https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe`, зеркала
+`ghfast.top` и `gh-proxy.com`) в `%LOCALAPPDATA%\VieNLink\yt-dlp.exe`. Он вызывается
+с `--extractor-args youtube:player_client=android` и скачивает короткий ролик в худшем
+качестве (`--max-filesize 6M`) только чтобы убедиться, что видео реально идёт через обход.
+ffmpeg не требуется. Лицензия yt-dlp — Unlicense; внутри exe — Python (PSF-2.0) и
+библиотеки зависимостей, их уведомления есть в дистрибутиве yt-dlp. Файл не изменяется.
 
 ## Текст лицензии zapret (MIT)
 

@@ -192,6 +192,12 @@ internal static class Program
             case "videomulti":
                 await RunVideoMultiAsync();
                 break;
+            case "videoprobe":
+                await RunDesyncVideoProbeAsync();
+                break;
+            case "quicprobe":
+                await RunQuicProbeAsync();
+                break;
             case "zapretvideo":
                 await RunZapretVideoAsync();
                 break;
@@ -1342,6 +1348,103 @@ internal static class Program
             }
 
             Check(worked > 0, "хотя бы один видео-хост отдаёт поток");
+        }
+        finally
+        {
+            service.Stop();
+        }
+    }
+
+    /// <summary>
+    /// Проверяет именно `ProbeVideoDetailAsync` (то, что использует автоподбор):
+    /// страница YouTube, несколько хостов googlevideo, порог 64 КБ. Нужен админ.
+    /// </summary>
+    private static async Task RunDesyncVideoProbeAsync()
+    {
+        Console.WriteLine("Проба видео автоподбора (ProbeVideoDetailAsync, нужен админ):");
+        var principal = new System.Security.Principal.WindowsPrincipal(
+            System.Security.Principal.WindowsIdentity.GetCurrent());
+        if (!principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator))
+        {
+            Check(false, "нужны права администратора");
+            return;
+        }
+
+        DesyncService.Trace = line => Console.WriteLine("    [dpi] " + line);
+        var strategy = DesyncService.Strategies.First(item =>
+            item.Tcp == DesyncTcpMode.FakeMultiDisorder && item.FakeTtl == 128);
+        using var service = new DesyncService();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        try
+        {
+            service.Start(strategy, null, blockQuic: true);
+            await Task.Delay(300, timeout.Token);
+            var detail = await DesyncService.ProbeVideoDetailAsync(timeout.Token);
+            Console.WriteLine($"  видео {(detail.Ok ? "идёт" : "не идёт")}: {detail.Detail}");
+            Console.WriteLine($"  страница: {(detail.PageOk ? "открылась" : "нет")}, " +
+                              $"хост: {detail.Host ?? "—"}, HTTP {detail.Code}, {detail.Bytes} байт");
+        }
+        catch (Exception exception)
+        {
+            Check(false, "проба видео — " + Describe(exception));
+        }
+        finally
+        {
+            DesyncService.Trace = null;
+            service.Stop();
+        }
+    }
+
+    /// <summary>
+    /// Проверяет QUIC-рукопожатие (HTTP/3) напрямую и через стратегию «Только QUIC-фейк»:
+    /// именно она нужна для видео YouTube, когда TCP открывается, а поток режется.
+    /// Нужен админ (WinDivert).
+    /// </summary>
+    private static async Task RunQuicProbeAsync()
+    {
+        Console.WriteLine("QUIC (HTTP/3) через свой обход DPI (нужен админ):");
+        var principal = new System.Security.Principal.WindowsPrincipal(
+            System.Security.Principal.WindowsIdentity.GetCurrent());
+        if (!principal.IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator))
+        {
+            Check(false, "нужны права администратора");
+            return;
+        }
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        foreach (var host in new[] { "www.youtube.com", "www.google.com", "redirector.googlevideo.com" })
+        {
+            Console.WriteLine($"  напрямую {host}: {(await DesyncService.ProbeQuicAsync(host, timeout.Token) ? "да" : "нет")}");
+        }
+
+        using var service = new DesyncService();
+        try
+        {
+            foreach (var ttl in new byte[] { 2, 4, 8, 64, 128 })
+            {
+                var strategy = new DesyncStrategy(
+                    $"Только QUIC-фейк, TTL {ttl}", DesyncTcpMode.None, true, "тест", ttl);
+                service.Start(strategy, null, blockQuic: false);
+                await Task.Delay(300, timeout.Token);
+                var youtube = await DesyncService.ProbeQuicAsync("www.youtube.com", timeout.Token);
+                var google = await DesyncService.ProbeQuicAsync("www.google.com", timeout.Token);
+                var video = google && await DesyncService.ProbeQuicAsync("redirector.googlevideo.com", timeout.Token);
+                Console.WriteLine($"  TTL {ttl,3}: YouTube {(youtube ? "да" : "нет")}, " +
+                                  $"Google {(google ? "да" : "нет")}, googlevideo {(video ? "да" : "нет")} " +
+                                  $"(фейков {service.FakePackets})");
+                service.Stop();
+                if (youtube || google)
+                {
+                    Check(true, "QUIC-фейк открывает HTTP/3");
+                    return;
+                }
+            }
+
+            Check(false, "QUIC-фейк не открыл HTTP/3 ни с одним TTL");
+        }
+        catch (Exception exception)
+        {
+            Check(false, "QUIC-фейк — " + Describe(exception));
         }
         finally
         {
@@ -2699,8 +2802,8 @@ internal static class Program
 
         var now = DateTime.UtcNow;
 
-        // 4. Значки сервисов показывают только свежие проверки: устаревший кэш
-        // не должен обещать узел, который кнопка уже не найдёт.
+        // 4. Выбор для подключения — только свежая проверка: устаревший кэш
+        // не должен считаться доступным для подключения.
         var freshNode = new ProxyNode
         {
             Status = NodeStatus.Working,
@@ -2734,6 +2837,38 @@ internal static class Program
         };
         Check(!NodeAvailability.IsUsable(unknownWithDelay, NodeLimits.WorkingRecheckMinutes, onlyMine: false, now),
             "непроверенный узел с остатком задержки не считается рабочим");
+
+        // 5. Счётчики в шапке считают мягче выбора: результат не стирается по таймеру
+        // 5 минут (иначе значки падают в ноль на каждой перепроверке), но подтверждённый
+        // провал и запись старше часа из счётчиков убирают.
+        var staleButWorking = new ProxyNode
+        {
+            Status = NodeStatus.Working,
+            DelayMs = 120,
+            CheckedAtUtc = now.AddMinutes(-12),
+            YoutubeOk = true,
+        };
+        Check(NodeAvailability.IsCountable(staleButWorking, onlyMine: false, now),
+            "счётчик видит рабочего с проверкой 12 минут назад");
+        Check(!NodeAvailability.IsCountable(
+                new ProxyNode
+                {
+                    Status = NodeStatus.Working,
+                    DelayMs = 120,
+                    CheckedAtUtc = now,
+                    FailCount = 1,
+                },
+                onlyMine: false, now),
+            "подтверждённый провал убирает узел из счётчиков");
+        Check(!NodeAvailability.IsCountable(
+                new ProxyNode
+                {
+                    Status = NodeStatus.Working,
+                    DelayMs = 120,
+                    CheckedAtUtc = now.AddHours(-2),
+                },
+                onlyMine: false, now),
+            "результат старше часа не показывается в счётчиках");
 
         // Android меряет задержку только по Cloudflare: узел, открывший лишь YouTube,
         // обязан остаться доступным для кнопки YouTube.

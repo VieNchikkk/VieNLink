@@ -115,6 +115,11 @@ public sealed partial class MainActivity : BaseActivity
         HandleDebugCommands(Intent);
         SelectTab(_tab);
 
+        if (Intent?.GetBooleanExtra("nextNode", false) == true)
+        {
+            _ = SwitchToNextNodeAsync();
+        }
+
         // Автопроверка обновлений при запуске: релиз с более высокой версией
         // скачивается и предлагается к установке.
         UpdateCenter.StartLaunchCheck(this, Intent?.GetBooleanExtra("checkUpdate", false) == true);
@@ -148,6 +153,11 @@ public sealed partial class MainActivity : BaseActivity
             UpdateCenter.StartLaunchCheck(this, force: true);
         }
 
+        if (intent?.GetBooleanExtra("nextNode", false) == true)
+        {
+            _ = SwitchToNextNodeAsync();
+        }
+
         RefreshHeader();
     }
 
@@ -155,9 +165,16 @@ public sealed partial class MainActivity : BaseActivity
     {
         base.OnResume();
         // Настройки открываются отдельным экраном с четвёртой вкладки; после возврата
-        // снимаем защиту, чтобы вкладка снова срабатывала, и показываем прежнюю.
+        // снимаем защиту и показываем прежнюю вкладку. В остальных случаях страницу
+        // не пересобираем: при возврате из фона SelectTab заново строил весь экран
+        // (шапку и список), и приложение заметно зависало на несколько секунд.
+        var returningFromSettings = _openingSettings;
         _openingSettings = false;
-        SelectTab(_tab);
+        if (returningFromSettings)
+        {
+            SelectTab(_tab);
+        }
+
         RefreshHeader();
         EnsureTrafficMonitor();
         _ = EnsureFreshCountersAsync();
@@ -450,35 +467,38 @@ public sealed partial class MainActivity : BaseActivity
         card.AddView(actions);
 
         // «Авто-проверка» — та же кнопка, которую приложение нажимает само:
-        // фоновая проверка серверов и отсева. По умолчанию включена и активируется
-        // при запуске; нажатие выключает или снова включает.
-        var autoRow = Ui.Row(this);
-        autoRow.SetPadding(0, Ui.Dp(this, 8), 0, 0);
+        // фоновая проверка серверов и отсева. Раньше стояла отдельной строкой;
+        // теперь делит ряд с «Поделиться», а «Сменить сервер» — на всю ширину ниже.
+        _actionsRow2 = Ui.Row(this);
+        _actionsRow2.SetPadding(0, Ui.Dp(this, 8), 0, 0);
         _autoButton = Ui.Pill(this, P, "Авто-проверка: вкл", UiButtonKind.Secondary,
             ToggleAutoCheck, Resource.Drawable.ic_refresh);
-        CompactWideHeaderButton(_autoButton);
-        _autoButton.TextSize = 12.5f;
-        autoRow.AddView(_autoButton, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        card.AddView(autoRow);
-
-        _actionsRow2 = Ui.Row(this);
-        _actionsRow2.SetPadding(0, Ui.Dp(this, 10), 0, 0);
-        _nextNodeButton = Ui.Pill(this, P, "Сменить сервер", UiButtonKind.Accent,
-            () => _ = SwitchToNextNodeAsync(), Resource.Drawable.ic_refresh);
         _shareButton = Ui.Pill(this, P, "Поделиться сервером", UiButtonKind.Secondary,
             ShareCurrentNode, Resource.Drawable.ic_export);
-        CompactWrapHeaderButton(_nextNodeButton);
+        CompactWrapHeaderButton(_autoButton);
         CompactWrapHeaderButton(_shareButton);
-        // Оформление: главное действие — зелёный градиент, смена сервера — синяя,
-        // «Поделиться» — фиолетовая; значки в тон текста.
+        _autoButton.TextSize = 12f;
+        // Оформление: главное действие — зелёный градиент, «Поделиться» — фиолетовая,
+        // авто-проверка — бирюзовая; значки в тон текста.
         StyleHeaderAction(_findButton, P.Accent, filled: true);
-        StyleHeaderAction(_nextNodeButton, P.Telegram, filled: false);
+        StyleHeaderAction(_autoButton, P.Universal, filled: false);
         StyleHeaderAction(_shareButton, P.Discord, filled: false);
-        _actionsRow2.AddView(_nextNodeButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        _actionsRow2.AddView(_autoButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         _actionsRow2.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 8), 1));
         _actionsRow2.AddView(_shareButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         card.AddView(_actionsRow2);
+
+        // «Сменить сервер» — отдельной строкой на всю ширину: важное действие,
+        // раньше делило ряд с «Поделиться».
+        var nextRow = Ui.Row(this);
+        nextRow.SetPadding(0, Ui.Dp(this, 8), 0, 0);
+        _nextNodeButton = Ui.Pill(this, P, "Сменить сервер", UiButtonKind.Accent,
+            () => _ = SwitchToNextNodeAsync(), Resource.Drawable.ic_refresh);
+        CompactWideHeaderButton(_nextNodeButton);
+        StyleHeaderAction(_nextNodeButton, P.Telegram, filled: false);
+        nextRow.AddView(_nextNodeButton, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        card.AddView(nextRow);
 
         // Ручное добавление — отдельной строкой под двумя кнопками: в тесном ряду
         // из трёх подпись «Поделиться сервером» ломалась посреди слова.
@@ -669,8 +689,8 @@ public sealed partial class MainActivity : BaseActivity
 
         if (_nextNodeButton is not null)
         {
-            // «Сменить сервер» и «Поделиться» стоят рядом одной строкой; без подключения
-            // кнопка неактивна и приглушена, чтобы не выглядела доступной.
+            // «Сменить сервер» — отдельная кнопка на всю ширину; без подключения
+            // она неактивна и приглушена, чтобы не выглядела доступной.
             _nextNodeButton.Visibility = ViewStates.Visible;
             _nextNodeButton.Enabled = running && !_connecting;
             _nextNodeButton.Alpha = _nextNodeButton.Enabled ? 1f : 0.55f;
@@ -2115,11 +2135,11 @@ public sealed partial class MainActivity : BaseActivity
 
     private void ScheduleMaintenance()
     {
-        Maintenance.EnsureScheduled(this);
         _ = Task.Run(async () =>
         {
             try
             {
+                Maintenance.EnsureScheduled(this);
                 await Maintenance.RunAsync(this);
                 await Task.Run(() => ProbeScheduler.Start(this));
             }

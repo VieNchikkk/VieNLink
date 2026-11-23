@@ -6,7 +6,7 @@ using Android.Widget;
 namespace VieNLink.Mobile;
 
 /// <summary>
-/// Виджет главного экрана: состояние туннеля и две кнопки — «Лучший» и «Отключить».
+/// Виджет главного экрана: состояние туннеля и две кнопки — «Следующий» и «Отключить».
 /// Обновляется из службы при подключении, переключении сервера и остановке.
 /// </summary>
 [BroadcastReceiver(Name = "com.vienlink.app.TunnelWidget", Exported = false)]
@@ -73,13 +73,15 @@ public sealed class TunnelWidget : AppWidgetProvider
                     : "VPN выключен";
         views.SetTextViewText(Resource.Id.widget_status, status);
 
-        var bestIntent = PendingIntent.GetService(
+        var nextIntent = PendingIntent.GetActivity(
             context, 10,
-            new Intent(context, typeof(TunnelService)).SetAction(TunnelService.ActionBest),
+            new Intent(context, typeof(MainActivity))
+                .PutExtra("nextNode", true)
+                .AddFlags(ActivityFlags.NewTask | ActivityFlags.SingleTop),
             PendingIntentFlags.Immutable | PendingIntentFlags.UpdateCurrent);
-        if (bestIntent is not null)
+        if (nextIntent is not null)
         {
-            views.SetOnClickPendingIntent(Resource.Id.widget_best, bestIntent);
+            views.SetOnClickPendingIntent(Resource.Id.widget_best, nextIntent);
         }
 
         var stopIntent = PendingIntent.GetService(
