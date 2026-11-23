@@ -792,6 +792,9 @@ internal sealed class AppSettings
     /// <summary>Домены, которые не должны идти через прокси (иначе рвётся связь с рабочими сервисами).</summary>
     public string ProxyBypass { get; set; } = "*.deepseek.com;localhost;127.0.0.1;::1";
 
+    /// <summary>Автоматически перепроверять отсев раз в 5 минут и возвращать рабочие серверы.</summary>
+    public bool AutoRecheckRejected { get; set; } = true;
+
     /// <summary>Проверять задержки сразу после обновления списков.</summary>
     public bool TestAfterRefresh { get; set; } = true;
 

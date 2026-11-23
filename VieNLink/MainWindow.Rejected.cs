@@ -23,6 +23,7 @@ public partial class MainWindow
         }
 
         ReloadRejected();
+        UpdateRejectedAutoButton();
     }
 
     private void ReloadRejected()
@@ -180,8 +181,14 @@ public partial class MainWindow
             var recovered = nodes
                 .Where(node => node.Status == NodeStatus.Working)
                 .ToList();
-            // Ничего не возвращаем автоматически: пользователь сам нажмёт
-            // «Вернуть (В рабочие)». Иначе сервер снова уедет в отсев после проверки.
+
+            // Успешные сразу возвращаем в рабочие: это та же проверка, что и кнопка,
+            // а не отдельное ручное решение. Остальные остаются в отсеве.
+            if (recovered.Count > 0)
+            {
+                RestoreRejectedNodes(recovered, "Перепроверка отсева",
+                    $"В рабочие возвращено: {recovered.Count}");
+            }
 
             var remaining = RejectedNodeStore.Load();
             var testedById = nodes.ToDictionary(node => node.Id, StringComparer.OrdinalIgnoreCase);
@@ -198,9 +205,9 @@ public partial class MainWindow
             ReloadRejected();
             SetStatus("Перепроверка отсева",
                 $"Рабочих: {recovered.Count} из {rows.Count}, доменов: {summary.BestDomains}. " +
-                "Нажмите «Вернуть (В рабочие)», чтобы перенести сервер в список.");
+                $"Возвращено в рабочие: {recovered.Count}.");
             AppendLog($"Отсев: перепроверено {rows.Count}, рабочих {recovered.Count}, " +
-                      "автоматически в рабочие не возвращаются");
+                      $"возвращено в рабочие {recovered.Count}");
         }
         catch (OperationCanceledException)
         {
@@ -214,6 +221,28 @@ public partial class MainWindow
         {
             EndOperation();
         }
+    }
+
+    /// <summary>Кнопка «Авто-перепроверка» на вкладке отсева.</summary>
+    private void OnToggleRejectedAutoClick(object sender, RoutedEventArgs e)
+    {
+        _settings.AutoRecheckRejected = !_settings.AutoRecheckRejected;
+        SaveSettings();
+        UpdateRejectedAutoButton();
+        SetStatus("Авто-перепроверка отсева",
+            _settings.AutoRecheckRejected ? "включена — раз в 5 минут" : "выключена");
+    }
+
+    private void UpdateRejectedAutoButton()
+    {
+        if (RejectedAutoButton is null)
+        {
+            return;
+        }
+
+        RejectedAutoButton.Content = _settings.AutoRecheckRejected
+            ? "● Авто-перепроверка: вкл"
+            : "○ Авто-перепроверка: выкл";
     }
 
     private async void OnRejectConnectClick(object sender, RoutedEventArgs e)

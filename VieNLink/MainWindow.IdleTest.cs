@@ -16,6 +16,9 @@ public partial class MainWindow
 
     private readonly HiddenProbeService _probe = new();
 
+    /// <summary>Автоперепроверка отсева раз в 5 минут — тем же путём, что и кнопка.</summary>
+    private DateTime _lastRejectedAutoCheckUtc = DateTime.MinValue;
+
     /// <summary>
     /// Фоновая проверка: работает и в простое, и во время работы. Серверы проверяются
     /// через скрытое ядро на отдельных портах, поэтому не мешают текущему подключению.
@@ -34,6 +37,12 @@ public partial class MainWindow
             PruneExpiredMtProto();
             await AutoCheckMtProtoAsync();
             await AutoCollectMtProtoAsync();
+
+            // Отсев — тем же путём, что и кнопка «Перепроверить всё», раз в 5 минут.
+            if (!_idleTesting)
+            {
+                await AutoRecheckRejectedAsync();
+            }
 
         if (_idleTesting || !_settings.IdleTestEnabled)
         {
@@ -87,6 +96,41 @@ public partial class MainWindow
             row.Node.Status == NodeStatus.Working &&
             (row.Node.CheckedAtUtc is null || row.Node.CheckedAtUtc < cutoff) &&
             NodeAvailability.RetryAllowed(row.Node, nowUtc));
+    }
+
+    /// <summary>
+    /// Автоперепроверка отсева: раз в 5 минут берём все записи и прогоняем тем же
+    /// RecheckRejectedAsync, что и кнопка «Перепроверить всё». Успешные возвращаются
+    /// в рабочие, остальные остаются. При выключенной автоматике/занятости — пропуск.
+    /// </summary>
+    private async Task AutoRecheckRejectedAsync()
+    {
+        if (!_settings.AutoRecheckRejected ||
+            _settings.AutomationPaused ||
+            !_settings.IdleTestEnabled)
+        {
+            return;
+        }
+
+        if (DateTime.UtcNow - _lastRejectedAutoCheckUtc < TimeSpan.FromMinutes(5))
+        {
+            return;
+        }
+
+        _lastRejectedAutoCheckUtc = DateTime.UtcNow;
+        if (_busy || _probe.IsRunning)
+        {
+            return;
+        }
+
+        var items = RejectedNodeStore.Load();
+        if (items.Count == 0)
+        {
+            return;
+        }
+
+        var rows = items.Select(item => new RejectedNodeRow(item)).ToList();
+        await RecheckRejectedAsync(rows);
     }
 
     private async Task RunIdleTestAsync(bool userIdle, bool searchNew = true)

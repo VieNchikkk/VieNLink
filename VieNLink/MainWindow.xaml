@@ -1367,6 +1367,10 @@
                                     ToolTip="Вернуть выбранные серверы в рабочие без проверки" />
                         </StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                            <Button x:Name="RejectedAutoButton" Content="● Авто-перепроверка: вкл"
+                                    Style="{StaticResource AccentSmallButton}" Margin="0,0,8,0"
+                                    Click="OnToggleRejectedAutoClick"
+                                    ToolTip="Автоматически перепроверять отсев раз в 5 минут" />
                             <Button Content="Перепроверить выбранный" Style="{StaticResource AccentSmallButton}"
                                     Margin="0,0,8,0" Click="OnRecheckRejectedClick"
                                     ToolTip="Проверить выбранные серверы через скрытое ядро и вернуть рабочие в список" />
