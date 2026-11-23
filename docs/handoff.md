@@ -23,8 +23,10 @@
 - Проверки: `dotnet build VieNLink\VieNLink.csproj` — 0 ошибок; `SelfTest statuslogic` —
   в порядке. Собирать при закрытом `VieNLink.exe` (блокирует `bin\...\VieNLink.Core.dll`).
 - Релиз 1.3.34: Windows — `release\VieNLink-1.3.34-setup.exe` (подпись `CN=VieN`, Valid) +
-  `VieNLink-1.3.34-win-x64.zip` + `SHA256SUMS.txt`; Android —
-  `release\VieNLink-1.3.34-android.apk` + `.apk.sha256`; магазинные —
+  `VieNLink-1.3.34-win-x64.zip` + `SHA256SUMS.txt` →
+  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.34-beta; Android —
+  `release\VieNLink-1.3.34-android.apk` + `.apk.sha256` →
+  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.34-android. Магазинные —
   `release\VieNLink-1.3.34-store.apk/.aab` (в RuStore/Play не публикуем).
 
 ## Где проект
@@ -389,10 +391,10 @@ https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.25-android. Магаз�
   с опубликованными 1.3.23 — выкладывать их под тем же тегом нельзя. Для публикации
   этих правок поднять версию (1.3.24) и выпустить обычным порядком.
 
-**Политика публикации (23.11.2026):** публичная версия — **1.3.33**, её assets не обновляем
+**Политика публикации (23.11.2026):** публичная версия — **1.3.34**, её assets не обновляем
 задним числом. Сначала копим и исправляем ошибки локально; когда наберётся значимый
 набор правок — поднимаем версию и выпускаем патч. `build/Version.props` без команды
-владельца не поднимаем. В GitHub остаются релизы 1.3.7–1.3.33 (`v1.3.7-beta`,
+владельца не поднимаем. В GitHub остаются релизы 1.3.7–1.3.34 (`v1.3.7-beta`,
 `v1.3.7-android`, `v1.3.8-beta`, `v1.3.8-android`, `v1.3.9-beta`, `v1.3.9-android`,
 `v1.3.10-beta`, `v1.3.10-android`, `v1.3.11-beta`, `v1.3.11-android`,
 `v1.3.12-beta`, `v1.3.12-android`, `v1.3.13-beta`, `v1.3.13-android`,
@@ -405,7 +407,7 @@ https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.25-android. Магаз�
 `v1.3.26-beta`, `v1.3.26-android`, `v1.3.27-beta`, `v1.3.27-android`,
 `v1.3.28-beta`, `v1.3.28-android`, `v1.3.29-beta`, `v1.3.29-android`,
 `v1.3.30-beta`, `v1.3.30-android`, `v1.3.31-beta`, `v1.3.31-android`, `v1.3.32-beta`, `v1.3.32-android`,
-`v1.3.33-beta`, `v1.3.33-android`).
+`v1.3.33-beta`, `v1.3.33-android`, `v1.3.34-beta`, `v1.3.34-android`).
 
 **Что вошло в 1.3.8–1.3.9 (ранее локальные правки):**
 - Android, причина зависаний: UI ждал `NodeStore.Gate`, пока фон разбирал кэш на 12 000
