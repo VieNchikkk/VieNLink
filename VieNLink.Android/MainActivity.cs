@@ -53,6 +53,7 @@ public sealed partial class MainActivity : BaseActivity
     private TextView? _telegramCount;
     private TextView? _universalCount;
     private TextView? _connectionStatus;
+    private TextView? _probeBadge;
     private TextView? _shareButton;
     private TextView? _addServerButton;
     private LinearLayout? _actionsRow2;
@@ -478,9 +479,16 @@ public sealed partial class MainActivity : BaseActivity
             ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
         card.AddView(addRow);
 
+        var probeStatusRow = Ui.Row(this);
+        probeStatusRow.SetPadding(0, Ui.Dp(this, 10), 0, 0);
+        _probeBadge = Ui.Badge(this, P, "○ АВТО-ПРОВЕРКА", P.MutedStrong);
+        probeStatusRow.AddView(_probeBadge, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
         _connectionStatus = Ui.Hint(this, "Загружаю серверы…", P);
-        _connectionStatus.SetPadding(0, Ui.Dp(this, 10), 0, 0);
-        card.AddView(_connectionStatus);
+        _connectionStatus.SetPadding(Ui.Dp(this, 8), 0, 0, 0);
+        probeStatusRow.AddView(_connectionStatus, new LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WrapContent, 1f));
+        card.AddView(probeStatusRow);
 
         return card;
     }
@@ -750,6 +758,7 @@ public sealed partial class MainActivity : BaseActivity
 
         if (_connectionStatus is not null)
         {
+            UpdateProbeBadge();
             if (!NodeStore.IsLoaded)
             {
                 _connectionStatus.Text = _headerDetail is not null &&
@@ -1037,6 +1046,7 @@ public sealed partial class MainActivity : BaseActivity
         // Явное действие пользователя снимает прежнюю остановку.
         ProbeClient.Resume();
         _finding = true;
+        UpdateProbeBadge();
         // Запоминаем, сколько рабочих было до прогона: в итоговой строке покажем
         // суммарное изменение за прогон.
         _workingBaseline = NodeStore.Summary(requireFresh: false).Working;
@@ -1140,6 +1150,7 @@ public sealed partial class MainActivity : BaseActivity
             cts.Dispose();
             _finding = false;
             _headerDetailUntil = DateTime.UtcNow.AddSeconds(20);
+            UpdateProbeBadge();
             // Итог прогона — в кэш сразу, не дожидаясь пятиминутной очереди.
             _ = Task.Run(() => NodeStore.SaveNodes(force: true));
             UpdateFindButton("Проверить серверы");
@@ -1822,6 +1833,62 @@ public sealed partial class MainActivity : BaseActivity
         _ => "универсальный",
     };
 
+    /// <summary>
+    /// Бейдж режима проверки: ручная / автоматическая / завершена / выключена.
+    /// Отдельная цветная плашка, чтобы в шапке было видно, кто именно проверяет серверы.
+    /// </summary>
+    private void UpdateProbeBadge()
+    {
+        if (_probeBadge is null)
+        {
+            return;
+        }
+
+        var manual = _finding || ProbeClient.IsManualRun;
+        var running = ProbeClient.IsRunning;
+        var recent = ProbeClient.ActivityText is not null;
+        var completed = !manual && !running && (recent ||
+            (_headerDetail is not null && DateTime.UtcNow < _headerDetailUntil));
+        var off = NodeStore.Settings.AutomationPaused ||
+                  !NodeStore.Settings.IdleTestEnabled ||
+                  ProbeClient.IsPaused;
+
+        string text;
+        Color tone;
+        if (manual)
+        {
+            text = "● РУЧНАЯ ПРОВЕРКА";
+            tone = P.Warning;
+        }
+        else if (running)
+        {
+            text = "● АВТО-ПРОВЕРКА";
+            tone = P.Telegram;
+        }
+        else if (completed)
+        {
+            text = "✓ ПРОВЕРКА ЗАВЕРШЕНА";
+            tone = P.Positive;
+        }
+        else if (off)
+        {
+            text = "○ АВТО-ПРОВЕРКА ВЫКЛ";
+            tone = P.Muted;
+        }
+        else
+        {
+            text = "○ АВТО-ПРОВЕРКА";
+            tone = P.MutedStrong;
+        }
+
+        _probeBadge.Text = text;
+        _probeBadge.SetTextColor(tone);
+        _probeBadge.Background = Ui.Rounded(
+            Color.Argb(42, tone.R, tone.G, tone.B), 8, this,
+            Color.Argb(115, tone.R, tone.G, tone.B));
+        _connectionStatus?.SetTextColor(manual || running ? P.TextStrong : P.Muted);
+    }
+
     private void SetConnectionStatus(string text)
     {
         RunOnUiThread(() =>
@@ -1830,6 +1897,8 @@ public sealed partial class MainActivity : BaseActivity
             {
                 _connectionStatus.Text = text;
             }
+
+            UpdateProbeBadge();
         });
     }
 
