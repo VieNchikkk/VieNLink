@@ -28,9 +28,14 @@
 - Проверено на телефоне (1.3.26): скриншоты с «● АВТО-ПРОВЕРКА», «● РУЧНАЯ ПРОВЕРКА»
   и «✓ ПРОВЕРКА ЗАВЕРШЕНА»; вёрстка не ломается, кнопки не перекрываются.
 
-**Релиз 1.3.26:** Windows — `release\VieNLink-1.3.26-setup.exe` + ZIP + `SHA256SUMS.txt`;
-Android — `release\VieNLink-1.3.26-android.apk` + `.apk.sha256`; магазинные —
-`release\VieNLink-1.3.26-store.apk/.aab`. Ссылки — после публикации.
+**Релиз 1.3.26:** Windows — `release\VieNLink-1.3.26-setup.exe` (подпись `CN=VieN`) +
+`VieNLink-1.3.26-win-x64.zip` + `SHA256SUMS.txt` →
+https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.26-beta; Android —
+`release\VieNLink-1.3.26-android.apk` + `.apk.sha256` →
+https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.26-android. Магазинные —
+`release\VieNLink-1.3.26-store.apk/.aab` (в RuStore/Play не публикуем). APK 1.3.26
+установлен на телефон (`versionCode=10326`), плашки «АВТО-ПРОВЕРКА», «РУЧНАЯ ПРОВЕРКА»
+и «ПРОВЕРКА ЗАВЕРШЕНА» проверены скриншотами.
 
 ## Состояние на 23.11.2026 (1.3.25)
 
