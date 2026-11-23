@@ -133,7 +133,10 @@ internal sealed class HiddenProbeService : IAsyncDisposable
                 mixedPort,
                 apiPort,
                 secret,
-                probeSettings);
+                probeSettings,
+                // ПК тоже может стоять за Wi-Fi-роутером с фильтрацией DNS:
+                // явный 77.88.8.8 не зависит от системного резолвера.
+                explicitDns: true);
             SingBoxConfigBuilder.WriteToFile(configPath, json);
             try
             {
@@ -160,7 +163,8 @@ internal sealed class HiddenProbeService : IAsyncDisposable
                     mixedPort,
                     apiPort,
                     secret,
-                    probeSettings);
+                    probeSettings,
+                    explicitDns: true);
                 SingBoxConfigBuilder.WriteToFile(configPath, json);
                 await SingBoxRunner.CheckConfigAsync(configPath, cancellationToken).ConfigureAwait(false);
             }
@@ -244,7 +248,8 @@ internal sealed class HiddenProbeService : IAsyncDisposable
             }
 
             var json = SingBoxConfigBuilder.Build(
-                batch, batch[0].Tag, settings.MixedPort, settings.ApiPort, "check", settings);
+                batch, batch[0].Tag, settings.MixedPort, settings.ApiPort, "check", settings,
+                explicitDns: true);
             SingBoxConfigBuilder.WriteToFile(path, json);
             checks++;
             try
