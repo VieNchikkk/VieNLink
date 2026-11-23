@@ -143,12 +143,33 @@ internal static class SingBoxConfigBuilder
                     ["final"] = "local",
                 };
         }
+        else if (dnsThroughProxy)
+        {
+            // Пробное ядро без TUN, но DNS — через сам сервер (как при подключении
+            // кнопкой «Подключение»). Локальный UDP/53 на мобильных сетях режется,
+            // а 1.1.1.1 у части операторов заблокирован; TCP-DNS через сервер работает.
+            config["dns"] = new JsonObject
+            {
+                ["servers"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["type"] = "tcp",
+                        ["tag"] = "remote",
+                        ["server"] = "1.1.1.1",
+                        ["detour"] = SelectorTag,
+                    },
+                },
+                ["final"] = "remote",
+                ["strategy"] = "ipv4_only",
+            };
+        }
         else if (explicitDns)
         {
             // Пробные/тестовые ядра без TUN: sing-box без явного DNS не разрешает
             // доменные адреса серверов («dns: lookup failed … empty result»), и рабочие
             // серверы бракуются. `local`/libbox тоже даёт пустой ответ — берём UDP-DNS
-            // и только IPv4, чтобы не ждать недоступный AAAA.
+            // (Яндекс; 1.1.1.1 у части российских операторов блокируется) и только IPv4.
             config["dns"] = new JsonObject
             {
                 ["servers"] = new JsonArray
@@ -157,7 +178,7 @@ internal static class SingBoxConfigBuilder
                     {
                         ["type"] = "udp",
                         ["tag"] = "udp",
-                        ["server"] = "1.1.1.1",
+                        ["server"] = "77.88.8.8",
                     },
                 },
                 ["final"] = "udp",

@@ -23,6 +23,9 @@ internal static class ProbeScheduler
     private static DateTime _lastSearchUtc = DateTime.MinValue;
     private static int _busy;
 
+    /// <summary>Отсев перепроверяем раз в 5 минут — тем же путём, что и кнопка.</summary>
+    private static DateTime _lastRejectedAutoCheckUtc = DateTime.MinValue;
+
     /// <summary>
     /// Первый такт после запуска: сначала перепроверяем рабочие серверы из их файла,
     /// чтобы счётчики показывали текущее состояние, и только потом ищем новые.
@@ -117,6 +120,46 @@ internal static class ProbeScheduler
         }
     }
 
+    /// <summary>
+    /// Автоматически «нажимает» кнопку «Перепроверить всё» раз в 5 минут: тот же
+    /// RejectedCheckService, что и у кнопки. Успешные серверы возвращаются в рабочие,
+    /// остальные остаются в отсеве. При включённом VPN проверка откладывается.
+    /// </summary>
+    private static async Task AutoRecheckRejectedAsync()
+    {
+        if (DateTime.UtcNow - _lastRejectedAutoCheckUtc < TimeSpan.FromMinutes(5))
+        {
+            return;
+        }
+
+        _lastRejectedAutoCheckUtc = DateTime.UtcNow;
+        if (SettingsStore.Current.AutomationPaused ||
+            !NodeStore.Settings.IdleTestEnabled ||
+            ProbeClient.IsPaused ||
+            ProbeClient.IsRunning ||
+            NodeTester.IsRunning ||
+            RejectedCheckService.IsRunning)
+        {
+            return;
+        }
+
+        if (TunnelService.State == TunnelState.Running || CoreRuntime.IsRunning)
+        {
+            return;
+        }
+
+        if (RejectedNodeStore.Load().Count == 0)
+        {
+            return;
+        }
+
+        var result = await RejectedCheckService
+            .RecheckAsync(null, CancellationToken.None)
+            .ConfigureAwait(false);
+        AppLog.Write("probe", result.Error ??
+            $"Автоперепроверка отсева: проверено {result.Tested}, возвращено {result.Restored}");
+    }
+
     private static async void Tick(Android.Content.Context context)
     {
         // Такт длиннее минуты (партия 150 через :probe) не должен наслаиваться
@@ -149,6 +192,8 @@ internal static class ProbeScheduler
                 await EnsureStartupRecheckAsync().ConfigureAwait(false);
                 return;
             }
+
+            await AutoRecheckRejectedAsync().ConfigureAwait(false);
 
             var counts = NodeStore.Summary();
             var quotaMissing =

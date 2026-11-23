@@ -137,8 +137,9 @@ public sealed class RejectedActivity : BaseActivity
 
         page.AddView(Ui.Banner(P, this, P.Accent, "Что это",
             "Сюда попадают серверы, которые уже были рабочими, но перестали открывать сайт. " +
-            "Приложение автоматически проверяет их по одному раз в 5 минут и возвращает " +
-            "в рабочие, если сервер открылся. Вручную тоже можно — кнопкой «Перепроверить всё»."));
+            "Перепроверка запускается кнопкой «Перепроверить всё» и автоматически раз в 5 минут " +
+            "(когда VPN отключён): серверы, которые открылись, возвращаются в рабочие, " +
+            "остальные остаются в отсеве."));
 
         page.AddView(Ui.Section(this, "Фильтр", P));
         var filterScroll = new HorizontalScrollView(this)
@@ -948,26 +949,12 @@ public sealed class RejectedActivity : BaseActivity
         _cts = new CancellationTokenSource();
         try
         {
-            var nodes = items.Select(item => item.Node).ToList();
-            var progress = new Progress<string>(SetStatus);
-            var summary = await NodeTester.TestNodesAsync(nodes, progress, _cts.Token);
-
-            // Перепроверка только обновляет результат. В рабочие сервер переводит
-            // пользователь кнопкой «Вернуть (В рабочие)», иначе он снова уедет в отсев.
-            var testedById = nodes.ToDictionary(node => node.Id, StringComparer.OrdinalIgnoreCase);
-            var stored = RejectedNodeStore.Load();
-            foreach (var item in stored)
-            {
-                if (testedById.TryGetValue(item.Node.Id, out var tested))
-                {
-                    item.Node = tested;
-                    item.RejectedAtUtc = DateTime.UtcNow;
-                }
-            }
-
-            RejectedNodeStore.Save(stored);
-            SetStatus($"Перепроверено {nodes.Count}: рабочих {summary.Working}. " +
-                      "Нажмите «Вернуть (В рабочие)», чтобы перенести сервер в список.");
+            var result = await RejectedCheckService.RecheckAsync(
+                new Progress<string>(SetStatus), _cts.Token);
+            SetStatus(result.Error ?? (result.Restored > 0
+                ? $"Перепроверено {result.Tested}: в рабочие возвращено {result.Restored}."
+                : $"Перепроверено {result.Tested}: рабочих {result.Working}. " +
+                  "В рабочие никто не вернулся."));
             Reload();
         }
         catch (System.OperationCanceledException)

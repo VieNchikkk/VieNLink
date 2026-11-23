@@ -170,7 +170,9 @@ internal static class NodeTester
                 CoreRuntime.ApiPort,
                 CoreRuntime.ApiSecret,
                 testSettings,
-                explicitDns: true);
+                // Как кнопка «Подключение»: DNS идёт через проверяемый сервер, а не
+                // через локальный UDP/53 или 1.1.1.1, которые режет мобильный оператор.
+                dnsThroughProxy: true);
 
             CoreRuntime.EnsureSetup(Android.App.Application.Context);
 
