@@ -35,7 +35,13 @@
   при отключённом VPN; кнопка «Подключение» из отсева — самый надёжный путь.
 - Рабочие серверы — раз в 5 минут, квоты 20/20, вшитые 31+8 источников и исправления
   1.3.25–1.3.27 сохранены.
-- Релиз 1.3.28: Windows/Android/магазинные — собрать и опубликовать.
+- Релиз 1.3.28: Windows — `release\VieNLink-1.3.28-setup.exe` (подпись `CN=VieN`) +
+  `VieNLink-1.3.28-win-x64.zip` + `SHA256SUMS.txt` →
+  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.28-beta; Android —
+  `release\VieNLink-1.3.28-android.apk` + `.apk.sha256` →
+  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.28-android. Магазинные —
+  `release\VieNLink-1.3.28-store.apk/.aab` (в RuStore/Play не публикуем). APK 1.3.28
+  установлен на телефон (`versionCode=10328`).
 
 ## Состояние на 23.11.2026 (1.3.27)
 
