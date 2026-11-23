@@ -202,17 +202,20 @@ public partial class MainWindow : Window
                 ToggleZapretWidget();
             }
 
-            await AutoRefreshIfStaleAsync();
-            await AutoTickAsync();
-
-            // После запуска счётчики не должны висеть нулями до первой пятиминутной
-            // перепроверки: сразу проверяем ранее рабочие серверы.
-            if (_settings.IdleTestEnabled && !_settings.AutomationPaused &&
-                FreshWorkingCount() < NodeLimits.MinWorkingNodes)
+            // Ранее рабочие серверы перепроверяем ДО обновления источников: иначе
+            // скачивание списков (а оно бывает долгим) держало значки сервисов
+            // на нулях — рабочие серверы в кэше есть, а значки обещали обратное.
+            // Пока идёт проверка, обновление списков уже можно запускать параллельно.
+            var recheckOnStart = _settings.IdleTestEnabled && !_settings.AutomationPaused &&
+                                 FreshWorkingCount() < NodeLimits.MinWorkingNodes;
+            if (recheckOnStart)
             {
                 SetStatus("Проверяю серверы", "После запуска обновляю счётчики…");
                 _ = RunIdleTestAsync(userIdle: false, searchNew: false);
             }
+
+            await AutoRefreshIfStaleAsync();
+            await AutoTickAsync();
 
             // Telegram-прокси собираются сами, без ручных кнопок: RSS не зависит от t.me.
             // При первом запуске сразу проверяем большую партию настоящим рукопожатием.

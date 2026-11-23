@@ -155,8 +155,11 @@ public partial class MainWindow
         // в этом случае проверяем только уже загруженные серверы основным ядром.
         var hidden = !(connected && _settings.TunnelMode == TunnelMode.Tun);
 
+        // Пока компьютер занят, берём половину партии (но не больше 60): при запуске
+        // пробного ядра на каждую партию это единственный способ проверять список
+        // не по 30 серверов за раз. Реальную скорость задаёт параллельность ниже.
         var baseBatch = Math.Clamp(_settings.IdleTestBatch, 5, 500);
-        var batchSize = userIdle ? baseBatch : Math.Clamp(baseBatch / 4, 5, 30);
+        var batchSize = userIdle ? baseBatch : Math.Clamp(baseBatch / 2, 5, 60);
         if (_busy)
         {
             // Пользователь что-то делает в приложении — совсем маленькая партия.
@@ -190,10 +193,11 @@ public partial class MainWindow
             (node.CheckedAtUtc is null || node.CheckedAtUtc < threshold) &&
             NodeAvailability.RetryAllowed(node, nowUtc);
 
-        // Проход только для перепроверки: партия меньше, ищем не новые серверы, а живые.
+        // Проход только для перепроверки: ищем не новые серверы, а живые. Партия
+        // меньше поисковой, но достаточно крупная, чтобы загрузить пробное ядро.
         if (!searchNew)
         {
-            batchSize = Math.Min(batchSize, 20);
+            batchSize = Math.Min(batchSize, 40);
         }
 
         _idleTesting = true;
@@ -306,10 +310,13 @@ public partial class MainWindow
                 var summary = hidden
                     ? await _probe.TestAsync(
                         candidates, _settings, progress, OnTested, token,
-                        // Партия из мёртвых серверов — это почти одни таймауты; 8–12
-                        // одновременно сокращают проход в разы. При активном обходе
-                        // и работе пользователя держим запас по каналу.
-                        concurrency: bypassActive ? 2 : userIdle ? 12 : connected ? 6 : 8,
+                        // Партия из мёртвых серверов — это почти одни таймауты, поэтому
+                        // скорость прохода задаёт именно параллельность. 24 в простое
+                        // и 16 при работе проверяют список в разы быстрее; рабочие
+                        // серверы дополнительно защищены таймаутом 6 с и повторной
+                        // проверкой. При активном обходе и работе пользователя
+                        // держим запас по каналу.
+                        concurrency: bypassActive ? 3 : userIdle ? 24 : connected ? 12 : 16,
                         timeoutMs: 3000,
                         waitForGate: false)
                     : await _manager.TestLoadedNodesAsync(
@@ -413,6 +420,25 @@ public partial class MainWindow
         if (row is null)
         {
             return;
+        }
+
+        // Пока шла проверка, список могли пересобрать из источников (MergeNodes
+        // заменяет объекты серверов новыми). Результат тогда нужно перенести на
+        // актуальный объект: иначе партия проверена, а значки сервисов остались
+        // прежними — сервер выглядит рабочим, но без свежей проверки.
+        if (!ReferenceEquals(row.Node, node))
+        {
+            row.Node.Status = node.Status;
+            row.Node.DelayMs = node.DelayMs;
+            row.Node.CheckedAtUtc = node.CheckedAtUtc;
+            row.Node.TriedAtUtc = node.TriedAtUtc;
+            row.Node.YoutubeOk = node.YoutubeOk;
+            row.Node.TelegramOk = node.TelegramOk;
+            row.Node.UniversalOk = node.UniversalOk;
+            row.Node.DiscordOk = node.DiscordOk;
+            row.Node.OpenDomains = node.OpenDomains;
+            row.Node.FailCount = node.FailCount;
+            node = row.Node;
         }
 
         if (node.Status == NodeStatus.Dead)

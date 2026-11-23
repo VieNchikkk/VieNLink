@@ -364,10 +364,13 @@ internal sealed class ProxyManager : IAsyncDisposable
                 limiter.Release();
                 var finished = Interlocked.Increment(ref done);
 
-                // Плавный разгон: если первые 40 серверов в основном живые, добавляем параллельность.
+                // Плавный разгон после первых 40 серверов. Раньше он включался, только
+                // если живых среди них было не меньше 20 %, и партия из мёртвых адресов
+                // так и висела на 10 потоках: 200 таймаутов по 3 с — это минуты.
+                // Мёртвый сервер канал не занимает, поэтому разгоняемся всегда,
+                // а от перегрузки защищает сам предел параллельности.
                 if (finished == 40 && limit > start &&
-                    Interlocked.CompareExchange(ref ramp, 1, 0) == 0 &&
-                    Volatile.Read(ref working) * 100 / finished >= 20)
+                    Interlocked.CompareExchange(ref ramp, 1, 0) == 0)
                 {
                     limiter.Release(Math.Min(16, limit - start));
                 }
