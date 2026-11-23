@@ -28,7 +28,13 @@
 - DNS ПК — явный 77.88.8.8 (из 1.3.31), Android — 77.88.8.8 для пакетов и DNS через
   сервер для одиночной проверки.
 - Квоты 20/20, 31+8 источников.
-- Релиз 1.3.32: Windows/Android/магазинные — собрать и опубликовать.
+- Релиз 1.3.32: Windows — `release\VieNLink-1.3.32-setup.exe` (подпись `CN=VieN`) +
+  `VieNLink-1.3.32-win-x64.zip` + `SHA256SUMS.txt` →
+  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.32-beta; Android —
+  `release\VieNLink-1.3.32-android.apk` + `.apk.sha256` →
+  https://github.com/VieNchikkk/VieNLink/releases/tag/v1.3.32-android. Магазинные —
+  `release\VieNLink-1.3.32-store.apk/.aab` (в RuStore/Play не публикуем). APK 1.3.32
+  установлен на телефон (`versionCode=10332`).
 
 ## Состояние на 23.11.2026 (1.3.31)
 
