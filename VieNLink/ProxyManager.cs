@@ -16,10 +16,10 @@ internal sealed class ProxyManager : IAsyncDisposable
     public const string UniversalTestUrl = "https://cp.cloudflare.com/generate_204";
 
     /// <summary>
-    /// Заблокированные домены для оценки сервера: тот же список, что у zapret/десинка
-    /// (`TlsHello.TargetDomains`). Чем больше открывается — тем лучше сервер.
+    /// Заблокированные домены для оценки сервера: урезанный список проверки
+    /// (`TlsHello.VerificationDomains`). Чем больше открывается — тем лучше сервер.
     /// </summary>
-    public static IReadOnlyList<string> BlockedTestDomains => TlsHello.TargetDomains;
+    public static IReadOnlyList<string> BlockedTestDomains => TlsHello.VerificationDomains;
 
     /// <summary>Проверочные адреса: сервер считается рабочим, если открывает хотя бы один.</summary>
     public const string YoutubeTestUrl = "https://www.youtube.com/";
@@ -129,7 +129,8 @@ internal sealed class ProxyManager : IAsyncDisposable
         int concurrency = 0,
         int timeoutMs = 3500,
         string? youtubeUrl = null,
-        string? telegramUrl = null)
+        string? telegramUrl = null,
+        bool fullDomains = true)
     {
         if (nodes.Count == 0)
         {
@@ -163,7 +164,7 @@ internal sealed class ProxyManager : IAsyncDisposable
         var loaded = nodes.Where(node => _loadedTags.Contains(node.Tag)).ToList();
         return await TestWithApiAsync(
             loaded, progress, onNodeTested, cancellationToken,
-            concurrency, timeoutMs, youtubeUrl, telegramUrl);
+            concurrency, timeoutMs, youtubeUrl, telegramUrl, fullDomains);
     }
 
     /// <summary>
@@ -178,7 +179,8 @@ internal sealed class ProxyManager : IAsyncDisposable
         int concurrency = 2,
         int timeoutMs = 2500,
         string? youtubeUrl = null,
-        string? telegramUrl = null)
+        string? telegramUrl = null,
+        bool fullDomains = true)
     {
         var loaded = nodes.Where(node => _loadedTags.Contains(node.Tag)).ToList();
         if (loaded.Count == 0)
@@ -188,7 +190,7 @@ internal sealed class ProxyManager : IAsyncDisposable
 
         return await TestWithApiAsync(
             loaded, progress, onNodeTested, cancellationToken,
-            concurrency, timeoutMs, youtubeUrl, telegramUrl);
+            concurrency, timeoutMs, youtubeUrl, telegramUrl, fullDomains);
     }
 
     private async Task<TestSummary> TestWithApiAsync(
@@ -199,12 +201,13 @@ internal sealed class ProxyManager : IAsyncDisposable
         int concurrency,
         int timeoutMs,
         string? youtubeUrl,
-        string? telegramUrl)
+        string? telegramUrl,
+        bool fullDomains)
     {
         var api = _api ?? throw new InvalidOperationException("Clash API не запущен");
         return await TestWithApiAsync(
             api, nodes, progress, onNodeTested, cancellationToken,
-            concurrency, timeoutMs, youtubeUrl, telegramUrl);
+            concurrency, timeoutMs, youtubeUrl, telegramUrl, fullDomains);
     }
 
     /// <summary>
@@ -220,7 +223,8 @@ internal sealed class ProxyManager : IAsyncDisposable
         int concurrency,
         int timeoutMs,
         string? youtubeUrl,
-        string? telegramUrl)
+        string? telegramUrl,
+        bool fullDomains = true)
     {
         var youtubeTarget = youtubeUrl ?? YoutubeTestUrl;
         IReadOnlyList<string> telegramTargets = string.IsNullOrWhiteSpace(telegramUrl)
@@ -277,27 +281,32 @@ internal sealed class ProxyManager : IAsyncDisposable
 
                 // Рабочему серверу — больше времени: он уже открывал адреса,
                 // а под нагрузкой сети ответ приходит медленнее.
-                var probeTimeout = wasWorking ? Math.Max(timeoutMs, 6000) : timeoutMs;
+                var probeTimeout = wasWorking ? Math.Max(timeoutMs, 4500) : timeoutMs;
 
-                // Два направления проверяем параллельно: вдвое быстрее при том же лимите серверов.
-                // Telegram пробуем по нескольким доменам — хватает первого ответившего.
+                // Три направления проверяем параллельно: универсальный Cloudflare — главный
+                // признак годности, YouTube и Telegram — отметки сервисов. Telegram пробуем
+                // по нескольким доменам — хватает первого ответившего.
+                var universalTask = api.TestDelayAsync(node.Tag, probeTimeout, cancellationToken, UniversalTestUrl);
                 var youtubeTask = api.TestDelayAsync(node.Tag, probeTimeout, cancellationToken, youtubeTarget);
                 var telegramTask = TestAnyDelayAsync(api, node.Tag, telegramTargets, probeTimeout, cancellationToken);
-                await Task.WhenAll(youtubeTask, telegramTask);
+                await Task.WhenAll(universalTask, youtubeTask, telegramTask);
+                var universalDelay = await universalTask;
                 var youtubeDelay = await youtubeTask;
                 var telegramDelay = await telegramTask;
 
-                if (youtubeDelay is null && telegramDelay is null && wasWorking)
+                if (universalDelay is null && youtubeDelay is null && telegramDelay is null && wasWorking)
                 {
                     await Task.Delay(600, cancellationToken).ConfigureAwait(false);
+                    universalTask = api.TestDelayAsync(node.Tag, probeTimeout, cancellationToken, UniversalTestUrl);
                     youtubeTask = api.TestDelayAsync(node.Tag, probeTimeout, cancellationToken, youtubeTarget);
                     telegramTask = TestAnyDelayAsync(api, node.Tag, telegramTargets, probeTimeout, cancellationToken);
-                    await Task.WhenAll(youtubeTask, telegramTask);
+                    await Task.WhenAll(universalTask, youtubeTask, telegramTask);
+                    universalDelay = await universalTask;
                     youtubeDelay = await youtubeTask;
                     telegramDelay = await telegramTask;
                 }
 
-                if (youtubeDelay is null && telegramDelay is null)
+                if (universalDelay is null && youtubeDelay is null && telegramDelay is null)
                 {
                     // Провал не трогает результат последней удачной проверки и не удаляет
                     // сервер сразу: считаем провалы и убираем только после
@@ -326,17 +335,26 @@ internal sealed class ProxyManager : IAsyncDisposable
                 {
                     node.YoutubeOk = youtubeDelay is not null;
                     node.TelegramOk = telegramDelay is not null;
-                    node.CheckedAtUtc = DateTime.UtcNow;
-                    node.DelayMs = youtubeDelay ?? telegramDelay;
-
-                    // Полный список заблокированных доменов прогоняем только у живого сервера:
-                    // он и решает, насколько сервер хорош. Мёртвым это 18 таймаутов впустую.
-                    var (openDomains, universalDelay, discordOk) = await ProbeBlockedDomainsAsync(
-                        api, node.Tag, timeoutMs, cancellationToken).ConfigureAwait(false);
-                    node.OpenDomains = openDomains;
                     node.UniversalOk = universalDelay is not null;
-                    node.DiscordOk = discordOk;
-                    RaiseMax(ref bestDomains, openDomains);
+                    node.CheckedAtUtc = DateTime.UtcNow;
+
+                    // Задержка — по YouTube: видео — главный признак «хорошего» сервера,
+                    // поэтому «Универсальный» и YouTube сортируются по скорости YouTube.
+                    // Если YouTube не открылся, берём Cloudflare, затем Telegram.
+                    node.DelayMs = youtubeDelay ?? universalDelay ?? telegramDelay;
+
+                    // Полный список заблокированных доменов прогоняем только у живого
+                    // сервера и только когда он нужен (поиск новых/кнопка): в фоновых
+                    // перепроверках достаточно базовой проверки, чтобы не тратить
+                    // таймауты на домены. Мёртвым это таймауты впустую.
+                    if (fullDomains)
+                    {
+                        var (openDomains, discordOk) = await ProbeBlockedDomainsAsync(
+                            api, node.Tag, timeoutMs, cancellationToken).ConfigureAwait(false);
+                        node.OpenDomains = openDomains;
+                        node.DiscordOk = discordOk;
+                        RaiseMax(ref bestDomains, openDomains);
+                    }
 
                     NodeHealth.RegisterSuccess(node);
                     if (wasWorking)
@@ -657,18 +675,18 @@ internal sealed class ProxyManager : IAsyncDisposable
     }
 
     /// <summary>
-    /// Сколько заблокированных доменов открывает сервер. Универсальный адрес проверяется
-    /// параллельно и возвращается отдельно — он главный, его задержка важнее счётчика.
+    /// Сколько заблокированных доменов открывает сервер. Универсальный адрес (Cloudflare)
+    /// проверяется отдельно в основной партии — здесь только счётчик доменов и Discord.
     /// </summary>
-    private static async Task<(int OpenDomains, int? UniversalDelay, bool DiscordOk)> ProbeBlockedDomainsAsync(
+    private static async Task<(int OpenDomains, bool DiscordOk)> ProbeBlockedDomainsAsync(
         ClashApiClient api,
         string tag,
         int timeoutMs,
         CancellationToken cancellationToken)
     {
-        var domains = TlsHello.TargetDomains;
+        var domains = TlsHello.VerificationDomains;
 
-        // Не больше четырёх запросов одновременно на сервер: 18 параллельных соединений
+        // Не больше четырёх запросов одновременно на сервер: иначе параллельные соединения
         // перегружают слабый бесплатный сервер, и он ложно показывает ноль доменов.
         using var limiter = new SemaphoreSlim(4);
         var tasks = domains
@@ -686,10 +704,8 @@ internal sealed class ProxyManager : IAsyncDisposable
                 }
             })
             .ToArray();
-        var universalTask = api.TestDelayAsync(tag, timeoutMs, cancellationToken, UniversalTestUrl);
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
-        var universalDelay = await universalTask.ConfigureAwait(false);
 
         var open = 0;
         var discordIndex = Array.IndexOf(domains, "discord.com");
@@ -702,7 +718,7 @@ internal sealed class ProxyManager : IAsyncDisposable
         }
 
         var discordOk = discordIndex >= 0 && tasks[discordIndex].Result is not null;
-        return (open, universalDelay, discordOk);
+        return (open, discordOk);
     }
 
     /// <summary>Атомарно поднимает максимум: нужно для прогресса по потокам.</summary>

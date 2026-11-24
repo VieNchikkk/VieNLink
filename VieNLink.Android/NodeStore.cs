@@ -1050,12 +1050,11 @@ internal static class NodeStore
                ?? Best(candidates.Where(node =>
                    NodeAvailability.IsCountable(node, onlyMine, now)));
 
-        // Сначала — кто открывает больше заблокированных доменов, потом задержка:
-        // сервер, который открыл только Cloudflare, для YouTube бесполезен (CDN не идёт),
-        // даже если у него красивая задержка.
+        // Сначала — самая низкая задержка (самый быстрый для выбранного сервиса),
+        // затем больше открытых заблокированных доменов и личные подписки.
         static ProxyNode? Best(IEnumerable<ProxyNode> nodes) => nodes
-            .OrderByDescending(node => node.OpenDomains)
-            .ThenBy(node => node.DelayMs ?? int.MaxValue)
+            .OrderBy(node => node.DelayMs ?? int.MaxValue)
+            .ThenByDescending(node => node.OpenDomains)
             .ThenByDescending(node => node.IsMine)
             .FirstOrDefault();
     }

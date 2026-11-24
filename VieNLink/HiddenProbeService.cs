@@ -28,7 +28,8 @@ internal sealed class HiddenProbeService : IAsyncDisposable
         int concurrency = 3,
         int timeoutMs = 3000,
         bool waitForGate = true,
-        bool precheck = true)
+        bool precheck = true,
+        bool fullDomains = true)
     {
         if (nodes.Count == 0)
         {
@@ -193,7 +194,8 @@ internal sealed class HiddenProbeService : IAsyncDisposable
                 concurrency,
                 timeoutMs,
                 youtubeUrl: null,
-                telegramUrl: null).ConfigureAwait(false);
+                telegramUrl: null,
+                fullDomains).ConfigureAwait(false);
             return new TestSummary(
                 originalCount,
                 summary.YoutubeOk,

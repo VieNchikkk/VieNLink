@@ -193,11 +193,12 @@ public partial class MainWindow
             (node.CheckedAtUtc is null || node.CheckedAtUtc < threshold) &&
             NodeAvailability.RetryAllowed(node, nowUtc);
 
-        // Проход только для перепроверки: ищем не новые серверы, а живые. Партия
-        // меньше поисковой, но достаточно крупная, чтобы загрузить пробное ядро.
+        // Проход только для перепроверки: ищем не новые серверы, а живые. Партию не
+        // уполовиниваем и берём крупной: рабочие серверы — приоритет, а после запуска
+        // (или возврата из фона) все они в кэше устаревшие и ждут освежения счётчиков.
         if (!searchNew)
         {
-            batchSize = Math.Min(batchSize, 40);
+            batchSize = Math.Clamp(baseBatch, 5, 200);
         }
 
         _idleTesting = true;
@@ -329,18 +330,20 @@ public partial class MainWindow
                     ? await _probe.TestAsync(
                         candidates, _settings, progress, OnTested, token,
                         // Партия из мёртвых серверов — это почти одни таймауты, поэтому
-                        // скорость прохода задаёт именно параллельность. 24 в простое
-                        // и 16 при работе проверяют список в разы быстрее; рабочие
-                        // серверы дополнительно защищены таймаутом 6 с и повторной
+                        // скорость прохода задаёт именно параллельность. 32 в простое
+                        // и 24 при работе просеивают мусор быстрее; рабочие серверы
+                        // дополнительно защищены увеличенным таймаутом и повторной
                         // проверкой. При активном обходе и работе пользователя
                         // держим запас по каналу.
-                        concurrency: bypassActive ? 3 : userIdle ? 24 : connected ? 12 : 16,
-                        timeoutMs: 3000,
-                        waitForGate: false)
+                        concurrency: bypassActive ? 4 : userIdle || !searchNew ? 32 : connected ? 16 : 24,
+                        timeoutMs: 2000,
+                        waitForGate: false,
+                        fullDomains: searchNew)
                     : await _manager.TestLoadedNodesAsync(
                         candidates, progress, OnTested, token,
                         userIdle ? 6 : 4, 2500,
-                        "https://www.youtube.com/generate_204");
+                        "https://www.youtube.com/generate_204",
+                        fullDomains: searchNew);
 
                 if (summary.Total == 0)
                 {

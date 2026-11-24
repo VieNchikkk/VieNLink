@@ -25,17 +25,17 @@ internal static class NodeTester
     /// идёт через сервер и тратит его трафик. 200 — крупнее партия, значит меньше
     /// холодных запусков процесса :probe и меньше нагрузки на телефон.
     /// </summary>
-    public static int MaxBatch => DeviceProfile.IsTelevision ? 60 : 200;
+    public static int MaxBatch => DeviceProfile.IsTelevision ? 120 : 200;
 
-    public static int Concurrency => DeviceProfile.IsTelevision ? 6 : 12;
-    public const int TimeoutMs = 4000;
+    public static int Concurrency => DeviceProfile.IsTelevision ? 12 : 16;
+    public const int TimeoutMs = 3000;
 
     /// <summary>
     /// Рабочему серверу даём больше времени: он уже доказал, что умеет открывать
-    /// адреса, а мобильная сеть под нагрузкой отвечает медленнее. Три секунды
-    /// на слабом канале — частая причина ложного провала.
+    /// адреса, а мобильная сеть под нагрузкой отвечает медленнее. Слишком короткий
+    /// таймаут на слабом канале — частая причина ложного провала.
     /// </summary>
-    public const int WorkingTimeoutMs = 6000;
+    public const int WorkingTimeoutMs = 4500;
 
     /// <summary>
     /// Проверочные адреса по сервисам. Универсальный (Cloudflare) — приоритетный:
@@ -87,7 +87,7 @@ internal static class NodeTester
     private static readonly (string Service, string Url)[] FullProbes = BuildFullProbes();
 
     private static (string Service, string Url)[] BuildFullProbes() =>
-        TlsHello.TargetDomains
+        TlsHello.VerificationDomains
             .Select(domain => (domain, "https://" + domain + "/"))
             .ToArray();
 
@@ -254,11 +254,12 @@ internal static class NodeTester
 
                     var anyOpened = results.Any(result => result.delay is not null);
 
-                    // Приоритет — универсальный адрес: его задержка идёт в список и в выбор
-                    // лучшего сервера. Если он не открылся, сервер может быть рабочим для
-                    // отдельных сервисов, но автоматически первым не выбирается.
+                    // Задержка — по YouTube: видео — главный признак «хорошего» сервера,
+                    // поэтому «Универсальный» и YouTube сортируются по скорости YouTube.
+                    // Если YouTube не открылся, берём Cloudflare.
                     var universalDelay = results
                         .FirstOrDefault(result => result.Service == "Cloudflare").delay;
+                    var youtubeDelay = BestDelay(results, "YouTube");
 
                     var wasWorking = node.Status == NodeStatus.Working;
                     node.TriedAtUtc = DateTime.UtcNow;
@@ -266,7 +267,7 @@ internal static class NodeTester
                     if (anyOpened)
                     {
                         node.CheckedAtUtc = DateTime.UtcNow;
-                        node.DelayMs = universalDelay;
+                        node.DelayMs = youtubeDelay ?? universalDelay;
                         node.UniversalOk = universalDelay is not null;
                         node.YoutubeOk = Opened(results, "YouTube");
                         node.TelegramOk = Opened(results, "Telegram");
@@ -538,7 +539,9 @@ internal static class NodeTester
                 if (anyOpened)
                 {
                     node.CheckedAtUtc = DateTime.UtcNow;
-                    node.DelayMs = universalDelay;
+                    // Задержка — по YouTube: «Универсальный» и YouTube сортируются
+                    // по скорости YouTube. Если YouTube не открылся, берём Cloudflare.
+                    node.DelayMs = BestDelay(results, "YouTube") ?? universalDelay;
                     node.UniversalOk = universalDelay is not null;
                     node.YoutubeOk = Opened(results, "YouTube");
                     node.TelegramOk = Opened(results, "Telegram");
@@ -754,6 +757,21 @@ internal static class NodeTester
     /// <summary>Открылся ли хотя бы один адрес указанного сервиса.</summary>
     private static bool Opened(IEnumerable<(string Service, int? delay)> results, string service) =>
         results.Any(result => result.Service == service && result.delay is not null);
+
+    /// <summary>Минимальная задержка среди открывшихся адресов сервиса; null — сервис не открылся.</summary>
+    private static int? BestDelay(IEnumerable<(string Service, int? delay)> results, string service)
+    {
+        int? best = null;
+        foreach (var result in results)
+        {
+            if (result.Service == service && result.delay is { } value && (best is null || value < best))
+            {
+                best = value;
+            }
+        }
+
+        return best;
+    }
 
     /// <summary>Есть ли прямой интернет (без сервера): отличает обрыв сети от мёртвых серверов.</summary>
     private static Task<bool> HasDirectInternetAsync(CancellationToken cancellationToken) =>

@@ -2746,8 +2746,18 @@ internal static class Program
         Check(working.YoutubeOk == true && working.TelegramOk == true, "обе отметки YouTube/Telegram");
         Check(summary.YoutubeOk == 1 && summary.TelegramOk == 1, "сводка считает оба сервиса");
 
-        // 2. Заблокированные адреса → узел помечается нерабочим и удаляется из списка.
-        var dead = DirectNode("direct-b");
+        // 2. Узел, который ничего не открывает (block-аутбаунд отбрасывает всё, включая
+        // Cloudflare) → помечается нерабочим и удаляется после первой неудачной проверки.
+        var dead = new ProxyNode
+        {
+            Name = "block",
+            Protocol = "block",
+            Server = "block",
+            Port = 1,
+            Tag = "block-b",
+            Identity = "block-b",
+            OutboundJson = "{\"type\":\"block\",\"tag\":\"block-b\"}",
+        };
         await manager.TestNodesAsync(
             new[] { dead },
             null,

@@ -208,7 +208,7 @@ public partial class MainWindow : Window
             // на нулях — рабочие серверы в кэше есть, а значки обещали обратное.
             // Пока идёт проверка, обновление списков уже можно запускать параллельно.
             var recheckOnStart = _settings.IdleTestEnabled && !_settings.AutomationPaused &&
-                                 FreshWorkingCount() < NodeLimits.MinWorkingNodes;
+                                 HasWorkingNodesDue(DateTime.UtcNow);
             if (recheckOnStart)
             {
                 SetStatus("Проверяю серверы", "После запуска обновляю счётчики…");

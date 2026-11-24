@@ -8,9 +8,7 @@ namespace VieNLink;
 internal static class TlsHello
 {    /// <summary>
     /// Домены, для которых включается десинк. Остальные идут напрямую.
-    /// Этот же список используется как проверочный: чем больше доменов открывает сервер,
-    /// тем он лучше. Взят из целей zapret/десинка (YouTube, Telegram, Discord, X,
-    /// Instagram, Facebook).
+    /// Взят из целей zapret/десинка (YouTube, Telegram, Discord, X, Instagram, Facebook).
     /// </summary>
     internal static readonly string[] TargetDomains =
     {
@@ -19,6 +17,18 @@ internal static class TlsHello
         "discord.com", "discordapp.com", "discord.gg",
         "x.com", "twitter.com", "twimg.com",
         "instagram.com", "cdninstagram.com", "facebook.com", "fbcdn.net",
+    };
+
+    /// <summary>
+    /// Проверочные домены для оценки сервера: чем больше из них открывается, тем лучше
+    /// сервер. Минимальный набор для скорости: базовые сервисы (Cloudflare/YouTube/
+    /// Telegram/Discord) проверяются отдельно в основной партии, здесь — только то, что
+    /// реально решает качество: видео-CDN YouTube и Discord. `discord.com` обязателен —
+    /// на ПК именно по нему ставится отметка Discord.
+    /// </summary>
+    internal static readonly string[] VerificationDomains =
+    {
+        "googlevideo.com", "discord.com", "t.me",
     };
 
     /// <summary>Десинк включается только для этих доменов (и поддоменов); остальные — напрямую.</summary>
