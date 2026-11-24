@@ -27,6 +27,11 @@
   Visual Studio — `…\Team Explorer\Git\cmd\git.exe`. Релизы можно создавать через
   `gh release create --repo VieNchikkk/VieNLink` (без локального remote), а коммит/пуш —
   этим git с `http.extraHeader="AUTHORIZATION: bearer <gh auth token>"`.
+- **Проверено:** все ссылки релизов отдают HTTP 200; APK подписаны ключом `CN=VieNLink`
+  (`versionCode` 10350, телефон arm64+x86_64, ТВ armeabi-v7a), Windows `setup.exe` — `CN=VieN`,
+  магазинные APK/AAB без `REQUEST_INSTALL_PACKAGES`. Теги всех трёх релизов — на коммите
+  `daf100e`. Телефон `RMX5120` на момент установки отключился от adb; планшет и эмулятор
+  `vienlink-phone-360` обновлены до 1.3.50 и запускаются (шапка влезает, версия `v1.3.50`).
 - `SHA256SUMS.txt` (Windows): setup `30A5BD…D87E`, ZIP `5EF5EB…1510`.
   Телефон `E2C407…02DD`, ТВ `D7C74A…CD92` (см. `.sha256` рядом с файлами).
 
