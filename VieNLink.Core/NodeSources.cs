@@ -453,6 +453,20 @@ internal static class NodeSourceService
         new() { Name = "SoliSpirit all configs", Url = "https://raw.githubusercontent.com/SoliSpirit/v2ray-configs/main/all_configs.txt", Kind = SourceKind.PlainList },
         new() { Name = "zxcursedzxc vless", Url = "https://raw.githubusercontent.com/zxcursedzxc0721/vless-subscriptions/main/all/vless.txt", Kind = SourceKind.PlainList },
 
+        // Проверены 24.11.2026: активные репозитории с ежедневным (или более частым)
+        // обновлением, ориентированные на обход блокировок в РФ или проверяющие
+        // серверы перед публикацией. Часть списков небольшая — это нормально:
+        // ценность в свежести и в том, что серверы уже отфильтрованы автором.
+        new() { Name = "igareck — чёрные списки РФ (VLESS)", Url = "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_VLESS_RUS.txt", Kind = SourceKind.PlainList },
+        new() { Name = "igareck — чёрные списки РФ (SS/Hy2/VMess/Trojan)", Url = "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/BLACK_SS+All_RUS.txt", Kind = SourceKind.PlainList },
+        new() { Name = "igareck — белые списки РФ (Reality, моб.)", Url = "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/main/Vless-Reality-White-Lists-Rus-Mobile.txt", Kind = SourceKind.PlainList },
+        new() { Name = "kort0881 — VLESS для РФ (RU-SNI)", Url = "https://raw.githubusercontent.com/kort0881/vpn-vless-configs-russia/main/data/githubmirror/ru-sni/vless.txt", Kind = SourceKind.PlainList },
+        new() { Name = "Dima198987 vless-neko", Url = "https://raw.githubusercontent.com/Dima198987/vless-neko-subscription/main/vless_configs.txt", Kind = SourceKind.PlainList },
+        new() { Name = "mehrtat vless-collector", Url = "https://raw.githubusercontent.com/mehrtat/vless-collector/main/sub.txt", Kind = SourceKind.PlainList },
+        new() { Name = "Mahdi0024 ProxyCollector", Url = "https://raw.githubusercontent.com/Mahdi0024/ProxyCollector/master/sub/proxies.txt", Kind = SourceKind.PlainList },
+        new() { Name = "LeilaoMi — проверенные (sing-box)", Url = "https://raw.githubusercontent.com/LeilaoMi/AutoMergePublicNodes-Optimized/main/output/global.txt", Kind = SourceKind.PlainList },
+        new() { Name = "awesome-vpn (ежедневно)", Url = "https://raw.githubusercontent.com/awesome-vpn/awesome-vpn/master/clash.yaml", Kind = SourceKind.PlainList },
+
         // Каналы Telegram открываются только при уже работающем обходе блокировок.
         // @proxy_mtproto включён: после первого успешного подключения приложение само прочитает его.
         new() { Name = "Telegram: @proxy_mtproto", Url = "https://t.me/s/proxy_mtproto", Kind = SourceKind.Telegram },

@@ -375,12 +375,17 @@ public partial class MainWindow
         // иконками в шапке, и дублировать их нулями из одной партии нельзя.
         StatusDetail.Text = $"Последняя партия: проверено {summary.Total} · рабочих {working} · " +
                             $"лучший открывает доменов {summary.BestDomains}";
-        FooterText.Text = working > 0
-            ? $"Рабочих серверов: {working}. Подключение — 127.0.0.1:{_manager.ActiveMixedPort}"
-            : "Рабочих серверов не найдено: нерабочие серверы удалены из списка";
-        if (working == 0)
+
+        // В нижней строке — общий счётчик доступных, как щит в шапке. Число рабочих
+        // последней партии (например, 13) рядом со щитом (12) читалось как ошибка счёта.
+        var available = AllRows.Count(row => NodeAvailability.IsCountable(
+            row.Node, _settings.ConnectOnlyMine, DateTime.UtcNow));
+        FooterText.Text = available > 0
+            ? $"Доступных серверов: {available}. Подключение — 127.0.0.1:{_manager.ActiveMixedPort}"
+            : "Доступных серверов не найдено: проверьте серверы или обновите списки";
+        if (available == 0)
         {
-            _tray?.ShowBalloon("Серверы не отвечают", "Среди проверенных серверов нет рабочих. Попробуйте обновить списки.", warning: true);
+            _tray?.ShowBalloon("Серверы не отвечают", "Среди проверенных серверов нет доступных. Попробуйте обновить списки.", warning: true);
         }
     }
 

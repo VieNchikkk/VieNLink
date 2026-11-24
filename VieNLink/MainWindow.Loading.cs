@@ -568,7 +568,8 @@ public partial class MainWindow
 
         if (HeaderNodesText is not null)
         {
-            HeaderNodesText.Text = $"Серверы: {total}";
+            // «из N в списке» рядом со щитом: щит показывает доступные, а не все записи.
+            HeaderNodesText.Text = $"из {total} в списке";
         }
 
         if (HeaderYoutubeText is not null)

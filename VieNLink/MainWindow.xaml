@@ -75,7 +75,7 @@
                                 <Border Background="{DynamicResource AccentSurfaceBrush}"
                                         BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1"
                                         CornerRadius="7" Padding="5,2" Margin="0,0,5,0"
-                                        ToolTip="Рабочие серверы с последней удачной проверкой: счётчик не обнуляется по таймеру, сервер убирается из него после подтверждённого провала">
+                                        ToolTip="Доступные серверы: рабочие, чья последняя удачная проверка прошла не позже часа назад и по которым нет подтверждённого провала. По этому числу считаются значки сервисов; если свежих нет, эти же серверы проверяются для подключения">
                                     <StackPanel Orientation="Horizontal">
                                         <Viewbox Width="12" Height="12" Margin="0,0,3,0" VerticalAlignment="Center">
                                             <Path Width="24" Height="24" Stretch="Uniform"
@@ -87,8 +87,8 @@
                                     </StackPanel>
                                 </Border>
                                 <TextBlock x:Name="HeaderNodesText" Style="{StaticResource HintText}"
-                                           Text="Серверы: 0" VerticalAlignment="Center" Margin="0,0,10,0"
-                                           ToolTip="Всего серверов в списке" />
+                                           Text="из 0 в списке" VerticalAlignment="Center" Margin="0,0,10,0"
+                                           ToolTip="Всего серверов в списке — включая непроверенные и давно не проверявшиеся. Щит показывает, сколько из них доступно" />
 
                                 <Border Background="{DynamicResource YouTubeSurfaceBrush}"
                                         BorderBrush="{DynamicResource YouTubeBorderBrush}" BorderThickness="1"
