@@ -42,11 +42,13 @@ CoreLog, TrayState, ProductFeatures, BypassProfiles, Layout); сервисы `Si
 
 **Сборка:** `build/Version.props`, `version.ps1`, `publish-release.ps1`, `publish-installer.ps1`,
 `publish-android.ps1` (GitHub APK), `publish-store.ps1` (APK для RuStore + AAB для Play),
-`installer.iss`, `VieNLink.Android/Store/SideloadManifest.xml`.
+`installer.iss`, `VieNLink.Android/Store/SideloadManifest.xml`, `tv-restore.ps1` (возврат
+почищенного ТВ Xiaomi).
 
 **Документы:** `docs/plan-2026.md` (журнал работ и решений, архив), `docs/handoff.md` (состояние
 и следующий шаг), `docs/VERSIONING.md`, `docs/android-design.md`, `docs/privacy.md`,
-`docs/store-listing.md`, `docs/store-publication.md`, `docs/rustore-moderation.md`, `CHANGELOG.md`.
+`docs/store-listing.md`, `docs/store-publication.md`, `docs/rustore-moderation.md`,
+`docs/tv-cleanup.md` (реестр отключённого/удалённого на ТВ Xiaomi, как вернуть), `CHANGELOG.md`.
 
 ## Как работает (ключевое)
 - Сервер считается рабочим, только если HTTP-запрос **через него** открыл сайт. Узлы проверяются
@@ -142,6 +144,11 @@ CoreLog, TrayState, ProductFeatures, BypassProfiles, Layout); сервисы `Si
   «Отсев — Перепроверка» / «Журнал» / «Общие». Кнопки шапки: «Отключить» (видна при активности),
   «Сменить сервер», «Поделиться» (копирует только `IP:порт`), «Отменить» во время операции.
   Список серверов скрыт — только сводка и проверка.
+- Android, форм-фактор: `DeviceProfile` — телефон (портрет), планшет `sw600dp+`
+  (`FullSensor`, две колонки), ТВ (`UiMode.TypeTelevision`, landscape, `Ui.LayoutScale` 1.35,
+  подсветка фокуса для пульта). Не фиксировать портрет на больших экранах: Android 16
+  всё равно игнорирует ограничение. ТВ-сборка — `publish-android.ps1 -TvBuild`
+  (`com.vienlink.app.tv`, `LEANBACK_LAUNCHER`, баннер, без обязательного тача).
 - Android: 4 нижние вкладки «Подключение / Обход / Инструменты / Настройки». Журнал —
   плитка в «Инструментах» (отдельный экран `LogActivity`). В шапке —
   счётчики сервисов, «Проверить серверы» (во время поиска «Остановить поиск»), рядом
@@ -188,6 +195,17 @@ CoreLog, TrayState, ProductFeatures, BypassProfiles, Layout); сервисы `Si
   не поднять (проверено всеми стратегиями zapret и нашим движком).
 - Кастомный `TabItem` не отдаёт содержимое вкладок в UI Automation — автоклики по вкладкам ПК
   не работают; проверять через `SelfTest`, журнал или скриншоты устройства.
+- Android может зависнуть после фона из-за **дедлока остановки мира MonoVM** (главный поток
+  и все управляемые потоки в `sigsuspend`, ANR `Broadcast … MAINTENANCE`, окно не рисуется,
+  `reportedDrawn=false`). В коде не лечится; обход — `VieNLink.Android/Environment.txt`
+  (`MONO_GC_PARAMS=nursery-size=16m`, `MONO_THREADS_SUSPEND=coop`), тяжёлая работа после
+  возврата — только в фоне с задержкой (см. `docs/handoff.md` от 23.11.2026).
+- Android 11 (Lenovo TB-J706F): Release **с AOT** падает SIGSEGV через ~1 с после старта
+  (Debug и no-AOT работают). `RunAOTCompilation=false`/`AndroidEnableProfiledAot=false`
+  в csproj; `publish-android.ps1 -NoAot` — для планшета/ТВ обязательно.
+- Java-платформа (`com.vienlink.platform`) вызывается из C# по имени: `Class.forName` нужен
+  **загрузчик приложения** (`Application.Context.ClassLoader`), иначе boot loader не находит
+  класс; в Release обязателен `keep-java.txt` (`-keep class com.vienlink.platform.**`).
 - Android Activity не экспортированы: `am start` их не откроет, навигация — тапами.
 
 ## Сборка и проверки
@@ -203,6 +221,12 @@ dotnet run --project VieNLink.SelfTest -- videoprobe   # проба видео �
 dotnet run --project VieNLink.SelfTest -- liveness 60 <url>
 dotnet run --project VieNLink.SelfTest -- mtprotocheck 40
 ```
+С 24.11.2026 Java-платформа libbox включена во **все** Android-сборки по умолчанию
+(обычная, тестовая, ТВ): на телефоне она не даёт зависаний MonoVM после фона.
+Аварийный откат — `-p:AndroidJavaPlatform=false`.
+Тестовая сборка (отдельный package, ставится рядом с обычной):
+`build\publish-android.ps1 -TestBuild` → `release\VieNLink-<версия>-test.apk`
+(`com.vienlink.app.test`, «VieNLink Test»).
 Android (отдельный SDK, без админа):
 ```powershell
 $dotnet = "$env:LOCALAPPDATA\dotnet\dotnet.exe"

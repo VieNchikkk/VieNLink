@@ -102,6 +102,16 @@ Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $outD
 Copy-Item -LiteralPath (Join-Path $root 'THIRD-PARTY-NOTICES.md') -Destination (Join-Path $outDir 'THIRD-PARTY-NOTICES.md') -Force
 Write-Host 'Лицензия и THIRD-PARTY-NOTICES добавлены в поставку.' -ForegroundColor Cyan
 
+# Встроенный стартовый набор серверов (seed): генерируется режимом SelfTest `exportseed`.
+$seedSource = Join-Path $root 'seed.txt'
+if (Test-Path -LiteralPath $seedSource) {
+    Copy-Item -LiteralPath $seedSource -Destination (Join-Path $outDir 'seed.txt') -Force
+    Write-Host 'seed.txt (стартовый набор серверов) добавлен в поставку.' -ForegroundColor Cyan
+}
+else {
+    Write-Host 'seed.txt не найден: релиз без встроенного стартового набора серверов.' -ForegroundColor Yellow
+}
+
 Get-ChildItem -LiteralPath $outDir -Recurse -File | Unblock-File
 
 $certificate = $null

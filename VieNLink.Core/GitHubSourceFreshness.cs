@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Net.Http;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace VieNLink;
 
@@ -27,10 +28,86 @@ internal static class GitHubSourceFreshness
         @"github\.com/([^/?#\s]+)/([^/?#\s]+)/(?:blob|raw)/(?<rest>[^?#\s]+)",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    private static readonly Regex GitLabRawRegex = new(
+        @"gitlab\.com/([^/?#\s]+)/([^/?#\s]+)/-/raw/([^/?#\s]+)/(?<rest>[^?#\s]+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex GiteeRawRegex = new(
+        @"gitee\.com/([^/?#\s]+)/([^/?#\s]+)/raw/([^/?#\s]+)/(?<rest>[^?#\s]+)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private static readonly ConcurrentDictionary<string, CacheEntry> Cache =
         new(StringComparer.OrdinalIgnoreCase);
 
     private static readonly HttpClient Client = CreateClient();
+
+    /// <summary>Форма кэша на диске: переживает перезапуск, чтобы не жечь квоту GitHub API заново.</summary>
+    private sealed class FreshnessSnapshot
+    {
+        public Dictionary<string, FreshnessEntry> Entries { get; set; } = new();
+    }
+
+    private sealed class FreshnessEntry
+    {
+        public DateTime CheckedUtc { get; set; }
+        public bool Fresh { get; set; }
+        public bool DateKnown { get; set; }
+        public bool ApiReached { get; set; }
+        public DateTimeOffset? UpdatedAt { get; set; }
+    }
+
+    static GitHubSourceFreshness()
+    {
+        var snapshot = JsonFileStore.Read<FreshnessSnapshot>(AppPaths.FreshnessPath);
+        if (snapshot?.Entries is null)
+        {
+            return;
+        }
+
+        foreach (var pair in snapshot.Entries)
+        {
+            Cache[pair.Key] = new CacheEntry(
+                pair.Value.CheckedUtc,
+                pair.Value.Fresh,
+                pair.Value.DateKnown,
+                pair.Value.ApiReached,
+                pair.Value.UpdatedAt);
+        }
+    }
+
+    /// <summary>
+    /// Сохраняет кэш дат на диск. Вызывается после сбора: при следующем запуске
+    /// известные даты публикации не запрашиваются у API повторно.
+    /// </summary>
+    public static void PersistCache()
+    {
+        if (Cache.IsEmpty)
+        {
+            return;
+        }
+
+        try
+        {
+            var snapshot = new FreshnessSnapshot();
+            foreach (var pair in Cache)
+            {
+                snapshot.Entries[pair.Key] = new FreshnessEntry
+                {
+                    CheckedUtc = pair.Value.CheckedUtc,
+                    Fresh = pair.Value.Fresh,
+                    DateKnown = pair.Value.DateKnown,
+                    ApiReached = pair.Value.ApiReached,
+                    UpdatedAt = pair.Value.UpdatedAt,
+                };
+            }
+
+            JsonFileStore.Write(AppPaths.FreshnessPath, snapshot);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            AppLog.Write("sources", "Не удалось сохранить кэш дат публикации", exception);
+        }
+    }
 
     /// <summary>
     /// Fresh — можно собирать; DateKnown — дата публикации известна (для иконки);
@@ -43,22 +120,39 @@ internal static class GitHubSourceFreshness
         DateTimeOffset? UpdatedAt);
 
     internal sealed record SourceLocation(
+        string Host,
         string Repository,
         string? Reference,
         string? Path)
     {
-        public string CacheKey => Path is null
-            ? Repository
-            : Repository + "|" + (Reference ?? string.Empty) + "|" + Path;
+        public string CacheKey => Host + "|" + Repository + "|" + (Reference ?? string.Empty) + "|" + (Path ?? string.Empty);
+    }
+
+    /// <summary>Максимум обращений к GitHub API за один сбор (на все источники вместе).</summary>
+    public const int MaximumApiRequests = 30;
+
+    /// <summary>
+    /// Счётчик оставшихся обращений к GitHub API на текущий сбор. Источники сверх лимита
+    /// собираются без проверки даты (как при недоступном API), а не пропускаются.
+    /// </summary>
+    internal sealed class ApiBudget
+    {
+        private int _remaining;
+        public ApiBudget(int limit) => _remaining = limit;
+
+        /// <summary>Пытается занять одно обращение; false — лимит исчерпан.</summary>
+        public bool TryTake() => Interlocked.Decrement(ref _remaining) >= 0;
     }
 
     public static async Task<SourceFreshness> CheckAsync(
         SourceDefinition source,
         TimeSpan maximumAge,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ApiBudget? budget = null)
     {
-        // Личные подписки и одиночные ссылки не фильтруем: это выбор пользователя.
-        if (source.IsMine || source.Kind == SourceKind.SingleLink)
+        // Личные подписки, одиночные ссылки и каналы Telegram не фильтруем по дате
+        // публикации: у каналов нет даты коммита на GitHub, но они могут давать серверы.
+        if (source.IsMine || source.Kind == SourceKind.SingleLink || SourceKinds.IsTelegram(source))
         {
             return new SourceFreshness(true, false, true, null);
         }
@@ -66,7 +160,16 @@ internal static class GitHubSourceFreshness
         var location = TryGetLocation(source.Url);
         if (location is null)
         {
-            // Не GitHub — дату публикации определить нельзя, такой источник не собираем.
+            // Не GitHub. У авто-найденных сайтов дата публикации лежит в самом источнике
+            // (SourceDiscoveryService ставит LastPublishedUtc по адресу статьи/файла) —
+            // свежесть считаем по ней.
+            if (source.LastPublishedUtc is { } published)
+            {
+                var isFresh = DateTime.UtcNow - published <= maximumAge;
+                return new SourceFreshness(isFresh, true, true, published);
+            }
+
+            // Дату определить нельзя — такой источник не собираем (карантин).
             return new SourceFreshness(false, false, true, null);
         }
 
@@ -78,6 +181,12 @@ internal static class GitHubSourceFreshness
                 return new SourceFreshness(
                     cached.Fresh, cached.DateKnown, cached.ApiReached, cached.UpdatedAt);
             }
+        }
+
+        // Бюджет исчерпан — ведём себя как при недоступном API: собираем без даты.
+        if (budget is not null && !budget.TryTake())
+        {
+            return new SourceFreshness(false, false, false, null);
         }
 
         var (updatedAt, reached) = await FetchUpdatedAtAsync(location, cancellationToken)
@@ -95,12 +204,32 @@ internal static class GitHubSourceFreshness
     /// <summary>owner/repo из ссылки GitHub; null — источник не на GitHub.</summary>
     internal static string? TryGetRepository(string? url) => TryGetLocation(url)?.Repository;
 
-    /// <summary>Разбирает ссылку GitHub в репозиторий, ветку и путь к файлу.</summary>
+    /// <summary>Разбирает ссылку GitHub/GitLab/Gitee в хост, репозиторий, ветку и путь к файлу.</summary>
     internal static SourceLocation? TryGetLocation(string? url)
     {
         if (string.IsNullOrWhiteSpace(url))
         {
             return null;
+        }
+
+        var gitlab = GitLabRawRegex.Match(url);
+        if (gitlab.Success)
+        {
+            return new SourceLocation(
+                "gitlab",
+                gitlab.Groups[1].Value + "/" + gitlab.Groups[2].Value,
+                gitlab.Groups[3].Value,
+                gitlab.Groups["rest"].Value);
+        }
+
+        var gitee = GiteeRawRegex.Match(url);
+        if (gitee.Success)
+        {
+            return new SourceLocation(
+                "gitee",
+                gitee.Groups[1].Value + "/" + gitee.Groups[2].Value,
+                gitee.Groups[3].Value,
+                gitee.Groups["rest"].Value);
         }
 
         var match = RawRegex.Match(url);
@@ -117,7 +246,7 @@ internal static class GitHubSourceFreshness
                 @"(?:^|/)(?:github\.com|api\.github\.com/repos)/([^/?#\s]+)/([^/?#\s]+)",
                 RegexOptions.IgnoreCase);
             return repo.Success
-                ? new SourceLocation(repo.Groups[1].Value + "/" + repo.Groups[2].Value, null, null)
+                ? new SourceLocation("github", repo.Groups[1].Value + "/" + repo.Groups[2].Value, null, null)
                 : null;
         }
 
@@ -125,7 +254,7 @@ internal static class GitHubSourceFreshness
         var parts = match.Groups["rest"].Value.Split('/', StringSplitOptions.RemoveEmptyEntries);
         if (parts.Length == 0)
         {
-            return new SourceLocation(repository, null, null);
+            return new SourceLocation("github", repository, null, null);
         }
 
         string reference;
@@ -144,7 +273,7 @@ internal static class GitHubSourceFreshness
         }
 
         var path = index < parts.Length ? string.Join('/', parts[index..]) : null;
-        return new SourceLocation(repository, reference, path);
+        return new SourceLocation("github", repository, reference, path);
     }
 
     private static async Task<(DateTimeOffset? Date, bool Reached)> FetchUpdatedAtAsync(
@@ -153,11 +282,22 @@ internal static class GitHubSourceFreshness
     {
         if (location.Path is null)
         {
-            return await FetchRepositoryPushedAtAsync(location.Repository, cancellationToken)
-                .ConfigureAwait(false);
+            return await FetchRepositoryDateAsync(location, cancellationToken).ConfigureAwait(false);
         }
 
-        var path = Uri.EscapeDataString(location.Path);
+        return location.Host switch
+        {
+            "gitlab" => await FetchGitLabAsync(location, cancellationToken).ConfigureAwait(false),
+            "gitee" => await FetchGiteeAsync(location, cancellationToken).ConfigureAwait(false),
+            _ => await FetchGitHubAsync(location, cancellationToken).ConfigureAwait(false),
+        };
+    }
+
+    private static async Task<(DateTimeOffset? Date, bool Reached)> FetchGitHubAsync(
+        SourceLocation location,
+        CancellationToken cancellationToken)
+    {
+        var path = Uri.EscapeDataString(location.Path!);
         var apiUrl = "https://api.github.com/repos/" + location.Repository + "/commits?path=" + path + "&per_page=1";
         if (!string.IsNullOrWhiteSpace(location.Reference))
         {
@@ -170,15 +310,131 @@ internal static class GitHubSourceFreshness
             return file;
         }
 
-        var repository = await FetchRepositoryPushedAtAsync(location.Repository, cancellationToken)
-            .ConfigureAwait(false);
+        var repository = await FetchRepositoryDateAsync(location, cancellationToken).ConfigureAwait(false);
         return (repository.Date, file.Reached || repository.Reached);
     }
 
-    private static Task<(DateTimeOffset? Date, bool Reached)> FetchRepositoryPushedAtAsync(
-        string repository,
+    /// <summary>Дата последней активности репозитория (для ссылок без файла).</summary>
+    private static Task<(DateTimeOffset? Date, bool Reached)> FetchRepositoryDateAsync(
+        SourceLocation location,
         CancellationToken cancellationToken) =>
-        ReadDateAsync("https://api.github.com/repos/" + repository, "pushed_at", cancellationToken);
+        location.Host switch
+        {
+            "gitlab" => FetchDateAsync(
+                "https://gitlab.com/api/v4/projects/" + Uri.EscapeDataString(location.Repository),
+                root => ParseProp(root, "last_activity_at"), cancellationToken),
+            "gitee" => FetchDateAsync(
+                "https://gitee.com/api/v5/repos/" + location.Repository,
+                root => ParseProp(root, "updated_at"), cancellationToken),
+            _ => ReadDateAsync("https://api.github.com/repos/" + location.Repository, "pushed_at", cancellationToken),
+        };
+
+    private static async Task<(DateTimeOffset? Date, bool Reached)> FetchGitLabAsync(
+        SourceLocation location,
+        CancellationToken cancellationToken)
+    {
+        var commitsUrl = "https://gitlab.com/api/v4/projects/" + Uri.EscapeDataString(location.Repository) +
+                         "/repository/commits?per_page=1&path=" + Uri.EscapeDataString(location.Path!);
+        if (!string.IsNullOrWhiteSpace(location.Reference))
+        {
+            commitsUrl += "&ref_name=" + Uri.EscapeDataString(location.Reference);
+        }
+
+        var file = await FetchDateAsync(commitsUrl, root => ParseProp(root, "committed_date"), cancellationToken)
+            .ConfigureAwait(false);
+        if (file.Date is not null)
+        {
+            return file;
+        }
+
+        var repository = await FetchRepositoryDateAsync(location, cancellationToken).ConfigureAwait(false);
+        return (repository.Date, file.Reached || repository.Reached);
+    }
+
+    private static async Task<(DateTimeOffset? Date, bool Reached)> FetchGiteeAsync(
+        SourceLocation location,
+        CancellationToken cancellationToken)
+    {
+        var commitsUrl = "https://gitee.com/api/v5/repos/" + location.Repository +
+                         "/commits?per_page=1&path=" + Uri.EscapeDataString(location.Path!);
+        if (!string.IsNullOrWhiteSpace(location.Reference))
+        {
+            commitsUrl += "&sha=" + Uri.EscapeDataString(location.Reference);
+        }
+
+        var file = await FetchDateAsync(commitsUrl, ParseCommitDate, cancellationToken).ConfigureAwait(false);
+        if (file.Date is not null)
+        {
+            return file;
+        }
+
+        var repository = await FetchRepositoryDateAsync(location, cancellationToken).ConfigureAwait(false);
+        return (repository.Date, file.Reached || repository.Reached);
+    }
+
+    /// <summary>
+    /// Простой GET + разбор даты по переданному селектору (для GitLab/Gitee, без зеркал GitHub).
+    /// </summary>
+    private static async Task<(DateTimeOffset? Date, bool Reached)> FetchDateAsync(
+        string apiUrl,
+        Func<JsonElement, DateTimeOffset?> parse,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, apiUrl);
+            request.Headers.Accept.ParseAdd("application/json");
+            using var response = await Client.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken)
+                .ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+            {
+                return (null, false);
+            }
+
+            using var document = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false));
+            var root = document.RootElement;
+            if (root.ValueKind == JsonValueKind.Array)
+            {
+                if (root.GetArrayLength() == 0)
+                {
+                    return (null, true);
+                }
+
+                root = root[0];
+            }
+
+            return root.ValueKind == JsonValueKind.Object ? (parse(root), true) : (null, true);
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
+            return (null, false);
+        }
+    }
+
+    private static DateTimeOffset? ParseProp(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var value) ? ParseDate(value) : null;
+
+    private static DateTimeOffset? ParseCommitDate(JsonElement root)
+    {
+        if (!root.TryGetProperty("commit", out var commit) || commit.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (commit.TryGetProperty("committer", out var committer) && committer.ValueKind == JsonValueKind.Object &&
+            committer.TryGetProperty("date", out var date))
+        {
+            return ParseDate(date);
+        }
+
+        return null;
+    }
 
     private static async Task<(DateTimeOffset? Date, bool Reached)> ReadDateAsync(
         string apiUrl,

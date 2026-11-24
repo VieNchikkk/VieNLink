@@ -16,7 +16,7 @@ internal static class Maintenance
     private const int MaintenanceYouTubeBatches = 3;
 
     /// <summary>Сколько серверов проверять сразу после первого заполнения списка.</summary>
-    private const int StartupProbeBatch = 150;
+    private static int StartupProbeBatch => ProbeProfile.StartupBatch;
 
     private static readonly SemaphoreSlim Gate = new(1, 1);
 
@@ -48,9 +48,10 @@ internal static class Maintenance
             // срабатывает и в Doze (ColorOS иначе откладывал обслуживание на часы),
             // а следующий ставится при каждом запуске приёмника — цепочка не рвётся,
             // даже если процесс убьют посередине работы.
-            var trigger = Java.Lang.JavaSystem.CurrentTimeMillis() + 30 * 60_000;
+            var minutes = ProbeProfile.MaintenanceIntervalMinutes;
+            var trigger = Java.Lang.JavaSystem.CurrentTimeMillis() + minutes * 60_000L;
             alarm.SetAndAllowWhileIdle(AlarmType.RtcWakeup, trigger, pending);
-            AppLog.Write("maintenance", "Следующее фоновое обслуживание через 30 минут");
+            AppLog.Write("maintenance", $"Следующее фоновое обслуживание через {minutes} минут");
         }
         catch (Exception exception)
         {
@@ -117,18 +118,19 @@ internal static class Maintenance
             // Живых серверов мало (не набрана квота) — списки обновляем чаще: бесплатные
             // серверы вымирают, и старый список уже не даёт рабочих адресов.
             var poorList = !emptyList &&
-                           (counts.Working < NodeLimits.MinWorkingNodes ||
-                            counts.Youtube < NodeLimits.MinWorkingPerService ||
-                            counts.Telegram < NodeLimits.MinWorkingPerService ||
-                            counts.Discord < NodeLimits.MinWorkingPerService ||
-                            counts.Universal < NodeLimits.MinWorkingPerService);
+                           (counts.Working < ProbeProfile.MinWorking ||
+                            counts.Youtube < ProbeProfile.MinWorkingPerService ||
+                            (!DeviceProfile.IsTelevision &&
+                             (counts.Telegram < ProbeProfile.MinWorkingPerService ||
+                              counts.Discord < ProbeProfile.MinWorkingPerService)) ||
+                            counts.Universal < ProbeProfile.MinWorkingPerService);
 
             var sourceInterval = settings.AutoRefreshMinutes > 0
                 ? TimeSpan.FromMinutes(Math.Clamp(settings.AutoRefreshMinutes, 15, 1440))
                 : TimeSpan.FromHours(Math.Clamp(settings.AutoUpdateHours, 1, 168));
             if (poorList)
             {
-                sourceInterval = TimeSpan.FromMinutes(30);
+                sourceInterval = ProbeProfile.SourceRefreshWhenFew;
             }
 
             if (settings.AutoCollectServers &&
@@ -158,7 +160,7 @@ internal static class Maintenance
                         .EnsureWorkingQuotaAsync(3, StartupProbeBatch, cancellationToken)
                         .ConfigureAwait(false);
                     AppLog.Write("maintenance",
-                        $"Стартовая проверка: рабочих {working} из {NodeLimits.MinWorkingNodes}");
+                        $"Стартовая проверка: рабочих {working} из {ProbeProfile.MinWorking}");
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
@@ -181,7 +183,8 @@ internal static class Maintenance
                 {
                     var discovery = await SourceDiscoveryService.DiscoverAsync(
                         NodeStore.SnapshotSources(), null, cancellationToken,
-                        settings.SourceFreshnessHours).ConfigureAwait(false);
+                        settings.SourceFreshnessHours,
+                        includeWeb: !DeviceProfile.IsTelevision).ConfigureAwait(false);
                     var added = NodeStore.AddDiscovered(discovery, settings.AutoCollectServers);
                     var mtproto = MtProtoStore.AddDiscovered(discovery.MtProto);
                     settings.LastDiscoveryUtc = DateTime.UtcNow;
@@ -195,7 +198,7 @@ internal static class Maintenance
                 }
             }
 
-            if (android.AutoMtProto)
+            if (android.AutoMtProto && !DeviceProfile.IsTelevision)
             {
                 var shouldCollect = now - android.LastMtProtoCollectUtc >=
                                     TimeSpan.FromMinutes(
@@ -248,7 +251,7 @@ internal static class Maintenance
                         .EnsureWorkingQuotaAsync(3, NodeTester.MaxBatch, cancellationToken)
                         .ConfigureAwait(false);
                     AppLog.Write("maintenance",
-                        $"Фоновая проверка: рабочих {working} из {NodeLimits.MinWorkingNodes}");
+                        $"Фоновая проверка: рабочих {working} из {ProbeProfile.MinWorking}");
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {

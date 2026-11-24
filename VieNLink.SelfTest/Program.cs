@@ -35,6 +35,8 @@ internal static class Program
     private static async Task<int> Main(string[] args)
     {
         AppLog.SuppressFile = true;
+        // Чтобы режимы sources/sourcestats/prunesources читали настоящий sources.dat.
+        SecretProtector.Current = new DpapiSecretProtector();
         if (args.Length == 0 || args[0] is "-h" or "--help")
         {
             Console.WriteLine("Режимы: parsers | liveness [узлов-на-источник] [адрес-проверки]");
@@ -53,6 +55,9 @@ internal static class Program
                 break;
             case "seed":
                 await SeedCacheAsync();
+                break;
+            case "exportseed":
+                RunExportSeed(args.Length > 1 ? args[1] : null);
                 break;
             case "proxytest":
                 await RunProxyTestAsync();
@@ -2005,6 +2010,11 @@ internal static class Program
               SourceKinds.Classify("https://raw.githubusercontent.com/Airuop/MTProtoCollector/main/proxy/mtproto.json") == SourceKind.MtProto,
             "типы источников: канал и сайт MTProto различаются");
 
+        Check(SourceKinds.IsServerSource(new SourceDefinition { Url = "https://t.me/s/v2rayng_config", Kind = SourceKind.Telegram }) &&
+              !SourceKinds.IsServerSource(new SourceDefinition { Url = "https://raw.githubusercontent.com/Airuop/MTProtoCollector/main/proxy/mtproto.json", Kind = SourceKind.MtProto }) &&
+              SourceKinds.IsServerSource(new SourceDefinition { Url = "https://raw.githubusercontent.com/x/y/main/sub", Kind = SourceKind.PlainList }),
+            "каналы Telegram дают серверы, сайты MTProto — только прокси");
+
         // Мусорные и пограничные ссылки не должны проходить разбор.
         Check(LinkParser.Parse("vless://11111111-2222-3333-4444-555555555555@example.com:70000?security=tls#P", "t") is null,
             "порт вне диапазона отбрасывается");
@@ -2014,6 +2024,15 @@ internal static class Program
         Check(LinkParser.Parse(
                 "vless://11111111-2222-3333-4444-555555555555@example.com:443?security=reality&pbk=zz&type=tcp#R", "t") is null,
             "reality с некорректным ключом отбрасывается");
+
+        var tuicNode = LinkParser.Parse(
+            "tuic://11111111-2222-3333-4444-555555555555:secret-pass@example.com:443?alpn=h3&sni=example.com&congestion_control=bbr#T", "t");
+        Check(tuicNode is not null && tuicNode.Protocol == "tuic" &&
+              tuicNode.OutboundJson.Contains("\"type\":\"tuic\"", StringComparison.Ordinal) &&
+              tuicNode.OutboundJson.Contains("\"congestion_control\":\"bbr\"", StringComparison.Ordinal),
+            "tuic: ссылка разобрана в outbound TUIC");
+        Check(LinkParser.Parse("tuic://@example.com:443", "t") is null,
+            "tuic: без uuid и пароля отбрасывается");
 
         // Telegram: в канале лежит история — старые посты в список не попадают.
         var telegramFeedHtml =
@@ -2168,6 +2187,14 @@ internal static class Program
         Check(discovered.Count == 2 && discovered.Contains("All_Configs_Sub.txt") && discovered.Contains("sub/sub_merge.txt"),
             "автопоиск: отбор файлов " + string.Join(", ", discovered));
 
+        var discoveredNoSize = SourceDiscoveryService.SelectCandidatePaths(new[]
+        {
+            "All_Configs_Sub.txt", "README.md", "sub/vless.txt", "images/logo.png",
+        });
+        Check(discoveredNoSize.Contains("All_Configs_Sub.txt") && discoveredNoSize.Contains("sub/vless.txt") &&
+              !discoveredNoSize.Contains("README.md") && !discoveredNoSize.Contains("images/logo.png"),
+            "автопоиск: отбор файлов без размера (GitLab) " + string.Join(", ", discoveredNoSize));
+
         var siteIndex = """
         <a href="/free-node/2026-11-19-vpn-free.htm" title="11月19日">11月19日免费节点 Clash/V2ray</a>
         <a href="/free-node/">免费节点</a>
@@ -2193,6 +2220,15 @@ internal static class Program
         """;
         var subscriptions = SourceDiscoveryService.ExtractSubscriptionUrls(articleHtml);
         Check(subscriptions.Count == 3, "автопоиск сайтов: ссылки подписок " + string.Join(", ", subscriptions));
+
+        var webDate = SourceDiscoveryService.ExtractPublishedDate("https://node.freeclashnode.com/uploads/2026/11/0-20261119.txt");
+        Check(webDate is { } d && d.Year == 2026 && d.Month == 11 && d.Day == 19,
+            "автопоиск сайтов: дата из компактного адреса (20261119)");
+        var webDatePath = SourceDiscoveryService.ExtractPublishedDate("https://www.freeclashnode.com/free-node/2026-11-19-vpn-free.htm");
+        Check(webDatePath is { } dp && dp.Day == 19 && dp.Month == 11,
+            "автопоиск сайтов: дата из пути (2026-11-19)");
+        Check(SourceDiscoveryService.ExtractPublishedDate("https://nodefree.org/p/2683.html") is null,
+            "автопоиск сайтов: без даты в адресе — null");
 
         Console.WriteLine("zapret:");
         var zapretHostlist = Path.Combine(Path.GetTempPath(), "vienlink-zapret-test-hosts.txt");
@@ -2285,6 +2321,34 @@ internal static class Program
         }
 
         Console.WriteLine($"Сохранено {collected.Nodes.Count} узлов и {collected.MtProto.Count} MTProto в {AppPaths.NodesPath}");
+    }
+
+    /// <summary>
+    /// Генерирует seed.txt из рабочих серверов: перед релизом владелец прогоняет этот режим,
+    /// получившийся файл кладётся в установщик и APK как стартовый набор. Берём только
+    /// свежие рабочие серверы (проверенные не позже двух суток), ссылки без повторов.
+    /// </summary>
+    private static void RunExportSeed(string? outputPath)
+    {
+        var working = NodeSourceService.LoadCache(
+            out _, out _, DateTime.UtcNow.AddDays(-2), AppPaths.WorkingNodesPath);
+        var links = working
+            .Where(node => node.Status == NodeStatus.Working)
+            .Select(node => node.RawLink)
+            .Where(link => !string.IsNullOrWhiteSpace(link))
+            .Distinct(StringComparer.Ordinal)
+            .Take(300)
+            .ToList();
+
+        var path = string.IsNullOrWhiteSpace(outputPath)
+            ? Path.Combine(AppPaths.DataDirectory, "seed.txt")
+            : outputPath;
+        File.WriteAllLines(path, links);
+        Console.WriteLine($"Seed: {links.Count} рабочих серверов записано в {path}");
+        foreach (var link in links.Take(5))
+        {
+            Console.WriteLine("  " + ShortenText(link, 90));
+        }
     }
 
     private static async Task RunLivenessAsync(int perSource, string testUrl)
@@ -2485,6 +2549,120 @@ internal static class Program
         Check(seeded.TotalWorkingNodeCount == 1,
             "источники: рабочий сервер из кэша попадает в «рабочих всего»");
 
+        // Ротация «бесплодных» источников: давний, много серверов, ноль рабочих.
+        var barrenSource = new SourceDefinition
+        {
+            Name = "barren",
+            TotalNodeCount = 500,
+            TotalWorkingNodeCount = 0,
+            FirstSeenUtc = DateTime.UtcNow.AddDays(-10),
+        };
+        var (rotDisabled, rotRemoved) = NodeSourceStats.RotateBarrenSources(new[] { barrenSource }, DateTime.UtcNow);
+        Check(rotDisabled.Count == 1 && ReferenceEquals(rotDisabled[0], barrenSource) &&
+              barrenSource.BarrenSinceUtc is not null && rotRemoved.Count == 0,
+            "источники: бесплодный источник отключается и помечается");
+        var (rotDisabled2, rotRemoved2) = NodeSourceStats.RotateBarrenSources(new[] { barrenSource }, DateTime.UtcNow);
+        Check(rotDisabled2.Count == 0 && rotRemoved2.Count == 0,
+            "источники: помеченный бесплодный не отключается повторно");
+        var (_, rotRemoved3) = NodeSourceStats.RotateBarrenSources(new[] { barrenSource }, DateTime.UtcNow.AddDays(8));
+        Check(rotRemoved3.Count == 1,
+            "источники: бесплодный удаляется после карантина");
+
+        var goodSource = new SourceDefinition
+        {
+            Name = "good",
+            TotalNodeCount = 500,
+            TotalWorkingNodeCount = 1,
+            FirstSeenUtc = DateTime.UtcNow.AddDays(-10),
+            BarrenSinceUtc = DateTime.UtcNow.AddDays(-2),
+        };
+        var (rotDisabled4, rotRemoved4) = NodeSourceStats.RotateBarrenSources(new[] { goodSource }, DateTime.UtcNow);
+        Check(rotDisabled4.Count == 0 && rotRemoved4.Count == 0 && goodSource.BarrenSinceUtc is null,
+            "источники: источник с рабочим сервером не бесплодный");
+
+        var freshSource = new SourceDefinition
+        {
+            Name = "fresh",
+            TotalNodeCount = 1000,
+            TotalWorkingNodeCount = 0,
+            FirstSeenUtc = DateTime.UtcNow.AddHours(-1),
+        };
+        var (rotDisabled5, _) = NodeSourceStats.RotateBarrenSources(new[] { freshSource }, DateTime.UtcNow);
+        Check(rotDisabled5.Count == 0,
+            "источники: свежий источник не отключается сразу");
+
+        // Контент-дедуп: одинаковый текст у разных источников — зеркала.
+        var mirrorA = new FetchOutcome
+        {
+            Source = new SourceDefinition { Name = "A", Url = "https://a/sub", IsAutoDiscovered = true, TotalWorkingNodeCount = 1 },
+            ContentHash = "HASH1",
+        };
+        var mirrorB = new FetchOutcome
+        {
+            Source = new SourceDefinition { Name = "B", Url = "https://b/sub", IsAutoDiscovered = true, TotalWorkingNodeCount = 0 },
+            ContentHash = "HASH1",
+        };
+        var (dedupRemove, dedupSkip) = NodeSourceStats.DedupMirrors(new[] { mirrorA, mirrorB });
+        Check(dedupRemove.Count == 1 && ReferenceEquals(dedupRemove[0], mirrorB.Source) &&
+              dedupSkip.Count == 1 && dedupSkip.Contains(mirrorB),
+            "источники: автоподобранное зеркало удаляется, лучший остаётся");
+
+        var builtA = new FetchOutcome
+        {
+            Source = new SourceDefinition { Name = "built-a", Url = "https://a2/sub", TotalWorkingNodeCount = 1 },
+            ContentHash = "HASH2",
+        };
+        var builtB = new FetchOutcome
+        {
+            Source = new SourceDefinition { Name = "built-b", Url = "https://b2/sub", TotalWorkingNodeCount = 0 },
+            ContentHash = "HASH2",
+        };
+        var (dedupRemove2, dedupSkip2) = NodeSourceStats.DedupMirrors(new[] { builtA, builtB });
+        Check(dedupRemove2.Count == 0 && dedupSkip2.Count == 1 && dedupSkip2.Contains(builtB),
+            "источники: встроенное зеркало не удаляется, но пропускается");
+
+        var (dedupRemove3, dedupSkip3) = NodeSourceStats.DedupMirrors(new[]
+        {
+            new FetchOutcome { Source = new SourceDefinition { Name = "x", Url = "https://x" }, ContentHash = "H1" },
+            new FetchOutcome { Source = new SourceDefinition { Name = "y", Url = "https://y" }, ContentHash = "H2" },
+        });
+        Check(dedupRemove3.Count == 0 && dedupSkip3.Count == 0,
+            "источники: разное содержимое не зеркала");
+
+        // Карантин источников без даты: удаляются не сразу, а после срока.
+        var quarantined = new SourceDefinition { Name = "q", QuarantineSinceUtc = DateTime.UtcNow.AddDays(-8) };
+        var quarantineRemoval = NodeSourceStats.RotateQuarantinedSources(new[] { quarantined }, DateTime.UtcNow);
+        Check(quarantineRemoval.Count == 1 && ReferenceEquals(quarantineRemoval[0], quarantined),
+            "источники: карантинный источник удаляется после срока");
+        var freshQuarantine = new SourceDefinition { Name = "q2", QuarantineSinceUtc = DateTime.UtcNow.AddHours(-1) };
+        Check(NodeSourceStats.RotateQuarantinedSources(new[] { freshQuarantine }, DateTime.UtcNow).Count == 0,
+            "источники: свежий карантинный источник не удаляется");
+        var mineQuarantined = new SourceDefinition { Name = "q3", IsMine = true, QuarantineSinceUtc = DateTime.UtcNow.AddDays(-8) };
+        Check(NodeSourceStats.RotateQuarantinedSources(new[] { mineQuarantined }, DateTime.UtcNow).Count == 0,
+            "источники: личный источник в карантине не удаляется");
+
+        // Бюджет обращений к GitHub API за сбор.
+        var apiBudget = new GitHubSourceFreshness.ApiBudget(2);
+        Check(apiBudget.TryTake() && apiBudget.TryTake() && !apiBudget.TryTake(),
+            "бюджет API: ровно лимит обращений");
+        var budgetless = await GitHubSourceFreshness.CheckAsync(
+            new SourceDefinition { Name = "b", Url = "https://raw.githubusercontent.com/foo/bar/main/sub.txt" },
+            TimeSpan.FromHours(24), CancellationToken.None, new GitHubSourceFreshness.ApiBudget(0));
+        Check(!budgetless.Fresh && !budgetless.DateKnown && !budgetless.ApiReached,
+            "бюджет API исчерпан: источник собирается без проверки даты");
+
+        // Свежесть не-GitHub источника (автопоиск сайтов) по дате публикации в адресе.
+        var webFresh = await GitHubSourceFreshness.CheckAsync(
+            new SourceDefinition { Name = "w", Url = "https://nodefree.org/f/123.txt", LastPublishedUtc = DateTime.UtcNow.AddHours(-1) },
+            TimeSpan.FromHours(24), CancellationToken.None);
+        Check(webFresh.Fresh && webFresh.DateKnown,
+            "сбор: не-GitHub источник с датой публикации свежий");
+        var webStale = await GitHubSourceFreshness.CheckAsync(
+            new SourceDefinition { Name = "w2", Url = "https://nodefree.org/f/123.txt", LastPublishedUtc = DateTime.UtcNow.AddHours(-30) },
+            TimeSpan.FromHours(24), CancellationToken.None);
+        Check(!webStale.Fresh && webStale.DateKnown,
+            "сбор: не-GitHub источник с устаревшей датой пропускается");
+
         // Доверенный источник: обновлялся не реже раза в 24 часа.
         Check(new SourceDefinition { LastPublishedUtc = DateTime.UtcNow.AddHours(-1) }.IsTrustedNow &&
               !new SourceDefinition { LastPublishedUtc = DateTime.UtcNow.AddHours(-25) }.IsTrustedNow &&
@@ -2510,9 +2688,22 @@ internal static class Program
         var fileLocation = GitHubSourceFreshness.TryGetLocation(
             "https://raw.githubusercontent.com/owner/repo/main/sub/file.txt");
         Check(fileLocation is not null &&
+              fileLocation.Host == "github" &&
               fileLocation.Reference == "main" &&
               fileLocation.Path == "sub/file.txt",
             "сбор: путь к файлу в источнике разобран");
+        var gitlabLocation = GitHubSourceFreshness.TryGetLocation(
+            "https://gitlab.com/owner/repo/-/raw/main/sub/file.txt");
+        Check(gitlabLocation is not null && gitlabLocation.Host == "gitlab" &&
+              gitlabLocation.Repository == "owner/repo" &&
+              gitlabLocation.Reference == "main" && gitlabLocation.Path == "sub/file.txt",
+            "сбор: ссылка GitLab raw разобрана");
+        var giteeLocation = GitHubSourceFreshness.TryGetLocation(
+            "https://gitee.com/owner/repo/raw/master/file.txt");
+        Check(giteeLocation is not null && giteeLocation.Host == "gitee" &&
+              giteeLocation.Repository == "owner/repo" &&
+              giteeLocation.Reference == "master" && giteeLocation.Path == "file.txt",
+            "сбор: ссылка Gitee raw разобрана");
         Check(GitHubSourceFreshness.TryGetRepository("https://example.com/sub") is null,
             "сбор: не-GitHub ссылка не даёт репозиторий");
         var pushedNow = DateTimeOffset.UtcNow;

@@ -1,0 +1,2 @@
+# Java-платформа вызывается из C# по имени (Class.ForName) — R8 не должен её выкидывать.
+-keep class com.vienlink.platform.** { *; }

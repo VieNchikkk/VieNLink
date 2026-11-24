@@ -78,7 +78,9 @@ internal static class SettingsStore
 
         Use(() => settings.MaxNodesInConfig, value => settings.MaxNodesInConfig = value,
             NodeStore.MobileMaxNodesInConfig);
-        Use(() => settings.MaxTotalNodes, value => settings.MaxTotalNodes = value, defaults.MaxTotalNodes);
+        // Телевизор: 1500 серверов более чем достаточно (всего 1,7 ГБ ОЗУ), кэш и старт легче.
+        Use(() => settings.MaxTotalNodes, value => settings.MaxTotalNodes = value,
+            DeviceProfile.IsTelevision ? Math.Min(defaults.MaxTotalNodes, 1500) : defaults.MaxTotalNodes);
         Use(() => settings.MaxDelayMs, value => settings.MaxDelayMs = value, defaults.MaxDelayMs);
         Use(() => settings.KeepUnseenNodeDays, value => settings.KeepUnseenNodeDays = value,
             defaults.KeepUnseenNodeDays);

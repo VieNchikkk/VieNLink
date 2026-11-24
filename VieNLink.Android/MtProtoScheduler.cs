@@ -7,12 +7,18 @@ namespace VieNLink.Mobile;
 /// </summary>
 internal static class MtProtoScheduler
 {
-    private static readonly TimeSpan TickInterval = TimeSpan.FromMinutes(2);
+    private static TimeSpan TickInterval => ProbeProfile.MtProtoTick;
     private static Timer? _timer;
     private static int _busy;
 
     public static void Start(Android.Content.Context context)
     {
+        // На телевизоре Telegram нет: не тратим процессор на сбор и проверку MTProto.
+        if (DeviceProfile.IsTelevision)
+        {
+            return;
+        }
+
         if (_timer is not null || ProbeScheduler.IsProbeProcess() || SettingsStore.Current.AutomationPaused)
         {
             return;
@@ -20,7 +26,7 @@ internal static class MtProtoScheduler
 
         _timer = new Timer(_ => _ = TickAsync(context), null,
             TimeSpan.FromSeconds(90), TickInterval);
-        AppLog.Write("mtproto", "Автономный сбор MTProto запущен (проверка каждые 2 минуты)");
+        AppLog.Write("mtproto", $"Автономный сбор MTProto запущен (проверка каждые {TickInterval.TotalMinutes:0} минуты)");
     }
 
     /// <summary>Останавливает фоновое обслуживание MTProto.</summary>

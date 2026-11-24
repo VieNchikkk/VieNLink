@@ -31,6 +31,11 @@ internal static class CoreRuntime
     private static LibBoxServerHandler? _handler;
     private static bool _setupDone;
 
+#if JAVA_PLATFORM
+    /// <summary>Ядро запущено Java-мостом (CommandServer живёт в Java).</summary>
+    private static bool _javaRunning;
+#endif
+
     /// <summary>
     /// Настройка процесса проверки: свои порты (21800/21801) и отдельная папка,
     /// чтобы два libbox не делили cache-file и configuration.json.
@@ -81,7 +86,11 @@ internal static class CoreRuntime
         {
             lock (Gate)
             {
+#if JAVA_PLATFORM
+                return _javaRunning;
+#else
                 return _server is not null;
+#endif
             }
         }
     }
@@ -132,6 +141,22 @@ internal static class CoreRuntime
     {
         lock (Gate)
         {
+#if JAVA_PLATFORM
+            try
+            {
+                JavaBridge.Start(configJson);
+                _javaRunning = true;
+                LoadedTags = ReadTags(configJson);
+                return true;
+            }
+            catch (Exception exception)
+            {
+                _javaRunning = false;
+                Android.Util.Log.Error("VieNLink", "Java-ядро не запустилось: " + exception.Message);
+                AppLog.Write("android", "Java-ядро не запустилось", exception);
+                return false;
+            }
+#else
             if (_server is null)
             {
                 _platform ??= new LibBoxPlatform();
@@ -149,6 +174,7 @@ internal static class CoreRuntime
             _server.StartOrReloadService(configJson, overrides);
             LoadedTags = ReadTags(configJson);
             return true;
+#endif
         }
     }
 
@@ -157,6 +183,20 @@ internal static class CoreRuntime
     {
         lock (Gate)
         {
+#if JAVA_PLATFORM
+            try
+            {
+                JavaBridge.Stop();
+            }
+            catch (Exception exception)
+            {
+                // Закрытие ядра не должно ронять приложение.
+                Android.Util.Log.Warn("VieNLink", "остановка Java-ядра: " + exception.Message);
+            }
+
+            _javaRunning = false;
+            LoadedTags = Array.Empty<string>();
+#else
             try
             {
                 _server?.CloseService();
@@ -170,6 +210,7 @@ internal static class CoreRuntime
 
             _server = null;
             LoadedTags = Array.Empty<string>();
+#endif
         }
     }
 

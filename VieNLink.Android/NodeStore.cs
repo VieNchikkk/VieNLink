@@ -109,6 +109,13 @@ internal static class NodeStore
                 Nodes.AddRange(cached);
             }
 
+            // Первый запуск без кэша: подгружаем встроенный стартовый набор серверов
+            // из assets/seed.txt, чтобы не ждать первый сбор и проверку.
+            if (Nodes.Count == 0)
+            {
+                Nodes.AddRange(LoadAndroidSeed());
+            }
+
             // Старые источники получают «всего зарегистрировано» по всему кэшу,
             // ещё до подрезки лимитом: иначе часть истории потерялась бы.
             if (NodeSourceStats.SeedTotals(Sources, Nodes))
@@ -160,6 +167,33 @@ internal static class NodeStore
 
             Android.Util.Log.Info("VieNLink",
                 $"серверы: {Nodes.Count} из кэша, источников: {Sources.Count}, отброшено: {dropped}, дублей: {duplicates}, по лимиту: {overLimit}");
+        }
+    }
+
+    /// <summary>
+    /// Встроенный стартовый набор серверов из assets/seed.txt. Его кладёт в сборку
+    /// <c>publish-android.ps1</c> из файла, сгенерированного режимом SelfTest `exportseed`.
+    /// В отладочной/тестовой сборке файла может не быть — это нормально.
+    /// </summary>
+    private static List<ProxyNode> LoadAndroidSeed()
+    {
+        try
+        {
+            var assets = Android.App.Application.Context.Assets;
+            var names = assets.List(string.Empty) ?? Array.Empty<string>();
+            if (!names.Contains("seed.txt", StringComparer.Ordinal))
+            {
+                return new List<ProxyNode>();
+            }
+
+            using var stream = assets.Open("seed.txt");
+            using var reader = new System.IO.StreamReader(stream);
+            return NodeSourceService.ParseSeedLinks(reader.ReadToEnd());
+        }
+        catch (Exception exception) when (exception is System.IO.IOException or InvalidOperationException)
+        {
+            AppLog.Write("seed", "Не удалось прочитать встроенный набор серверов", exception);
+            return new List<ProxyNode>();
         }
     }
 
@@ -592,6 +626,15 @@ internal static class NodeStore
             }
         }
 
+        // «Бесплодные» источники (давние, ноль рабочих) отключаем — карантин, не удаление.
+        if (collected.SourcesToDisable.Count > 0)
+        {
+            foreach (var source in collected.SourcesToDisable)
+            {
+                source.Enabled = false;
+            }
+        }
+
         Merge(collected.Nodes);
 
         lock (Gate)
@@ -855,7 +898,7 @@ internal static class NodeStore
             foreach (var node in tested.Where(node =>
                          node.Status == NodeStatus.Dead && NodeAvailability.HasSuccess(node)))
             {
-                RejectedNodeStore.Add(node);
+                RejectedNodeStore.Add(node, RejectedNode.Describe(node));
             }
 
             removed = Nodes.RemoveAll(node => dead.Contains(node.Id));
@@ -1007,9 +1050,12 @@ internal static class NodeStore
                ?? Best(candidates.Where(node =>
                    NodeAvailability.IsCountable(node, onlyMine, now)));
 
+        // Сначала — кто открывает больше заблокированных доменов, потом задержка:
+        // сервер, который открыл только Cloudflare, для YouTube бесполезен (CDN не идёт),
+        // даже если у него красивая задержка.
         static ProxyNode? Best(IEnumerable<ProxyNode> nodes) => nodes
-            .OrderBy(node => node.DelayMs ?? int.MaxValue)
-            .ThenByDescending(node => node.OpenDomains)
+            .OrderByDescending(node => node.OpenDomains)
+            .ThenBy(node => node.DelayMs ?? int.MaxValue)
             .ThenByDescending(node => node.IsMine)
             .FirstOrDefault();
     }
@@ -1227,8 +1273,12 @@ internal static class NodeStore
                 CoreRuntime.ApiPort,
                 CoreRuntime.ApiSecret,
                 settings,
-                // На Android локальный UDP/53 часто зарезан или подменяется — DNS идёт через сервер.
-                dnsThroughProxy: true);
+                // DNS напрямую (77.88.8.8, 1.1.1.1; ipv4_only) на всех устройствах.
+                // Через прокси DNS работает нестабильно: часть CDN-имён (i.ytimg.com,
+                // yt3.ggpht.com) перестаёт открываться, и YouTube показывает ленту без картинок.
+                // Прямой UDP-DNS проверен на ТВ (Zona, видео) и в пробном ядре.
+                dnsThroughProxy: false,
+                explicitDns: true);
         }
         catch (InvalidOperationException exception)
         {

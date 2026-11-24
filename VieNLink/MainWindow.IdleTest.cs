@@ -244,12 +244,19 @@ public partial class MainWindow
                 if (hidden)
                 {
                     var checkNow = DateTime.UtcNow;
+                    // Источники без единого рабочего сервера не проверяем: партия уходит на
+                    // заведомо мёртвые адреса. Рабочие серверы из них перепроверяем всегда.
+                    var barren = searchNew
+                        ? NodeSourceStats.BarrenSources(AllRows.Select(row => row.Node))
+                        : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                     var ordered = AllRows
                         .Select(row => row.Node)
                         .Where(node => searchNew
                             ? node.Status == NodeStatus.Unknown ||
                               (node.Status == NodeStatus.Working && NeedsCheck(node, recheckCutoff, checkNow))
                             : node.Status == NodeStatus.Working && NeedsCheck(node, recheckCutoff, checkNow))
+                        .Where(node => node.Status == NodeStatus.Working ||
+                                       !NodeSourceStats.FromBarrenOnly(node, barren))
                         .Distinct()
                         // Сначала перепроверяем тех, кто прямо сейчас показан в счётчиках:
                         // их смерть важнее, чем поиск среди ещё не проверенных. Иначе
@@ -266,9 +273,20 @@ public partial class MainWindow
                     // и партия тратит минуты на заведомо нерабочие серверы.
                     var working = ordered.Where(node => node.Status == NodeStatus.Working).ToList();
                     var rest = ordered.Where(node => node.Status != NodeStatus.Working).ToList();
+
+                    // Ограничение на источник: большой мёртвый список получает 2–3 слота,
+                    // источник с подтверждённым доступом к нужному сервису — до 10.
+                    int SourceCap(ProxyNode node)
+                    {
+                        var score = serviceScores is null
+                            ? 0
+                            : NodeFailover.BestSourceScore(serviceScores, node.SourceName);
+                        return score <= 0 ? 3 : score < 50 ? 6 : 10;
+                    }
+
                     candidates = working
-                        .Concat(NodeFailover.InterleaveBySource(
-                            rest, Math.Max(0, batchSize - working.Count)))
+                        .Concat(NodeFailover.TakeWithSourceCap(
+                            rest, Math.Max(0, batchSize - working.Count), SourceCap))
                         .Take(batchSize)
                         .ToList();
                 }

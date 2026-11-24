@@ -50,6 +50,15 @@ internal static class AppPaths
     /// <summary>Удачные конфиги обходов, отсортированные по качеству подключения.</summary>
     public static string BypassProfilesPath { get; } = Path.Combine(DataDirectory, "bypass-profiles.json");
 
+    /// <summary>Кэш дат публикации GitHub-источников: чтобы после перезапуска не жечь квоту API заново.</summary>
+    public static string FreshnessPath { get; } = Path.Combine(DataDirectory, "freshness.json");
+
+    /// <summary>Кэш сырых ответов источников для условных GET (ETag → 304 не меняет список).</summary>
+    public static string RawCacheDirectory { get; } = Path.Combine(DataDirectory, "rawcache");
+
+    /// <summary>ETag ответов источников: ключ — URL источника.</summary>
+    public static string RawEtagsPath { get; } = Path.Combine(DataDirectory, "raw-etags.json");
+
     public static void EnsureDirectories()
     {
         Directory.CreateDirectory(DataDirectory);
@@ -57,6 +66,7 @@ internal static class AppPaths
         Directory.CreateDirectory(CoreDirectory);
         Directory.CreateDirectory(RuntimeDirectory);
         Directory.CreateDirectory(DesyncDirectory);
+        Directory.CreateDirectory(RawCacheDirectory);
     }
 
     private static string ResolveDataDirectory()

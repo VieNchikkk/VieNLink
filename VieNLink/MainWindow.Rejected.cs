@@ -49,7 +49,7 @@ public partial class MainWindow
             return;
         }
 
-        RejectedNodeStore.Add(node);
+        RejectedNodeStore.Add(node, RejectedNode.Describe(node));
         ReloadRejected();
     }
 
@@ -329,6 +329,9 @@ public partial class MainWindow
             // Ручное возвращение: пользователь сам решил, что сервер нужно вернуть.
             node.Status = NodeStatus.Working;
             node.FailCount = 0;
+            // Свежая отметка проверки — иначе IsCountable/IsUsable не засчитают сервер
+            // (последний успех старше часа) и он «пропадёт» из счётчиков.
+            node.CheckedAtUtc = now;
             // Возвращённый сервер снова в списке — не должен выпасть
             // по сроку давности при следующей загрузке кэша.
             node.LastSeenUtc = now;

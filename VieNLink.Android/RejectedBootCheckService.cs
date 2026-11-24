@@ -82,6 +82,9 @@ internal static class RejectedBootCheckService
                 {
                     node.Status = NodeStatus.Working;
                     node.FailCount = 0;
+                    // Свежая отметка проверки — иначе IsCountable не засчитает сервер
+                    // в «рабочих» (последний успех старше часа).
+                    node.CheckedAtUtc = DateTime.UtcNow;
                     node.LastSeenUtc = DateTime.UtcNow;
                     NodeStore.RestoreRejected(new[] { node });
                     AppLog.Write("nodes",

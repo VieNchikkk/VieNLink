@@ -45,6 +45,7 @@ internal static class LinkParser
                 "trojan" => ParseTrojan(raw, sourceName),
                 "ss" => ParseShadowsocks(raw, sourceName),
                 "hysteria2" or "hy2" => ParseHysteria2(raw, sourceName),
+                "tuic" => ParseTuic(raw, sourceName),
                 _ => null,
             };
         }
@@ -376,6 +377,88 @@ internal static class LinkParser
         }
 
         return Finish(outbound, "hysteria2", uri.Host, port, NameFromFragment(uri, uri.Host, port), raw, sourceName);
+    }
+
+    /// <summary>
+    /// Разбор tuic://uuid:password@host:port?… — TUIC v5, который поддерживает sing-box.
+    /// TLS обязателен; sni/alpn берём из параметров, иначе подставляем сам хост.
+    /// </summary>
+    private static ProxyNode? ParseTuic(string raw, string sourceName)
+    {
+        if (!Uri.TryCreate(raw, UriKind.Absolute, out var uri) || string.IsNullOrWhiteSpace(uri.Host))
+        {
+            return null;
+        }
+
+        var userInfo = SafeUnescape(uri.UserInfo);
+        var colon = userInfo.IndexOf(':');
+        if (colon <= 0)
+        {
+            return null;
+        }
+
+        var uuid = userInfo[..colon];
+        var password = userInfo[(colon + 1)..];
+        if (string.IsNullOrWhiteSpace(uuid) || string.IsNullOrWhiteSpace(password))
+        {
+            return null;
+        }
+
+        var query = ParseQuery(uri.Query);
+        var port = uri.Port > 0 ? uri.Port : 443;
+        var outbound = new JsonObject
+        {
+            ["type"] = "tuic",
+            ["tag"] = string.Empty,
+            ["server"] = uri.Host,
+            ["server_port"] = port,
+            ["uuid"] = uuid,
+            ["password"] = password,
+        };
+
+        var tls = new JsonObject { ["enabled"] = true };
+        var sni = Get(query, "sni");
+        var normalizedHost = NormalizeHost(uri.Host);
+        var isIp = IPAddress.TryParse(normalizedHost, out _);
+        var disableSni = Get(query, "disable_sni") is "1" or "true";
+        tls["server_name"] = !string.IsNullOrWhiteSpace(sni)
+            ? sni
+            : disableSni || isIp
+                ? string.Empty
+                : normalizedHost;
+
+        var insecure = Get(query, "allow_insecure") ?? Get(query, "insecure");
+        if (insecure is "1" or "true")
+        {
+            tls["insecure"] = true;
+        }
+
+        var alpn = Get(query, "alpn");
+        if (!string.IsNullOrWhiteSpace(alpn))
+        {
+            tls["alpn"] = ToArray(alpn);
+        }
+
+        outbound["tls"] = tls;
+
+        var congestion = Get(query, "congestion_control") ?? Get(query, "congestion");
+        if (!string.IsNullOrWhiteSpace(congestion))
+        {
+            outbound["congestion_control"] = congestion.ToLowerInvariant();
+        }
+
+        var udpRelayMode = Get(query, "udp_relay_mode");
+        if (!string.IsNullOrWhiteSpace(udpRelayMode))
+        {
+            outbound["udp_relay_mode"] = udpRelayMode.ToLowerInvariant();
+        }
+
+        if (Get(query, "zero_rtt_handshake") is "1" or "true")
+        {
+            outbound["zero_rtt_handshake"] = true;
+        }
+
+        return Finish(outbound, "tuic", uri.Host, port, NameFromFragment(uri, uri.Host, port), raw, sourceName);
     }
 
     /// <summary>Reality public_key — 32 байта в base64url; иначе sing-box падает на «illegal base64».</summary>

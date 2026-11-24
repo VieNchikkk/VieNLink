@@ -1018,6 +1018,10 @@ public sealed class RejectedActivity : BaseActivity
     {
         node.Status = NodeStatus.Working;
         node.FailCount = 0;
+        // Возвращённый сервер сразу считается рабочим и попадает в счётчики шапки:
+        // без свежего CheckedAtUtc правило IsCountable исключало его (последний успех
+        // был старше часа), и число «рабочих» не менялось.
+        node.CheckedAtUtc = DateTime.UtcNow;
         // Возвращённый сервер снова в списке — не должен выпасть
         // по сроку давности при следующей загрузке кэша.
         node.LastSeenUtc = DateTime.UtcNow;

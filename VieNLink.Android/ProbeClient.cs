@@ -181,7 +181,16 @@ internal static class ProbeClient
         // Снимок и сортировка тысяч серверов — в фоне: на UI-потоке это давало ANR
         // при нажатии кнопок сервисов и «Универсальный».
         var ordered = await Task.Run(() =>
-            NodeStore.OrderForConfig(NodeStore.Snapshot())
+        {
+            var snapshot = NodeStore.Snapshot();
+            // Источники, которые уже проверялись, но ни разу не дали рабочего сервера,
+            // в фоновую партию не берём: иначе партия целиком уходит на мёртвые адреса.
+            // Ручная проверка и «Перепроверить всё» ограничение обходят.
+            var barren = manual || recheckWorking
+                ? new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                : NodeSourceStats.BarrenSources(snapshot);
+
+            return NodeStore.OrderForConfig(snapshot)
                 // Один сервер — одна проверка: одинаковые outbound'ы не попадают в партию дважды.
                 .DistinctBy(node => node.Tag, StringComparer.OrdinalIgnoreCase)
                 .Where(node => workingOnly
@@ -193,6 +202,7 @@ internal static class ProbeClient
                        (recheckWorking || node.CheckedAtUtc is null ||
                         node.CheckedAtUtc < workingCutoff) &&
                        (recheckWorking || RetryAllowed(node))))
+                .Where(node => !NodeSourceStats.FromBarrenOnly(node, barren))
                 // Сначала непроверенные и самые свежие из источников: бесплатные серверы живут
                 // недолго, и проверять вчерашний список полезнее, чем недельный. Затем — серверы
                 // из источников, которые уже давали живые серверы (sourceScore).
@@ -200,18 +210,31 @@ internal static class ProbeClient
                 // в счётчиках, и их смерть важнее поиска среди непроверенных.
                 .OrderBy(node => node.Status == NodeStatus.Working ? 0 : 1)
                 .ThenBy(node => node.TriedAtUtc is null ? 0 : 1)
-                .ThenByDescending(node => node.LastSeenUtc)
+                // Источники, которые уже давали живые серверы, — раньше просто «свежих»:
+                // проверка через ядро стоит секунды, и тратить её на мёртвый список незачем.
                 .ThenByDescending(node => sourceScore?.Invoke(node) ?? 0)
-                .ToList(), cancellationToken).ConfigureAwait(false);
+                .ThenByDescending(node => node.LastSeenUtc)
+                .ToList();
+        }, cancellationToken).ConfigureAwait(false);
 
         // Рабочие — первыми, новые перемешиваем по источникам: первый большой мёртвый
         // список не должен занимать всю партию.
         var batchLimit = Math.Clamp(max, 1, 200);
         var workingNodes = ordered.Where(node => node.Status == NodeStatus.Working).ToList();
         var freshNodes = ordered.Where(node => node.Status != NodeStatus.Working).ToList();
+
+        // Проверка «на уровне источника»: источник без единого рабочего сервера получает
+        // 2–3 слота на партию, источник с подтверждённым выходом — до 10. Иначе 4700
+        // серверов из десятка мёртвых списков съедают все проверки, а живые ждут очереди.
+        int SourceCap(ProxyNode node)
+        {
+            var score = sourceScore?.Invoke(node) ?? 0;
+            return score <= 0 ? 3 : score < 50 ? 6 : 10;
+        }
+
         var candidates = workingNodes
-            .Concat(NodeFailover.InterleaveBySource(
-                freshNodes, Math.Max(0, batchLimit - workingNodes.Count)))
+            .Concat(NodeFailover.TakeWithSourceCap(
+                freshNodes, Math.Max(0, batchLimit - workingNodes.Count), SourceCap))
             .Take(batchLimit)
             .ToList();
 
@@ -366,7 +389,7 @@ internal static class ProbeClient
 
     /// <summary>
     /// Держит минимум рабочих серверов: проверяет партии, пока рабочих не станет
-    /// не меньше <see cref="NodeLimits.MinWorkingNodes"/> или партии не кончатся.
+    /// не меньше <see cref="ProbeProfile.MinWorking"/> или партии не кончатся.
     /// Возвращает итоговое число рабочих серверов.
     /// </summary>
     public static async Task<int> EnsureWorkingQuotaAsync(
@@ -385,7 +408,7 @@ internal static class ProbeClient
         {
             if (cancellationToken.IsCancellationRequested ||
                 TunnelService.IsBypassMode ||
-                working >= NodeLimits.MinWorkingNodes)
+                working >= ProbeProfile.MinWorking)
             {
                 break;
             }
@@ -398,7 +421,7 @@ internal static class ProbeClient
 
             working = NodeStore.Summary().Working;
             AppLog.Write("probe",
-                $"Партия {batch}: проверено {summary.Tested}, рабочих {working} из {NodeLimits.MinWorkingNodes}");
+                $"Партия {batch}: проверено {summary.Tested}, рабочих {working} из {ProbeProfile.MinWorking}");
         }
 
         return working;
@@ -487,6 +510,13 @@ internal static class ProbeClient
         var opened = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var node in snapshot)
         {
+            // Непроверенные серверы не портят оценку источника: иначе у большого свежего
+            // списка выход всегда «почти ноль» и он навсегда уезжает в конец очереди.
+            if (node.CheckedAtUtc is null && node.Status == NodeStatus.Unknown)
+            {
+                continue;
+            }
+
             var hasAccess = reached(node);
             foreach (var source in NodeFailover.SplitSources(node.SourceName))
             {
@@ -666,7 +696,8 @@ internal static class ProbeClient
 
             var request = new ProbeRequest
             {
-                FullDomains = fullDomains,
+                // На ТВ полный список доменов не проверяем: 18 запросов на узел — это минуты.
+                FullDomains = fullDomains && !DeviceProfile.IsTelevision,
                 DnsThroughProxy = dnsThroughProxy,
                 Nodes = toTest
                     .Select(node => new ProbeRequestNode

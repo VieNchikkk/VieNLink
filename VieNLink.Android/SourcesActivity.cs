@@ -478,7 +478,8 @@ public sealed class SourcesActivity : BaseActivity
             var progress = new Progress<string>(SetProgress);
             var result = await SourceDiscoveryService.DiscoverAsync(
                 NodeStore.SnapshotSources(), progress, CancellationToken.None,
-                NodeStore.Settings.SourceFreshnessHours);
+                NodeStore.Settings.SourceFreshnessHours,
+                includeWeb: !DeviceProfile.IsTelevision);
             var added = await Task.Run(() => NodeStore.AddDiscovered(result));
             var mtproto = MtProtoStore.AddDiscovered(result.MtProto);
             SetProgress($"Новых источников {added}, серверов {result.Nodes.Count}, MTProto {mtproto}." +

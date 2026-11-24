@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -71,6 +72,14 @@ internal static class SourceDiscoveryService
 
     private static readonly Regex ArticlePathRegex = new(@"^/p/\d+(?:\.html?)?/?$", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    /// <summary>Дата в адресе статьи/подписки: 2026-11-19 или 2026/11/19.</summary>
+    private static readonly Regex UrlDateRegex = new(
+        @"20\d{2}[-/]\d{1,2}[-/]\d{1,2}",
+        RegexOptions.Compiled);
+
+    /// <summary>Дата в имени файла без разделителей: 20261119.</summary>
+    private static readonly Regex UrlDateCompactRegex = new(@"20\d{6}", RegexOptions.Compiled);
+
     private static readonly string[] ArticleKeywords =
     {
         "node", "clash", "v2ray", "vpn", "ssr", "free", "proxy", "sub", "节点", "订阅",
@@ -85,7 +94,8 @@ internal static class SourceDiscoveryService
         IReadOnlyList<SourceDefinition> existing,
         IProgress<string>? progress,
         CancellationToken cancellationToken,
-        int freshnessHours = 24)
+        int freshnessHours = 24,
+        bool includeWeb = true)
     {
         var maximumAge = TimeSpan.FromHours(Math.Clamp(freshnessHours, 1, 168 * 24));
         var result = new DiscoveryResult();
@@ -151,7 +161,98 @@ internal static class SourceDiscoveryService
                     continue;
                 }
 
-                candidates.Add(new RepositoryCandidate(fullName, branch, pushed));
+                candidates.Add(new RepositoryCandidate("github", fullName, branch, pushed));
+            }
+        }
+
+        // GitLab: те же запросы, но через свой API.
+        foreach (var query in Queries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (budget <= 0)
+            {
+                break;
+            }
+
+            var url = "https://gitlab.com/api/v4/projects?search=" + Uri.EscapeDataString(query) +
+                      "&order_by=last_activity_at&sort=desc&per_page=10";
+            budget--;
+            using var document = await GetJsonAsync(url, progress, cancellationToken, acceptJson: true);
+            if (document is null || document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                var fullName = GetString(item, "path_with_namespace");
+                var branch = GetString(item, "default_branch") ?? "main";
+                var updatedAt = GetString(item, "last_activity_at");
+                if (fullName is null || knownRepositories.Contains(fullName))
+                {
+                    continue;
+                }
+
+                if (item.TryGetProperty("archived", out var archived) && archived.ValueKind == JsonValueKind.True)
+                {
+                    continue;
+                }
+
+                if (!TryParsePushedAt(updatedAt, out var pushed) ||
+                    DateTime.UtcNow - pushed > maximumAge)
+                {
+                    continue;
+                }
+
+                if (candidates.Any(c => c.FullName.Equals(fullName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                candidates.Add(new RepositoryCandidate("gitlab", fullName, branch, pushed));
+            }
+        }
+
+        // Gitee: свой поиск и дерево.
+        foreach (var query in Queries)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (budget <= 0)
+            {
+                break;
+            }
+
+            var url = "https://gitee.com/api/v5/search/repositories?q=" + Uri.EscapeDataString(query) +
+                      "&sort=updated_at&order=desc&per_page=10";
+            budget--;
+            using var document = await GetJsonAsync(url, progress, cancellationToken, acceptJson: true);
+            if (document is null || document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                continue;
+            }
+
+            foreach (var item in document.RootElement.EnumerateArray())
+            {
+                var fullName = GetString(item, "full_name");
+                var branch = GetString(item, "default_branch") ?? "master";
+                var updatedAt = GetString(item, "updated_at");
+                if (fullName is null || knownRepositories.Contains(fullName))
+                {
+                    continue;
+                }
+
+                if (!TryParsePushedAt(updatedAt, out var pushed) ||
+                    DateTime.UtcNow - pushed > maximumAge)
+                {
+                    continue;
+                }
+
+                if (candidates.Any(c => c.FullName.Equals(fullName, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                candidates.Add(new RepositoryCandidate("gitee", fullName, branch, pushed));
             }
         }
 
@@ -163,26 +264,44 @@ internal static class SourceDiscoveryService
             cancellationToken.ThrowIfCancellationRequested();
             if (budget <= 0)
             {
-                result.Error = "Закончился лимит запросов GitHub";
+                result.Error = "Закончился лимит запросов к API";
                 break;
             }
 
             progress?.Report($"Проверяю {candidate.FullName}…");
             budget--;
-            var treeUrl = $"https://api.github.com/repos/{candidate.FullName}/git/trees/" +
-                          Uri.EscapeDataString(candidate.Branch) + "?recursive=1";
-            using var tree = await GetJsonAsync(treeUrl, progress, cancellationToken);
+            using var tree = candidate.Host switch
+            {
+                "gitlab" => await GetJsonAsync(
+                    "https://gitlab.com/api/v4/projects/" + Uri.EscapeDataString(candidate.FullName) +
+                    "/repository/tree?recursive=true&ref=" + Uri.EscapeDataString(candidate.Branch),
+                    progress, cancellationToken, acceptJson: true),
+                "gitee" => await GetJsonAsync(
+                    "https://gitee.com/api/v5/repos/" + candidate.FullName + "/git/trees/" +
+                    Uri.EscapeDataString(candidate.Branch) + "?recursive=1",
+                    progress, cancellationToken, acceptJson: true),
+                _ => await GetJsonAsync(
+                    "https://api.github.com/repos/" + candidate.FullName + "/git/trees/" +
+                    Uri.EscapeDataString(candidate.Branch) + "?recursive=1",
+                    progress, cancellationToken),
+            };
             if (tree is null)
             {
                 continue;
             }
 
-            var files = ReadTreeFiles(tree.RootElement);
-            var paths = SelectCandidatePaths(files);
+            var paths = candidate.Host == "gitlab"
+                ? SelectCandidatePaths(ReadGitLabTreeFiles(tree.RootElement))
+                : SelectCandidatePaths(ReadTreeFiles(tree.RootElement));
             foreach (var path in paths)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var rawUrl = $"https://raw.githubusercontent.com/{candidate.FullName}/{candidate.Branch}/{path}";
+                var rawUrl = candidate.Host switch
+                {
+                    "gitlab" => $"https://gitlab.com/{candidate.FullName}/-/raw/{candidate.Branch}/{path}",
+                    "gitee" => $"https://gitee.com/{candidate.FullName}/raw/{candidate.Branch}/{path}",
+                    _ => $"https://raw.githubusercontent.com/{candidate.FullName}/{candidate.Branch}/{path}",
+                };
                 if (!knownUrls.Add(rawUrl))
                 {
                     continue;
@@ -217,7 +336,13 @@ internal static class SourceDiscoveryService
             }
         }
 
-        // Публичные сайты не дают дату публикации — такие источники больше не ищем.
+        // Публичные сайты публикуют ежедневно: дату берём из адреса статьи/подписки,
+        // поэтому такие источники снова собираем (см. DiscoverWebAsync). На ТВ не нужны.
+        if (includeWeb)
+        {
+            await DiscoverWebAsync(knownUrls, result, progress, cancellationToken).ConfigureAwait(false);
+        }
+
         return result;
     }
 
@@ -298,6 +423,10 @@ internal static class SourceDiscoveryService
                         AddedAtUtc = DateTime.UtcNow,
                         LastCheckedUtc = DateTime.UtcNow,
                         LastNodeCount = nodes.Count,
+                        // Дату публикации берём из адреса: подписки ежедневные, а файл
+                        // назван датой (…/2026-11-19-vpn-free.htm или …/0-20261119.txt).
+                        LastPublishedUtc = ExtractPublishedDate(candidate) ?? ExtractPublishedDate(article) ?? DateTime.UtcNow,
+                        IsTrusted = true,
                     };
                     source.RegisterNodes(nodes);
 
@@ -429,55 +558,7 @@ internal static class SourceDiscoveryService
                 continue;
             }
 
-            var lower = path.ToLowerInvariant();
-            if (SkippedSegments.Any(segment => lower.Contains(segment, StringComparison.Ordinal)))
-            {
-                continue;
-            }
-
-            var extension = Path.GetExtension(lower);
-            if (extension is ".md" or ".png" or ".jpg" or ".ico" or ".svg" or ".exe" or ".zip" or ".gz" or ".log")
-            {
-                continue;
-            }
-
-            var score = 0;
-            if (lower.Contains("all_config", StringComparison.Ordinal) || lower.Contains("allconfig", StringComparison.Ordinal))
-            {
-                score += 6;
-            }
-
-            if (lower.Contains("sub", StringComparison.Ordinal))
-            {
-                score += 3;
-            }
-
-            if (lower.Contains("node", StringComparison.Ordinal))
-            {
-                score += 3;
-            }
-
-            if (lower.Contains("mix", StringComparison.Ordinal))
-            {
-                score += 2;
-            }
-
-            if (lower.Contains("merge", StringComparison.Ordinal))
-            {
-                score += 2;
-            }
-
-            if (lower.Contains("v2ray", StringComparison.Ordinal) || lower.Contains("vless", StringComparison.Ordinal) ||
-                lower.Contains("clash", StringComparison.Ordinal) || lower.Contains("xray", StringComparison.Ordinal))
-            {
-                score += 2;
-            }
-
-            if (extension is ".txt" or ".yaml" or ".yml" or ".json" || extension.Length == 0)
-            {
-                score += 1;
-            }
-
+            var score = ScorePath(path);
             if (score == 0)
             {
                 continue;
@@ -492,6 +573,82 @@ internal static class SourceDiscoveryService
             .Take(FilesPerRepository)
             .Select(item => item.Path)
             .ToList();
+    }
+
+    /// <summary>Отбор файлов без размера (GitLab не отдаёт размер в дереве репозитория).</summary>
+    internal static List<string> SelectCandidatePaths(IEnumerable<string> paths)
+    {
+        var scored = new List<(string Path, int Score)>();
+        foreach (var path in paths)
+        {
+            var score = ScorePath(path);
+            if (score == 0)
+            {
+                continue;
+            }
+
+            scored.Add((path, score));
+        }
+
+        return scored
+            .OrderByDescending(item => item.Score)
+            .Take(FilesPerRepository)
+            .Select(item => item.Path)
+            .ToList();
+    }
+
+    private static int ScorePath(string path)
+    {
+        var lower = path.ToLowerInvariant();
+        if (SkippedSegments.Any(segment => lower.Contains(segment, StringComparison.Ordinal)))
+        {
+            return 0;
+        }
+
+        var extension = Path.GetExtension(lower);
+        if (extension is ".md" or ".png" or ".jpg" or ".ico" or ".svg" or ".exe" or ".zip" or ".gz" or ".log")
+        {
+            return 0;
+        }
+
+        var score = 0;
+        if (lower.Contains("all_config", StringComparison.Ordinal) || lower.Contains("allconfig", StringComparison.Ordinal))
+        {
+            score += 6;
+        }
+
+        if (lower.Contains("sub", StringComparison.Ordinal))
+        {
+            score += 3;
+        }
+
+        if (lower.Contains("node", StringComparison.Ordinal))
+        {
+            score += 3;
+        }
+
+        if (lower.Contains("mix", StringComparison.Ordinal))
+        {
+            score += 2;
+        }
+
+        if (lower.Contains("merge", StringComparison.Ordinal))
+        {
+            score += 2;
+        }
+
+        if (lower.Contains("v2ray", StringComparison.Ordinal) || lower.Contains("vless", StringComparison.Ordinal) ||
+            lower.Contains("clash", StringComparison.Ordinal) || lower.Contains("xray", StringComparison.Ordinal))
+        {
+            score += 2;
+        }
+
+        if (extension is ".txt" or ".yaml" or ".yml" or ".json" || extension.Length == 0)
+        {
+            score += 1;
+        }
+
+        return score;
     }
 
     /// <summary>
@@ -584,7 +741,33 @@ internal static class SourceDiscoveryService
         return files;
     }
 
-    private static async Task<JsonDocument?> GetJsonAsync(string url, IProgress<string>? progress, CancellationToken cancellationToken)
+    /// <summary>Дерево GitLab: массив {path, type} без размера.</summary>
+    private static List<string> ReadGitLabTreeFiles(JsonElement root)
+    {
+        var files = new List<string>();
+        if (root.ValueKind != JsonValueKind.Array)
+        {
+            return files;
+        }
+
+        foreach (var item in root.EnumerateArray())
+        {
+            if (!item.TryGetProperty("type", out var type) || type.GetString() != "blob")
+            {
+                continue;
+            }
+
+            var path = GetString(item, "path");
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                files.Add(path);
+            }
+        }
+
+        return files;
+    }
+
+    private static async Task<JsonDocument?> GetJsonAsync(string url, IProgress<string>? progress, CancellationToken cancellationToken, bool acceptJson = false)
     {
         try
         {
@@ -593,14 +776,14 @@ internal static class SourceDiscoveryService
 
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.UserAgent.ParseAdd("VieNLink/0.9");
-            request.Headers.Accept.ParseAdd("application/vnd.github+json");
+            request.Headers.Accept.ParseAdd(acceptJson ? "application/json" : "application/vnd.github+json");
 
             using var response = await Api.SendAsync(request, HttpCompletionOption.ResponseContentRead, timeout.Token);
             if (!response.IsSuccessStatusCode)
             {
                 if ((int)response.StatusCode == 403)
                 {
-                    progress?.Report("GitHub ограничил частоту запросов");
+                    progress?.Report("Ограничение частоты запросов");
                 }
 
                 return null;
@@ -616,7 +799,7 @@ internal static class SourceDiscoveryService
                 throw;
             }
 
-            AppLog.Write("discovery", "Ошибка запроса к GitHub", exception);
+            AppLog.Write("discovery", "Ошибка запроса к API", exception);
             return null;
         }
     }
@@ -639,6 +822,36 @@ internal static class SourceDiscoveryService
     private static string Shorten(string text, int limit = 40) =>
         text.Length <= limit ? text : text[..(limit - 1)] + "…";
 
+    /// <summary>
+    /// Дата публикации из адреса: «…/2026-11-19-vpn-free.htm» или «…/0-20261119.txt».
+    /// Её нет — null (источник посчитаем свежим на день находки).
+    /// </summary>
+    internal static DateTime? ExtractPublishedDate(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return null;
+        }
+
+        var match = UrlDateRegex.Match(url);
+        if (match.Success &&
+            DateTime.TryParse(match.Value, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var date))
+        {
+            return date;
+        }
+
+        match = UrlDateCompactRegex.Match(url);
+        if (match.Success &&
+            DateTime.TryParseExact(match.Value, "yyyyMMdd", CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out date))
+        {
+            return date;
+        }
+
+        return null;
+    }
+
     private static HttpClient CreateClient()
     {
         var handler = new SocketsHttpHandler
@@ -651,5 +864,5 @@ internal static class SourceDiscoveryService
         return new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
     }
 
-    private readonly record struct RepositoryCandidate(string FullName, string Branch, DateTime PublishedAt);
+    private readonly record struct RepositoryCandidate(string Host, string FullName, string Branch, DateTime PublishedAt);
 }

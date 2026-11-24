@@ -457,6 +457,38 @@ Push-Location "$env:TEMP\opencode\sing-box-v1.14.4"
 | сборка падает на `armeabi-v7a` | собирать только нужные ABI: `-target=android/arm64` |
 | `XA0141: 16 КБ страницы` | предупреждение Android 16 о выравнивании `libgojni.so`; на realme 16 Pro загружается, но при проблемах пересобрать NDK с `-Wl,-z,max-page-size=16384` |
 
+### 32-битный ARM (телевизор Xiaomi, 23.11.2026)
+
+MiTV-MOOQ1 (`tarzan`, Android 11) — **только `armeabi-v7a`**: `ro.product.cpu.abilist`
+без 64-битных, `/system/lib64` пуст. APK с `arm64-v8a` на него не ставится
+(`INSTALL_FAILED_NO_MATCHING_ABIS`), а в `libbox.aar` 32-битной `libgojni.so` нет.
+
+Готовый `libbox.so` из официального SFA не подходит: он экспортирует
+`Java_io_nekohasekai_libbox_*`, а наши биндинги — `libbox.*` (`Java_libbox_*`).
+Поэтому 32-битную библиотеку собираем сами той же командой, меняя только `-target`:
+
+```powershell
+$go = "$env:LOCALAPPDATA\go-sdk\bin"
+$gobin = "$env:USERPROFILE\go\bin"
+$env:ANDROID_HOME = "$env:LOCALAPPDATA\android-sdk"
+$env:ANDROID_NDK_HOME = "$env:LOCALAPPDATA\android-ndk"
+$env:JAVA_HOME = "$env:LOCALAPPDATA\jdk17"
+$env:CGO_ENABLED = 1
+$env:PATH = "$go;$gobin;$env:JAVA_HOME\bin;" + $env:PATH
+Push-Location "$env:TEMP\sb-src\sing-box-1.14.4"   # исходники тега v1.14.4
+& "$gobin\gomobile.exe" bind "-target=android/arm" -androidapi 26 `
+  "-tags=with_gvisor,with_quic,with_utls,with_clash_api,with_wireguard" `
+  "-ldflags=-checklinkname=0" -o libbox-arm32.aar ./experimental/libbox
+```
+
+Из полученного AAR берём `jni/armeabi-v7a/libgojni.so` → `VieNLink.Android\Libs\libgojni-armeabi-v7a.so`
+(в репозиторий кладём отдельным файлом: собранный AAR с двумя ABI весит под 200 МБ).
+`build\publish-android.ps1 -Abi armeabi-v7a` собирает APK с `RuntimeIdentifier=android-arm`
+и добавляет эту библиотеку в `lib/armeabi-v7a/libgojni.so` перед `zipalign`/подписью.
+
+Проверка совместимости биндингов: в 32-битной `.so` должны быть символы `Java_libbox_*`
+(как в `classes.jar` нашего AAR), а не `Java_io_nekohasekai_*`.
+
 ### API libbox 1.14 (важно: отличается от старых примеров)
 
 В версии 1.14 **нет** класса `libbox.BoxInstance`. Точки входа, которые реально

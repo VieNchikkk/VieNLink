@@ -27,14 +27,6 @@ internal static class MtProtoService
 
     private static readonly Regex TagRegex = new(@"(?s)<[^>]+>", RegexOptions.Compiled);
 
-    private static readonly string[] RssMirrors =
-    {
-        "https://tg.i-c-a.su/rss/{0}",
-        "https://rsshub.rssforever.com/telegram/channel/{0}",
-        "https://rsshub.ktachibana.party/telegram/channel/{0}",
-        "https://rsshub.liumingye.cn/telegram/channel/{0}",
-    };
-
     public static List<MtProtoProxy> Extract(string text, string sourceName)
     {
         var result = new List<MtProtoProxy>();
@@ -305,7 +297,7 @@ internal static class MtProtoService
             return new List<MtProtoProxy>();
         }
 
-        foreach (var mirror in RssMirrors)
+        foreach (var mirror in NodeSourceService.TelegramRssMirrors)
         {
             cancellationToken.ThrowIfCancellationRequested();
             try

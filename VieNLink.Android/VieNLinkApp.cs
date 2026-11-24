@@ -7,7 +7,7 @@ namespace VieNLink.Mobile;
 /// Точка входа Android-версии: подставляет платформенные реализации в общее ядро
 /// и перенаправляет stderr в файл — Go-ядро пишет туда текст паники, иначе он теряется.
 /// </summary>
-[Application(Label = "VieNLink")]
+[Application(Label = BuildInfo.AppLabel)]
 public sealed class VieNLinkApp : Application
 {
     private const int O_WRONLY = 0x1;
@@ -23,6 +23,7 @@ public sealed class VieNLinkApp : Application
     {
         base.OnCreate();
 
+        DeviceProfile.Initialize(this);
         RedirectStandardError();
         RegisterSecretProtector();
         WarmNetworkAssemblies();
@@ -30,6 +31,12 @@ public sealed class VieNLinkApp : Application
         // Журнал приложения дублируем в logcat: файл журнала на телефоне приватный,
         // и без этого зависания проверки нельзя разобрать через adb.
         AppLog.LineWritten += line => Android.Util.Log.Info("VieNLinkLog", line);
+
+        // Видно в журнале, что Environment.txt действительно доехал до процесса:
+        // по этим настройкам приложение обходит дедлок остановки мира (см. docs/plan-2026.md).
+        AppLog.Write("android",
+            "Mono: GC_PARAMS=" + (Environment.GetEnvironmentVariable("MONO_GC_PARAMS") ?? "—") +
+            ", THREADS_SUSPEND=" + (Environment.GetEnvironmentVariable("MONO_THREADS_SUSPEND") ?? "—"));
 
         ProbeScheduler.Start(this);
         MtProtoScheduler.Start(this);

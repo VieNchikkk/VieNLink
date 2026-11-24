@@ -452,6 +452,25 @@ internal static class NodeLimits
     public const int WorkingRetryMinutes = 3;
 
     /// <summary>
+    /// Сколько серверов должен отдать источник, чтобы стать кандидатом в «бесплодные»:
+    /// столько он «предложил», но ни один не подтвердил работу.
+    /// </summary>
+    public const int BarrenMinNodes = 200;
+
+    /// <summary>
+    /// Источник считается бесплодным, если прожил дольше этого срока, отдал
+    /// <see cref="BarrenMinNodes"/> серверов и не дал ни одного рабочего. Тогда его
+    /// отключают (карантин); за это время фоновые проверки успевают его попробовать.
+    /// </summary>
+    public static readonly TimeSpan BarrenDisableAfter = TimeSpan.FromDays(3);
+
+    /// <summary>Отключённый «бесплодный» источник удаляется через этот срок после отключения.</summary>
+    public static readonly TimeSpan BarrenRemoveAfter = TimeSpan.FromDays(7);
+
+    /// <summary>Источник в карантине (не определяется дата публикации) удаляется через этот срок.</summary>
+    public static readonly TimeSpan QuarantineRemoveAfter = TimeSpan.FromDays(7);
+
+    /// <summary>
     /// Оставляет не больше <paramref name="max"/> серверов: сначала личные, затем проверенные
     /// (рабочие), затем самые свежие, затем лучшие по маскировке и задержке.
     /// Возвращает число отброшенных.
@@ -523,6 +542,30 @@ internal static class SourceKinds
         url.Contains("mtproto", StringComparison.OrdinalIgnoreCase) ||
         url.Contains("mtproxy", StringComparison.OrdinalIgnoreCase) ||
         url.Contains("mtpro", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Канал Telegram (t.me): собирается и как серверы, и как MTProto-прокси.</summary>
+    public static bool IsTelegram(SourceDefinition source) =>
+        source.Kind == SourceKind.Telegram || LooksLikeTelegram(source.Url);
+
+    /// <summary>
+    /// Источник способен дать серверы (vless://, vmess://…), а не только MTProto-прокси.
+    /// Каналы Telegram теперь участвуют и в сборе серверов: публичные конфиг-каналы
+    /// постит ссылки на серверы, а не только tg://proxy.
+    /// </summary>
+    public static bool IsServerSource(SourceDefinition source)
+    {
+        if (source.Kind == SourceKind.MtProto)
+        {
+            return false;
+        }
+
+        if (source.Kind == SourceKind.Telegram || LooksLikeTelegram(source.Url))
+        {
+            return true;
+        }
+
+        return !LooksLikeMtProtoUrl(source.Url);
+    }
 }
 
 /// <summary>Источник серверов: raw-список на GitHub, подписка или публичный канал Telegram.</summary>
@@ -620,6 +663,26 @@ internal sealed class SourceDefinition
 
     /// <summary>Когда источник появился: для автоисточников держим только свежие.</summary>
     public DateTime AddedAtUtc { get; set; }
+
+    /// <summary>
+    /// Когда источник впервые попал в список. Нужен для ротации «бесплодных»: источник
+    /// не отключают, пока он не прожил достаточно, чтобы его серверы успели проверить.
+    /// Заполняется при загрузке списка, если ещё не задан.
+    /// </summary>
+    public DateTime FirstSeenUtc { get; set; }
+
+    /// <summary>
+    /// С какого момента источник считается бесплодным (отдал ≥ <see cref="NodeLimits.BarrenMinNodes"/>
+    /// серверов и ни один не подтвердил работу). null — источник не бесплодный.
+    /// </summary>
+    public DateTime? BarrenSinceUtc { get; set; }
+
+    /// <summary>
+    /// С какого момента источник в карантине: дату публикации определить нельзя, но это
+    /// могло быть временным. Источник не удаляют сразу, а отключают и дают шанс вернуться.
+    /// null — не в карантине.
+    /// </summary>
+    public DateTime? QuarantineSinceUtc { get; set; }
 
     /// <summary>Личная (обычно платная) подписка: показывается отдельно и имеет приоритет.</summary>
     public bool IsMine { get; set; }

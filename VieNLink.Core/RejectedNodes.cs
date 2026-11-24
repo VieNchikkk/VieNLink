@@ -31,6 +31,23 @@ internal sealed class RejectedNode
         };
     }
 
+    /// <summary>
+    /// Человекочитаемая причина смерти: сколько провалов подряд и когда был последний
+    /// успех. По ней в логе видно, добил сервер ложный провал или реальная смерть.
+    /// </summary>
+    public static string Describe(ProxyNode node)
+    {
+        var ageText = node.CheckedAtUtc is not { } checkedAt
+            ? "успешной проверки не было"
+            : FormatAge(DateTime.UtcNow - checkedAt);
+        return $"{node.FailCount} провалов подряд, {ageText}";
+    }
+
+    private static string FormatAge(TimeSpan age) =>
+        age.TotalHours >= 1 ? $"последний успех {age.TotalHours:0} ч {age.Minutes} мин назад"
+        : age.TotalMinutes >= 1 ? $"последний успех {age.TotalMinutes:0} мин назад"
+        : $"последний успех {age.TotalSeconds:0} с назад";
+
     public static CachedNode ToCached(ProxyNode node) => new()
     {
         RawLink = node.RawLink,

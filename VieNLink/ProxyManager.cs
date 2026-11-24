@@ -497,6 +497,20 @@ internal sealed class ProxyManager : IAsyncDisposable
                 "Проверьте сеть, ядро и обход DPI — статусы серверов не изменены.");
         }
 
+        // Подтверждение и откат меняли статус рабочих серверов уже после того, как
+        // onNodeTested отработал в партии (Dead либо восстановленный FailCount). Сообщаем
+        // UI ещё раз — иначе мёртвый сервер остаётся «рабочим» в списке и не попадает в отсев.
+        List<ProxyNode> finalized;
+        lock (failedWorking)
+        {
+            finalized = failedWorking.Distinct().ToList();
+        }
+
+        foreach (var node in finalized)
+        {
+            onNodeTested?.Invoke(node);
+        }
+
         if (massRollback)
         {
             AppLog.Write("test",
@@ -523,7 +537,6 @@ internal sealed class ProxyManager : IAsyncDisposable
     {
         var recovered = new List<ProxyNode>();
         var failed = new List<ProxyNode>();
-        const int timeoutMs = 8000;
 
         AppLog.Write("test", $"Подтверждаю провал {nodes.Count} рабочих серверов");
         using var limiter = new SemaphoreSlim(10);
@@ -532,40 +545,36 @@ internal sealed class ProxyManager : IAsyncDisposable
             await limiter.WaitAsync(cancellationToken);
             try
             {
-                var service = "Cloudflare";
-                var delay = await api.TestDelayAsync(
-                    node.Tag, timeoutMs, cancellationToken, UniversalTestUrl);
-                if (delay is null)
+                // Две попытки подтверждения: разовая заминка сети или занятость сервера
+                // не должны засчитываться как провал (как на Android).
+                var hit = await ConfirmOnceAsync(api, node.Tag, cancellationToken);
+                if (hit is null && !cancellationToken.IsCancellationRequested)
                 {
-                    service = "YouTube";
-                    delay = await api.TestDelayAsync(
-                        node.Tag, timeoutMs, cancellationToken, YoutubeTestUrl);
-                }
-
-                if (delay is null)
-                {
-                    service = "Telegram";
-                    foreach (var target in TelegramTestUrls)
+                    try
                     {
-                        delay = await api.TestDelayAsync(
-                            node.Tag, timeoutMs, cancellationToken, target);
-                        if (delay is not null)
-                        {
-                            break;
-                        }
+                        await Task.Delay(800, cancellationToken);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Партию остановили во время паузы: провал не засчитываем.
+                    }
+
+                    if (!cancellationToken.IsCancellationRequested)
+                    {
+                        hit = await ConfirmOnceAsync(api, node.Tag, cancellationToken);
                     }
                 }
 
-                if (delay is not null)
+                if (hit is { } confirmed)
                 {
                     node.CheckedAtUtc = DateTime.UtcNow;
                     node.TriedAtUtc = DateTime.UtcNow;
-                    node.DelayMs = delay;
-                    if (service == "Cloudflare")
+                    node.DelayMs = confirmed.Delay;
+                    if (confirmed.Service == "Cloudflare")
                     {
                         node.UniversalOk = true;
                     }
-                    else if (service == "YouTube")
+                    else if (confirmed.Service == "YouTube")
                     {
                         node.YoutubeOk = true;
                     }
@@ -581,18 +590,21 @@ internal sealed class ProxyManager : IAsyncDisposable
                     }
 
                     AppLog.Write("test",
-                        $"«{node.Name}»: подтверждён после провала партии ({service}, {delay} мс)");
+                        $"«{node.Name}»: подтверждён после провала партии ({confirmed.Service}, {confirmed.Delay} мс)");
                 }
                 else
                 {
                     node.TriedAtUtc = DateTime.UtcNow;
+                    var failuresBefore = node.FailCount;
                     NodeHealth.RegisterFailure(node);
                     lock (failed)
                     {
                         failed.Add(node);
                     }
 
-                    AppLog.Write("test", $"«{node.Name}»: провал подтверждён");
+                    AppLog.Write("test",
+                        $"«{node.Name}»: провал подтверждён — FailCount {node.FailCount} " +
+                        $"(было {failuresBefore}), {RejectedNode.Describe(node)}");
                 }
             }
             catch (OperationCanceledException)
@@ -607,6 +619,41 @@ internal sealed class ProxyManager : IAsyncDisposable
 
         await Task.WhenAll(tasks);
         return (recovered, failed);
+    }
+
+    /// <summary>
+    /// Один раунд подтверждения: открылся ли у сервера Cloudflare, YouTube или Telegram.
+    /// Адреса идут по одному — нагруженный канал даёт ложные провалы, поэтому всё последовательно.
+    /// </summary>
+    private static async Task<(string Service, int? Delay)?> ConfirmOnceAsync(
+        ClashApiClient api,
+        string tag,
+        CancellationToken cancellationToken)
+    {
+        const int timeoutMs = 8000;
+
+        var delay = await api.TestDelayAsync(tag, timeoutMs, cancellationToken, UniversalTestUrl);
+        if (delay is not null)
+        {
+            return ("Cloudflare", delay);
+        }
+
+        delay = await api.TestDelayAsync(tag, timeoutMs, cancellationToken, YoutubeTestUrl);
+        if (delay is not null)
+        {
+            return ("YouTube", delay);
+        }
+
+        foreach (var target in TelegramTestUrls)
+        {
+            delay = await api.TestDelayAsync(tag, timeoutMs, cancellationToken, target);
+            if (delay is not null)
+            {
+                return ("Telegram", delay);
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

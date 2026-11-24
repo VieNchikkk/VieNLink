@@ -1,7 +1,251 @@
 # Передача контекста (handoff)
 
-Обновлено: 23.11.2026. Читать в порядке: `AGENTS.md` → этот файл → `docs/plan-2026.md`
+Обновлено: 24.11.2026. Читать в порядке: `AGENTS.md` → этот файл → `docs/plan-2026.md`
 (журнал и архив решений). Перед передачей сессии — обновить этот файл.
+
+## Seed в релизе + правки отсева (24.11.2026, версия 1.3.45)
+
+- **Seed в релизе**: `SelfTest exportseed` выгружает свежие рабочие серверы в `seed.txt`
+  (сейчас 15 ссылок); `NodeSourceService.LoadSeed`/`ParseSeedLinks` читают его и метят «своими».
+  ПК подхватывает `seed.txt` рядом с exe при пустом кэше, Android — из `assets/seed.txt`.
+  Упаковка: `publish-release.ps1` копирует `seed.txt` в поставку Windows; csproj включает
+  `..\seed.txt` условным `AndroidAsset`. Перед релизом — положить свежий `seed.txt` в корень.
+- **Отсев, ложные провалы (ПК и Android)**: `ConfirmFailedWorkingAsync` теперь делает **две**
+  попытки подтверждения (800 мс между ними), вынесен `ConfirmOnceAsync` (Android
+  `NodeTester`, ПК `ProxyManager`); разовая заминка не считается.
+- **Диагностика отсева (ПК и Android)**: `RejectedNode.Describe` пишет причину («N провалов
+  подряд, последний успех …») в `RejectedNodeStore.Add` и в лог подтверждённого провала.
+- **«Вернул → пропал / счётчики не обновились» (ПК и Android)**: при возврате из отсева
+  (Android `RejectedActivity.Return`/`RejectedBootCheckService`, ПК `RestoreRejectedNodes`)
+  теперь ставится свежий `CheckedAtUtc`, иначе `IsCountable`/`IsUsable` не засчитывали сервер
+  (последний успех был старше часа) — сервер возвращался в список, но не показывался
+  в счётчиках/«доступных».
+- **Релиз 1.3.45 опубликован (24.11.2026)**: pre-release `v1.3.45-beta` (`setup.exe`,
+  `win-x64.zip`, `SHA256SUMS.txt`), `v1.3.45-android` (`-phone.apk` + `.sha256`) и
+  `v1.3.45-android-tv` (`-tv-arm32.apk` + `.sha256`). Магазинные `-store.apk`/`-store.aab`
+  в GitHub не выкладывались (решение владельца), `.idsig` не публикуются.
+- **Почему ТВ отдельным релизом**: установленный обновлятор (1.3.44) брал последний
+  `*.apk.sha256` в релизе, и при двух APK телефон сверял свой файл с хешем ТВ-сборки
+  (ошибка «Контрольная сумма APK не совпала»). В `AndroidUpdate` исправлено (пара «APK ↔ его
+  `.sha256`»; atom-фолбэк строит `-phone.apk`/`-tv-arm32.apk` и отбирает тег по платформе, а
+  не `-android.apk`, которого нет с 1.3.38).
+- **Релиз 1.3.46 опубликован (24.11.2026)**: `v1.3.46-beta`, `v1.3.46-android`
+  (`-phone.apk` + `.sha256`), `v1.3.46-android-tv` (`-tv-arm32.apk` + `.sha256`);
+  магазинные `-store.apk`/`-store.aab` собраны (`versionCode 10346`), но в GitHub не
+  выкладывались. Телефон и планшет обновлены по `adb install -r` до 1.3.46.
+  Проверено: atom-фолбэк теперь даёт существующие файлы (`v1.3.46-android` →
+  `VieNLink-1.3.46-phone.apk` 44 955 227 Б; ТВ → `-tv-arm32.apk` 40 182 587 Б, HTTP 200).
+  Так как у пользователей на 1.3.44/1.3.45 ещё старый обновлятор, 1.3.46 тоже разложен
+  по двум релизам; объединять APK в один `…-android` можно начиная со следующей версии.
+- **Обновление с телефона (24.11.2026)**: `api.github.com` отдавал `403 rate limit exceeded`,
+  зеркала API — тоже 403; JSON иногда приходит через `gh-proxy.com`, иногда помогает только
+  atom-лента. Поэтому обновлятор обязан уметь atom-фолбэк (умеет с 1.3.46).
+
+## Улучшение сбора серверов (24.11.2026, локально, версия не поднималась)
+
+Четыре правки в сборе бесплатных источников (P0), проверены на ПК:
+
+- **Каналы Telegram — теперь и серверы.** `SourceKinds.IsServerSource` включает t.me-каналы
+  в `CollectAsync` (раньше они были только MTProto). Сайты `SourceKind.MtProto` — по-прежнему
+  только прокси. У канала нет даты на GitHub, поэтому `GitHubSourceFreshness.CheckAsync`
+  пропускает его (не удаляет). При заблокированном t.me канал в сборе серверов падает с
+  подсказкой, не роняя остальные.
+- **Кэш дат публикации на диске** — `freshness.json` (`GitHubSourceFreshness.PersistCache`),
+  чтобы после перезапуска не жечь квоту GitHub API заново.
+- **Условные GET + кэш сырого ответа** — `raw-etags.json` + `rawcache/`. Источник возвращает
+  ETag; при 304 список пересобирается из кэша без скачивания, поэтому серверы источника не
+  пропадают из `ReplaceNodes`. Текст > 4 МБ не кэшируется.
+- **Зеркала для raw-контента** — `FetchRawAsync` после прокси/прямого пробует
+  `ghfast.top`/`gh-proxy.com` для `raw.githubusercontent.com`.
+- **Разбор `tuic://`** — `LinkParser.ParseTuic` (TUIC v5, sing-box). `ssr://` не добавляем:
+  sing-box не умеет ShadowsocksR.
+- **Ротация «бесплодных» источников** (след. пункт P1) — `NodeSourceStats.RotateBarrenSources`:
+  серверный источник (не мой, не MTProto) с ≥200 серверов и нулём рабочих отключается через
+  3 дня после `FirstSeenUtc` и удаляется через 7 дней карантина (`BarrenSinceUtc`).
+  `FirstSeenUtc` ставится при загрузке списка (миграция без смены схемы). Решения приходят
+  из `CollectAsync` в `SourcesToDisable`/`SourcesToRemove`; применяют `RefreshSourcesCoreAsync`
+  (ПК) и `NodeStore.RefreshAsync` (Android).
+- **Контент-дедуп источников** (след. пункт P1) — `FetchOutcome.ContentHash` (SHA-256 текста)
+  и `NodeSourceStats.DedupMirrors`: источники с одинаковым текстом — зеркала; лучший остаётся,
+  автоподобранные зеркала удаляются (`SourcesToRemove`), встроенные просто не дублируют узлы.
+- **Telegram-каналы серверов через RSS** — `FetchAsync` разложен на `FetchTelegramAsync`
+  (прямой t.me → RSS-зеркала `NodeSourceService.TelegramRssMirrors`, общие с MTProto) и
+  `ParseText` (общий разбор). При заблокированном t.me конфиг-каналы дают серверы через RSS
+  (проверено: `@v2rayng_config` — 1 сервер вместо нуля). Зеркала перенесены из `MtProtoService`
+  в общий `NodeSourceService`, MTProto-путь не менялся.
+- **Бюджет обращений к GitHub API** — `GitHubSourceFreshness.ApiBudget` (30 на сбор):
+  источники сверх лимита собираются без проверки даты, а не пропускаются. `CheckAsync`
+  принимает опциональный `budget`; проверено `statuslogic` (2 теста) и `seed`.
+- **«Переехал ≠ умер»** — источник без определяемой даты публикации больше не удаляется
+  сразу: карантин (`QuarantineSinceUtc`, отключение через `SourcesToDisable`), удаление —
+  `RotateQuarantinedSources` после `QuarantineRemoveAfter` (7 дней). Дата снова появилась —
+  карантин снимается. Недоступный API карантин не вызывает. Проверено `statuslogic` (3 теста).
+- **Автопоиск сайтов + GitLab/Gitee** — `DiscoverWebAsync` оживлён (дата из адреса →
+  `LastPublishedUtc`), `SourceLocation.Host` разбирает GitLab/Gitee raw и свежесть через их
+  API; автопоиск теперь ищет и по GitLab/Gitee (поиск → дерево → файлы). `includeWeb=false`
+  отключает обход сайтов на ТВ (в `Maintenance`, `MainActivity.Pages`, `SourcesActivity`).
+  Windows и Android собираются, `statuslogic`/`parsers` — всё в порядке.
+
+Проверено: `dotnet build` (Core/Win/SelfTest) — 0 ошибок; `SelfTest parsers` — всё в порядке
+(добавлены тесты tuic и `IsServerSource`); `SelfTest fetch <raw-url>` — 4803 узла, повторный
+запуск вернул те же 4803 из кэша (304-путь работает); `SelfTest seed` — 33 815 узлов из всех
+источников, Telegram-каналы корректно упали с подсказкой (t.me недоступен), `freshness.json`
+(31 ключ) и `rawcache/` (30 файлов) записаны. Внимание: `seed` перезаписал реальный
+`nodes.json` свежими непроверенными узлами — это нормально, далее их проверяет фон.
+Android не собирался (правки в общем ядре, платформ-независимые); UI-списки источников на
+Android по-прежнему показывают t.me-каналы в разделе MTProto (косметика, сбор идёт корректно).
+
+## ИСПРАВЛЕНО: YouTube/трафик не шёл в VPN на телефоне/планшете (24.11.2026, 1.3.43+)
+
+- **Симптом:** после перехода на Java-платформу (1.3.36+) телефон и планшет подключались,
+  показывали выход через сервер, но трафик приложений в туннель не попадал: Chrome/YouTube
+  висели, `tun0` почти не рос, в логе ядра только `inbound DNS packet` (без TCP).
+- **Причина:** в `VieNLink.Android/Java/VieNLinkJavaBridge.java`, метод `openTun`, счётчик
+  добавленных маршрутов считал и **адреса** (`Inet4Address` = 172.19.0.1/30), поэтому
+  fallback `addRoute("0.0.0.0", 0)` не срабатывал при пустом `Inet4RouteAddress` (так
+  `auto_route: true` и ведёт себя). В VPN-таблице был только собственный подсет
+  `172.19.0.0/30` — DNS доходил (на 172.19.0.1), а TCP шёл напрямую.
+- **Исправление:** счётчик теперь считает только маршруты (как в C#-платформе `TunnelService.OpenTun`).
+- **Проверено:** `dotnet build` — 0 ошибок; собран и установлен на телефон
+  (`release\VieNLink-1.3.43-phone.apk`): в VPN-таблице появился `default dev tun0`,
+  tun0 RX 3,9 КБ → 5,6 МБ, TCP идёт `inbound/tun → outbound/vless` к YouTube.
+- **Релиз 1.3.44:** версия поднята (1.3.44 / 10344), CHANGELOG обновлён, собраны все сборки
+  (телефон `-phone.apk`, ТВ `-tv-arm32.apk`, магазинная `-store.apk/.aab`, Windows `setup.exe` + ZIP +
+  `SHA256SUMS.txt`). Опубликовано на GitHub: `v1.3.44-beta` (Windows) и `v1.3.44-android`
+  (телефон/планшет). Установлено и проверено на телефоне и планшете. ТВ не был подключён по adb —
+  `-tv-arm32.apk` собран, но на ТВ не установлен (ТВ этим багом не затронут).
+
+## Планшет и ТВ, адаптивный интерфейс (23.11.2026, 1.3.35+)
+
+- **Форм-фактор:** `DeviceProfile` (телефон / планшет `sw600dp+` / ТВ по `UiMode.TypeTelevision`).
+  Телефон — портрет, планшет — `FullSensor`, ТВ — `Landscape`. `Ui.LayoutScale`/`FontScale`
+  (ТВ 1.35/1.22, планшет 1.08/1.04), `Ui.IsTelevision` включает подсветку фокуса.
+- **Две колонки:** `MainActivity` на больших экранах строит шапку/действия слева
+  (`_headerHost`), страницу справа (`_pageHost`), у каждой свой `ScrollView`; на телефоне
+  всё как раньше в одной колонке. `MainActivity` ловит `Orientation|ScreenSize|SmallestScreenSize|UiMode`,
+  поэтому поворот не пересоздаёт экран.
+- **ТВ-сборка:** `build\publish-android.ps1 -TvBuild` → `release\VieNLink-1.3.35-tv.apk`
+  (`com.vienlink.app.tv`, «VieNLink TV», Java-платформа). `Store\TvManifest.xml`:
+  `LEANBACK_LAUNCHER`, `android:banner="@drawable/tv_banner"`, landscape,
+  `touchscreen required=false`; баннер `Resources\drawable-nodpi\tv_banner.png` (320×180).
+  Фокус пульта: `StateFocused` в `Ui.Pressable*`, рамка/масштаб у нижней навигации,
+  начальный фокус на «Проверить серверы».
+- **Android 11 (Lenovo TB-J706F) и AOT:** Release с AOT падал **SIGSEGV (signal 11)**
+  через ~1 с после старта (Debug работал). В `csproj` выключены `RunAOTCompilation`
+  и `AndroidEnableProfiledAot`; в `publish-android.ps1` есть `-NoAot` (сейчас no-AOT
+  по умолчанию через csproj). Планшетная сборка `release\VieNLink-1.3.35-tablet.apk`
+  установлена и работает. Старый AOT-артефакт `VieNLink-1.3.35-android.apk` на Android 11
+  не ставить.
+- **Проверено на планшете:** две колонки (шапка x≈70–1074, страница x≈1143–2525),
+  landscape, TUN-обход: `TUN поднят fd=98`, `ping cp.cloudflare.com` — 0 % потерь.
+  ADB по Wi-Fi: `192.168.3.14:39821` (Lenovo TB-J706F, Android 11).
+- **Телефон:** та же no-AOT adaptive-сборка (`VieNLink-1.3.35-tablet.apk`) установлена
+  поверх основной `com.vienlink.app`; данные сохранены. Одна колонка, портрет,
+  TUN-обход: `TUN поднят fd=222`, ping 0 %.
+- **ТВ Xiaomi подключён:** `192.168.3.10:5555`, `MiTV-MOOQ1` (`tarzan`), Android 11 (SDK 30),
+  **только `armeabi-v7a`** (32-бит). `release\VieNLink-1.3.35-tv.apk` (arm64-v8a + x86_64)
+  на нём не ставится: `INSTALL_FAILED_NO_MATCHING_ABIS`. Нужна ТВ-сборка под `android-arm`
+  и 32-битный `libgojni.so` для текущего AAR: в `Libs\libbox.aar` есть только
+  `jni/arm64-v8a/libgojni.so`, а у SFA 1.14.4 библиотека называется `libbox.so` и экспортирует
+  `Java_io_nekohasekai_libbox_*` (не подходит к нашему `classes.jar` с пакетом `libbox`).
+  Значит нужен свой `gomobile bind -javapkg libbox -target android/arm`: Go SDK есть
+  (`%LOCALAPPDATA%\go-sdk`), NDK есть (`%LOCALAPPDATA%\android-ndk`), `gomobile.exe` —
+  в `%USERPROFILE%\go\bin`, модульный кэш заполнен (614 МБ); исходники sing-box 1.14.4
+  нужно скачать заново.
+- **Телевизор почищен** (память/место): PatchWall, Play Фильмы и ТВ, Play Игры, Amazon,
+  Netflix, Яндекс.Браузер TV; 12 пакетов отключены (Google Ассистент, TTS, TalkBack,
+  заставки, рекомендации, галерея, Alexa и др.). Play Маркет возвращён. Свободно ~1,36 ГБ.
+  Полный реестр и пояснения — `docs/tv-cleanup.md`, возврат всего — `build\tv-restore.ps1`.
+- **ТВ-клиент собран и работает** (24.11.2026): `release\VieNLink-1.3.35-tv-arm32.apk`
+  (`com.vienlink.app.tv`, 38,3 МБ, только `armeabi-v7a`). Проверено на MiTV-MOOQ1:
+  запуск с `LEANBACK_LAUNCHER`, две колонки, фокус пульта (D-pad), разрешение VPN с пульта,
+  TUN-обход (`TUN поднят fd=87`, ping 0 %), прокси-режим (VPN + health/автопереключение).
+  Память: основной процесс ~150 МБ PSS, `:probe` ~41 МБ; CPU в покое 0 %, в партии до ~100 %
+  в `:probe`.
+- **ТВ-профиль ресурсов:** `VieNLink.Android\ProbeProfile.cs` — лимит 1500 серверов,
+  партия 60/6 потоков, `:probe` 6/4, квоты 6 и 4, такт 2 мин, поиск 20/5 мин,
+  обслуживание 60 мин, MTProto 5 мин. Проверка «от источника»:
+  `NodeFailover.TakeWithSourceCap` (3/6/10 слотов по выходу источника) и
+  `NodeSourceStats.BarrenSources` (источники с ≥50 проверками и нулём рабочих не проверяются
+  фоном).
+- **ТВ: только YouTube и Zona.** Проверяются домены `az1.zona.pub` и `sync.zonasearch.com`
+  (взяты из APK `mobi.zona` 3.0.79), Telegram/Discord/MTProto убраны из UI, квот и проверок,
+  полный список 18 доменов на ТВ не гоняется. Иконка Zona — `drawable/ic_service_zona.xml`.
+  DNS на ТВ — прямой UDP (`explicitDns`): DNS через прокси зацикливался
+  (`DNS query loopback in transport[remote]`) на доменных адресах серверов.
+  Проверено: `ping apirn1.mzona.net` 0 %, каталог и воспроизведение Zona идут через VPN.
+
+## Android, Java-платформа libbox и тестовая сборка (23.11.2026, 1.3.35+)
+
+- **Зачем:** убрать горячие вызовы ядра из MonoVM. `PlatformInterface` целиком на Java
+  (`VieNLink.Android/Java`, package `com.vienlink.platform`): `VieNLinkJavaBridge`
+  (один `CommandServer` на процесс, TUN, `protect`, интерфейсы, монитор сети),
+  `VieNLinkJavaPlatform`, `VieNLinkServerHandler`, `VieNLinkDnsTransport`.
+- **Мост C#:** `JavaBridge.cs` ищет класс через
+  `Class.forName(name, false, Application.Context.ClassLoader)` — **не** через
+  `Class.forName(name)`, тот берёт boot loader и Java-класс приложения не видит.
+  C# вызывает Java только `setService`/`start`/`stop`/`closeTun`/`hasTun`;
+  всё остальное ядро дёргает на Java.
+- **Сборка:** `-p:AndroidJavaPlatform=true`. **С 24.11.2026 Java-платформа включена
+  по умолчанию во все сборки** (`TestBuild=false/true`, ТВ): на телефоне она не даёт
+  зависаний MonoVM после фона, проверена на телефоне, планшете и ТВ. Параметр
+  `-p:AndroidJavaPlatform=false` остаётся как аварийный откат на C#-платформу.
+  `build\publish-android.ps1 -TestBuild` по-прежнему собирает отдельный package
+  `com.vienlink.app.test` («VieNLink Test»), но он больше не нужен для проверки Java —
+  основная сборка `com.vienlink.app` тоже на Java.
+  Для Release Java-классы держит `keep-java.txt` (`-keep class com.vienlink.platform.**`).
+- **Проверено на телефоне:** `JavaBridge: VpnService готов`, `CommandServer создан`,
+  `TUN поднят fd=210/232`, `StartOrReloadService выполнен`, `inbound/tun`-пакеты,
+  health и автопереключение, партии `:probe` — всё через Java; ANR нет.
+  Отдельно проверен **TUN-обход без сервера** в Release-тестовой сборке:
+  `TUN-обход запущен`, `inbound/tun[tun-bypass-in]`, `ping cp.cloudflare.com` — 0 % потерь.
+  Тестовая сборка `release\VieNLink-1.3.35-test.apk` установлена
+  (`com.vienlink.app.test`, `versionCode` 10335); обычная Debug-сборка — 0 ошибок.
+  Прототип `VieNLink.JavaTest` (отдельный package) удалён: его экран не наследовал
+  `BaseActivity` и не фиксировал портрет; в основном клиенте все экраны портретные
+  (`RequestedOrientation = Portrait`), системный `accelerometer_rotation` приложение
+  не меняет (проверено: 0 до/после запуска и TUN-обхода).
+  Тестовая сборка ставит свои данные отдельно, при первом запуске собирает 39 источников
+  (~34 000 серверов, в списке 5000) и проверяет их; свежий пул в этот момент был
+  в основном мёртвый (0 рабочих в первых партиях), но платформа работает.
+- **Дальше:** после проверки тестовой сборки включить Java-платформу в обычной
+  (`AndroidJavaPlatform=true` по умолчанию) и вынести в Java split-tunnel
+  (`AppRouteMode`/`AllowedPackages` сейчас не передаются — TUN заворачивает все
+  приложения, кроме себя). Ветку C# можно оставить как запасную.
+
+## Android, зависание после простоя в фоне (23.11.2026, 1.3.35+)
+
+- **Симптом:** приложение возвращается из фона пустым и не реагирует; система показывает
+  ANR `Broadcast of Intent … MAINTENANCE`. На телефоне это воспроизвелось 23.11.2026
+  несколько раз (19:50, 20:20, 21:06, 21:50).
+- **Причина — не наш код:** в ANR-трейсе главный поток и все управляемые потоки стоят
+  в `suspend_signal_handler`/`sigsuspend`, а поток остановки мира — в
+  `mono_threads_wait_pending_operations`. Окно не рисуется (`reportedDrawn=false`),
+  broadcast не обрабатывается. Это дедлок STW в MonoVM (.NET 10):
+  dotnet/runtime#114064 (вытесняющая остановка на pthread-замке bionic) и
+  #111485 (attach/GC). В `MainActivity`/`MaintenanceReceiver` его не исправить.
+- **Обход:** `VieNLink.Android/Environment.txt` + `<AndroidEnvironment>` в csproj:
+  - `MONO_GC_PARAMS=nursery-size=16m` — в 4 раза реже сборки (по умолчанию 4 МБ) и,
+    значит, реже вызовы GC-моста, который останавливает мир;
+  - `MONO_THREADS_SUSPEND=coop` — кооперативная остановка без вытесняющих сигналов
+    и pthread-замков.
+  В журнале при старте процесса видно `Mono: GC_PARAMS=…, THREADS_SUSPEND=…` —
+  так проверяется, что файл доехал (строка в `VieNLinkApp.OnCreate`).
+- **Код:** `EnsureFreshCountersAsync` теперь `async Task` с `CancellationToken`, идёт
+  в `Task.Run`, ждёт 2,5 с (окно успевает нарисоваться), все `await` —
+  `ConfigureAwait(false)`; `OnPause` отменяет задачу. `UpdateProbeBadge` кэширует
+  текст/цвет/фон — больше не создаёт `GradientDrawable` и Java-строку каждые 3 с.
+- **Проверено:** HOT-возврат из фона `am start -W` — 86/94/95/97 мс; до правки
+  `am start -W` истекал по таймауту 10 с, окно оставалось пустым, `reportedDrawn=false`.
+  Фоновая партия продолжается при ушедшем в фон приложении, ANR нет. Тестовый
+  signed APK 1.3.35 (`versionCode` 10335) установлен на телефон; версия не поднималась,
+  релиз не публиковался.
+- **Наблюдать дальше:** если зависание повторится — убрать `MONO_THREADS_SUSPEND=coop`
+  и оставить только `nursery-size`. Следующий надёжный шаг — реализовать
+  `libbox.PlatformInterface` на Java (`protect`, `OpenTun`, `FindConnectionOwner`),
+  чтобы Go-потоки не входили в managed-код и не создавали операции attach:
+  это главный источник «pending operations» в этом приложении. Проверять по
+  `dumpsys activity lastanr` и `dumpsys dropbox --print data_app_anr`.
 
 ## Локальные правки после 1.3.34: счётчики и сводка (23.11.2026)
 

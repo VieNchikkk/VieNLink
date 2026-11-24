@@ -21,6 +21,12 @@ internal sealed class AndroidSettings
     /// <summary>Пакеты выбранных приложений (split-tunnel).</summary>
     public List<string> AllowedPackages { get; set; } = new();
 
+    /// <summary>
+    /// Одноразовый сброс маршрутизации приложений на «все через сервер» (1.3.42):
+    /// старые настройки split-tunnel оставляли YouTube и браузер вне туннеля.
+    /// </summary>
+    public bool RoutingReset { get; set; }
+
     /// <summary>Последнее обновление источников (автоматика в фоне).</summary>
     public DateTime LastSourceRefreshUtc { get; set; }
 
@@ -67,16 +73,30 @@ internal static class AndroidSettingsStore
 
                 AppPaths.EnsureDirectories();
                 var loaded = JsonFileStore.Read<AndroidSettings>(Path) ?? new AndroidSettings();
-                // Старый файл знал только «только выбранные» — переносим в новый режим.
-                if (loaded.SplitTunnel && loaded.AppRouteMode == AppRouteMode.All)
+                // Старый split-tunnel (SplitTunnel=true) ломал подключение: приложения вне
+                // списка ходили напрямую, и YouTube/браузер «не работали при рабочем сервере».
+                // Сбрасываем в «все приложения через сервер» один раз при загрузке.
+                var healed = false;
+                if (!loaded.RoutingReset)
                 {
-                    loaded.AppRouteMode = AppRouteMode.OnlyListed;
+                    // Один раз после обновления: в старых настройках мог остаться список
+                    // приложений, из-за которого весь трафик шёл напрямую.
+                    loaded.RoutingReset = true;
+                    loaded.SplitTunnel = false;
+                    loaded.AppRouteMode = AppRouteMode.All;
+                    loaded.AllowedPackages.Clear();
+                    healed = true;
                 }
 
                 // Автоподключение после загрузки не нужно и переключателя в интерфейсе нет.
                 if (loaded.AutoConnectOnBoot)
                 {
                     loaded.AutoConnectOnBoot = false;
+                    healed = true;
+                }
+
+                if (healed)
+                {
                     JsonFileStore.Write(Path, loaded);
                 }
 

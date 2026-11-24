@@ -22,8 +22,19 @@ internal enum UiButtonKind
 /// </summary>
 internal static class Ui
 {
+    /// <summary>Масштаб отступов и размеров: 1.0 телефон, больше планшет/ТВ.</summary>
+    public static float LayoutScale { get; set; } = 1f;
+
+    /// <summary>Масштаб шрифтов для 10-foot UI.</summary>
+    public static float FontScale { get; set; } = 1f;
+
+    /// <summary>Телевизор: крупные элементы и подсветка фокуса для пульта.</summary>
+    public static bool IsTelevision { get; set; }
+
     public static int Dp(Context context, double value) =>
-        (int)Math.Round(value * context.Resources!.DisplayMetrics!.Density);
+        (int)Math.Round(value * LayoutScale * context.Resources!.DisplayMetrics!.Density);
+
+    public static float Sp(float value) => value * FontScale;
 
     public static int StatusBar(Context context) => Dimension(context, "status_bar_height");
 
@@ -73,9 +84,14 @@ internal static class Ui
     {
         var normal = Rounded(fill, radiusDp, context, border);
         var down = Rounded(pressed, radiusDp, context, border);
+        // Фокус виден на ТВ и при управлении с клавиатуры: светлее + заметная рамка.
+        var focused = Rounded(Blend(fill, Color.White, 0.16f), radiusDp, context,
+            border ?? Color.Argb(190, 255, 255, 255), 1.8f);
         var states = new StateListDrawable();
         states.AddState(new[] { Android.Resource.Attribute.StatePressed }, down);
+        states.AddState(new[] { Android.Resource.Attribute.StateFocused }, focused);
         states.AddState(new[] { Android.Resource.Attribute.StateEnabled }, normal);
+        states.AddState(Array.Empty<int>(), normal);
         return states;
     }
 
@@ -92,8 +108,11 @@ internal static class Ui
     {
         var normal = Gradient(from, to, radiusDp, context, border, borderDp);
         var down = Gradient(pressedFrom, pressedTo, radiusDp, context, border, borderDp);
+        var focused = Gradient(Blend(from, Color.White, 0.18f), Blend(to, Color.White, 0.10f),
+            radiusDp, context, border ?? Color.Argb(200, 255, 255, 255), 2f);
         var states = new StateListDrawable();
         states.AddState(new[] { Android.Resource.Attribute.StatePressed }, down);
+        states.AddState(new[] { Android.Resource.Attribute.StateFocused }, focused);
         states.AddState(new[] { Android.Resource.Attribute.StateEnabled }, normal);
         // Неактивная кнопка тоже должна быть видна, просто без подсветки.
         states.AddState(Array.Empty<int>(), normal);
@@ -105,7 +124,7 @@ internal static class Ui
         var view = new TextView(context)
         {
             Text = text,
-            TextSize = size,
+            TextSize = Sp(size),
         };
         view.SetTextColor(color);
         if (bold)

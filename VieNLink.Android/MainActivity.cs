@@ -12,7 +12,12 @@ namespace VieNLink.Mobile;
 /// (Подключение / Обход / Инструменты / Настройки) и быстрое подключение.
 /// Сервер всегда выбирается автоматически из уже проверенных.
 /// </summary>
-[Activity(Label = "VieNLink", MainLauncher = true, LaunchMode = Android.Content.PM.LaunchMode.SingleTop, Theme = "@style/Theme.VieNLink")]
+[Activity(Label = BuildInfo.AppLabel, MainLauncher = true, LaunchMode = Android.Content.PM.LaunchMode.SingleTop,
+    ConfigurationChanges = Android.Content.PM.ConfigChanges.Orientation |
+                           Android.Content.PM.ConfigChanges.ScreenSize |
+                           Android.Content.PM.ConfigChanges.SmallestScreenSize |
+                           Android.Content.PM.ConfigChanges.UiMode,
+    Theme = "@style/Theme.VieNLink")]
 [IntentFilter(
     new[] { Intent.ActionView },
     Categories = new[] { Intent.CategoryDefault, Intent.CategoryBrowsable },
@@ -26,6 +31,8 @@ public sealed partial class MainActivity : BaseActivity
     private const int VpnRequestCode = 1001;
 
     private LinearLayout? _pageHost;
+    /// <summary>Планшет/ТВ: левая колонка с шапкой; на телефоне null — шапка в странице.</summary>
+    private LinearLayout? _headerHost;
     private LinearLayout? _nav;
     private readonly List<ImageView> _navIcons = new();
     private readonly List<TextView> _navLabels = new();
@@ -60,6 +67,10 @@ public sealed partial class MainActivity : BaseActivity
 
     private Handler? _handler;
     private Action? _tick;
+    private CancellationTokenSource? _resumeCountersCts;
+    private string? _probeBadgeText;
+    private Color? _probeBadgeTone;
+    private Color? _connectionStatusTone;
     private DateTime _lastExitAttempt = DateTime.MinValue;
     private bool _exitFailed;
     private bool _exitBusy;
@@ -79,13 +90,43 @@ public sealed partial class MainActivity : BaseActivity
         var shell = Ui.Column(this);
         shell.SetBackgroundColor(P.Background);
 
-        var scroll = new ScrollView(this) { FillViewport = true, VerticalScrollBarEnabled = false };
-        _pageHost = Ui.Column(this);
-        _pageHost.SetPadding(Ui.Dp(this, 16), Ui.StatusBar(this) + Ui.Dp(this, 8), Ui.Dp(this, 16), Ui.Dp(this, 16));
-        scroll.AddView(_pageHost, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        shell.AddView(scroll, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MatchParent, 0, 1f));
+        if (DeviceProfile.IsLargeScreen)
+        {
+            // Планшет/ТВ: шапка и действия слева, содержимое вкладки справа.
+            // Каждая колонка прокручивается независимо; внизу — общая навигация.
+            var row = Ui.Row(this);
+            row.SetGravity(GravityFlags.Top);
+
+            var left = new ScrollView(this) { FillViewport = true, VerticalScrollBarEnabled = false };
+            _headerHost = Ui.Column(this);
+            _headerHost.SetPadding(Ui.Dp(this, 16), Ui.StatusBar(this) + Ui.Dp(this, 8),
+                Ui.Dp(this, 8), Ui.Dp(this, 16));
+            left.AddView(_headerHost, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
+            var right = new ScrollView(this) { FillViewport = true, VerticalScrollBarEnabled = false };
+            _pageHost = Ui.Column(this);
+            _pageHost.SetPadding(Ui.Dp(this, 8), Ui.StatusBar(this) + Ui.Dp(this, 8),
+                Ui.Dp(this, 16), Ui.Dp(this, 16));
+            right.AddView(_pageHost, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
+            row.AddView(left, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MatchParent, 0.44f));
+            row.AddView(right, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MatchParent, 0.56f));
+            shell.AddView(row, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, 0, 1f));
+        }
+        else
+        {
+            var scroll = new ScrollView(this) { FillViewport = true, VerticalScrollBarEnabled = false };
+            _pageHost = Ui.Column(this);
+            _pageHost.SetPadding(Ui.Dp(this, 16), Ui.StatusBar(this) + Ui.Dp(this, 8),
+                Ui.Dp(this, 16), Ui.Dp(this, 16));
+            scroll.AddView(_pageHost, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+            shell.AddView(scroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, 0, 1f));
+        }
 
         _nav = BuildNavigation();
         shell.AddView(_nav, new LinearLayout.LayoutParams(
@@ -114,6 +155,12 @@ public sealed partial class MainActivity : BaseActivity
         HandleImport(Intent);
         HandleDebugCommands(Intent);
         SelectTab(_tab);
+
+        if (DeviceProfile.IsTelevision)
+        {
+            // Пульт: сразу ставим фокус на главное действие, а не «в никуда».
+            new Handler(Looper.MainLooper!).Post(() => _findButton?.RequestFocus());
+        }
 
         if (Intent?.GetBooleanExtra("nextNode", false) == true)
         {
@@ -177,7 +224,15 @@ public sealed partial class MainActivity : BaseActivity
 
         RefreshHeader();
         EnsureTrafficMonitor();
-        _ = EnsureFreshCountersAsync();
+
+        // Счётчики после возврата из фона обновляем в фоне и не в первом кадре.
+        // Раньше работа стартовала прямо из OnResume: снимок тысяч серверов и запуск
+        // :probe совпадали с отрисовкой окна. При редком дедлоке остановки мира
+        // в Mono это давало пустой экран и ANR «Broadcast of Intent … MAINTENANCE».
+        _resumeCountersCts?.Cancel();
+        var countersCts = new CancellationTokenSource();
+        _resumeCountersCts = countersCts;
+        _ = Task.Run(() => EnsureFreshCountersAsync(countersCts.Token));
 
         _handler = new Handler(Looper.MainLooper!);
         _tick = () =>
@@ -197,35 +252,45 @@ public sealed partial class MainActivity : BaseActivity
 
     /// <summary>
     /// После возврата в приложение счётчики не должны висеть нулями до пятиминутной
-    /// перепроверки: сразу проверяем ранее рабочие серверы одной небольшой партией.
+    /// перепроверки: проверяем ранее рабочие серверы одной небольшой партией.
+    /// Всё идёт в фоне и с задержкой — окно должно успеть нарисоваться: снимок списка
+    /// серверов и запуск :probe на первом кадре давали зависание и ANR.
     /// </summary>
-    private async Task EnsureFreshCountersAsync()
+    private async Task EnsureFreshCountersAsync(CancellationToken token)
     {
         try
         {
+            await Task.Delay(2500, token).ConfigureAwait(false);
+
             if (SettingsStore.Current.AutomationPaused || ProbeClient.IsPaused ||
                 ProbeClient.IsRunning || ProbeClient.IsManualRun)
             {
                 return;
             }
 
-            await Task.Run(() => NodeStore.EnsureLoaded());
+            await Task.Run(() => NodeStore.EnsureLoaded(), token).ConfigureAwait(false);
 
             // Сначала стартовая перепроверка всех рабочих (если ещё не прошла): она и
             // обновляет счётчики. Быстрый проход ниже — только если рабочие устарели уже после неё.
-            await ProbeScheduler.EnsureStartupRecheckAsync();
+            await ProbeScheduler.EnsureStartupRecheckAsync(token).ConfigureAwait(false);
 
-            if (NodeStore.Summary().Working >= NodeLimits.MinWorkingNodes)
+            if (NodeStore.Summary().Working >= ProbeProfile.MinWorking)
             {
                 return;
             }
 
             // workingOnly: только серверы, которые уже были рабочими и чья проверка истекла.
-            var summary = await ProbeClient.RunBatchAsync(20, CancellationToken.None, workingOnly: true);
-            if (summary.Tested > 0)
+            var summary = await ProbeClient
+                .RunBatchAsync(20, token, workingOnly: true)
+                .ConfigureAwait(false);
+            if (summary.Tested > 0 && !token.IsCancellationRequested)
             {
-                RefreshHeader();
+                RunOnUiThread(RefreshHeader);
             }
+        }
+        catch (System.OperationCanceledException)
+        {
+            // Вернулись в фон до конца обновления — ничего страшного.
         }
         catch (Exception exception)
         {
@@ -236,6 +301,12 @@ public sealed partial class MainActivity : BaseActivity
     protected override void OnPause()
     {
         StopTrafficMonitor();
+
+        // Обновление счётчиков, запущенное при возврате, уже не нужно: партия
+        // не должна занимать :probe, пока приложение в фоне.
+        _resumeCountersCts?.Cancel();
+        _resumeCountersCts?.Dispose();
+        _resumeCountersCts = null;
 
         // Дописываем кэш при уходе из приложения: рабочий файл маленький,
         // а куча непроверенных могла ждать своей очереди.
@@ -278,6 +349,18 @@ public sealed partial class MainActivity : BaseActivity
 
             var position = index;
             item.Click += (_, _) => SelectTab(position);
+            if (Ui.IsTelevision)
+            {
+                // Пульт: видно, на какой вкладке фокус.
+                item.FocusChange += (_, e) =>
+                {
+                    item.Foreground = e.HasFocus
+                        ? Ui.Rounded(Color.Transparent, 12, this, P.Accent, 2.2f)
+                        : null;
+                    item.ScaleX = e.HasFocus ? 1.08f : 1f;
+                    item.ScaleY = e.HasFocus ? 1.08f : 1f;
+                };
+            }
 
             var image = new ImageView(this);
             var drawable = GetDrawable(icons[index])?.Mutate();
@@ -331,17 +414,32 @@ public sealed partial class MainActivity : BaseActivity
             return;
         }
 
-        _pageHost.RemoveAllViews();
-        _pageHost.AddView(BuildHeader(), new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-
+        var header = BuildHeader();
         View page = _tab switch
         {
             0 => BuildConnectionPage(),
             1 => BuildBypassPage(),
             _ => BuildToolsPage(),
         };
-        Ui.Add(_pageHost, page, 12);
+
+        if (_headerHost is not null)
+        {
+            // Планшет/ТВ: шапка слева, страница справа.
+            _headerHost.RemoveAllViews();
+            _headerHost.AddView(header, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+            _pageHost.RemoveAllViews();
+            _pageHost.AddView(page, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        }
+        else
+        {
+            _pageHost.RemoveAllViews();
+            _pageHost.AddView(header, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+            Ui.Add(_pageHost, page, 12);
+        }
+
         UpdateNavigation();
         RefreshHeader();
     }
@@ -368,6 +466,11 @@ public sealed partial class MainActivity : BaseActivity
 
     private View BuildHeader()
     {
+        // Шапку пересобрали: кэш прошлых текстов/цветов не должен скрыть обновления.
+        _probeBadgeText = null;
+        _probeBadgeTone = null;
+        _connectionStatusTone = null;
+
         var card = Ui.HeaderCard(P, this);
 
         var top = Ui.Row(this);
@@ -446,13 +549,18 @@ public sealed partial class MainActivity : BaseActivity
                 tintIcon: false),
             new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         counters.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 6), 1));
-        counters.AddView(ServiceCounter(Resource.Drawable.ic_service_discord, P.Discord, out _discordCount),
-            new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        counters.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 6), 1));
-        counters.AddView(ServiceCounter(Resource.Drawable.ic_service_telegram, P.Telegram, out _telegramCount),
-            new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        counters.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 6), 1));
-        counters.AddView(ServiceCounter(Resource.Drawable.ic_service_universal, P.Universal, out _universalCount),
+        if (!DeviceProfile.IsTelevision)
+        {
+            counters.AddView(ServiceCounter(Resource.Drawable.ic_service_discord, P.Discord, out _discordCount),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            counters.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 6), 1));
+            counters.AddView(ServiceCounter(Resource.Drawable.ic_service_telegram, P.Telegram, out _telegramCount),
+                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+            counters.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 6), 1));
+        }
+        counters.AddView(ServiceCounter(
+                DeviceProfile.IsTelevision ? Resource.Drawable.ic_service_zona : Resource.Drawable.ic_service_universal,
+                P.Universal, out _universalCount),
             new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         card.AddView(counters);
 
@@ -477,7 +585,7 @@ public sealed partial class MainActivity : BaseActivity
             ShareCurrentNode, Resource.Drawable.ic_export);
         CompactWrapHeaderButton(_autoButton);
         CompactWrapHeaderButton(_shareButton);
-        _autoButton.TextSize = 12f;
+        _autoButton.TextSize = Ui.Sp(12f);
         // Оформление: главное действие — зелёный градиент, «Поделиться» — фиолетовая,
         // авто-проверка — бирюзовая; значки в тон текста.
         StyleHeaderAction(_findButton, P.Accent, filled: true);
@@ -530,7 +638,7 @@ public sealed partial class MainActivity : BaseActivity
     private void CompactWrapHeaderButton(TextView button)
     {
         button.SetPadding(Ui.Dp(this, 8), Ui.Dp(this, 4), Ui.Dp(this, 8), Ui.Dp(this, 4));
-        button.TextSize = 12f;
+        button.TextSize = Ui.Sp(12f);
         button.SetSingleLine(false);
         button.SetMaxLines(2);
         button.Gravity = Android.Views.GravityFlags.Center;
@@ -543,7 +651,7 @@ public sealed partial class MainActivity : BaseActivity
     /// <summary>Кнопка главного действия на всю ширину.</summary>
     private void CompactWideHeaderButton(TextView button)
     {
-        button.TextSize = 13.5f;
+        button.TextSize = Ui.Sp(13.5f);
         button.SetSingleLine(true);
         button.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
         button.SetMinHeight(Ui.Dp(this, 48));
@@ -1910,7 +2018,8 @@ public sealed partial class MainActivity : BaseActivity
         NodeStore.QuickService.YouTube => "YouTube",
         NodeStore.QuickService.Telegram => "Telegram",
         NodeStore.QuickService.Discord => "Discord",
-        _ => "универсальный",
+        // На телевизоре вторая кнопка называется «Zona» — это тот же универсальный доступ.
+        _ => DeviceProfile.IsTelevision ? "Zona" : "универсальный",
     };
 
     /// <summary>
@@ -1961,12 +2070,30 @@ public sealed partial class MainActivity : BaseActivity
             tone = P.MutedStrong;
         }
 
-        _probeBadge.Text = text;
-        _probeBadge.SetTextColor(tone);
-        _probeBadge.Background = Ui.Rounded(
-            Color.Argb(42, tone.R, tone.G, tone.B), 8, this,
-            Color.Argb(115, tone.R, tone.G, tone.B));
-        _connectionStatus?.SetTextColor(manual || running ? P.TextStrong : P.Muted);
+        // Шапка обновляется каждые 3 секунды и ещё чаще по ходу проверки. Новый
+        // GradientDrawable и строка на каждый такт — лишние Java-объекты и лишние
+        // сборки мусора; при редком дедлоке GC это лишний шанс зависнуть.
+        if (!string.Equals(_probeBadgeText, text, StringComparison.Ordinal))
+        {
+            _probeBadgeText = text;
+            _probeBadge.Text = text;
+        }
+
+        if (_probeBadgeTone != tone)
+        {
+            _probeBadgeTone = tone;
+            _probeBadge.SetTextColor(tone);
+            _probeBadge.Background = Ui.Rounded(
+                Color.Argb(42, tone.R, tone.G, tone.B), 8, this,
+                Color.Argb(115, tone.R, tone.G, tone.B));
+        }
+
+        var statusTone = manual || running ? P.TextStrong : P.Muted;
+        if (_connectionStatusTone != statusTone)
+        {
+            _connectionStatusTone = statusTone;
+            _connectionStatus?.SetTextColor(statusTone);
+        }
     }
 
     private void SetConnectionStatus(string text)

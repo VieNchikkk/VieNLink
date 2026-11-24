@@ -11,8 +11,17 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>VieNLink.Mobile</RootNamespace>
     <AssemblyName>VieNLink.Android</AssemblyName>
-    <ApplicationId>com.vienlink.app</ApplicationId>
-    <ApplicationTitle>VieNLink</ApplicationTitle>
+
+    <!-- TestBuild — отдельная тестовая сборка: другой package и имя, чтобы стоять
+         рядом с обычным клиентом. AndroidJavaPlatform — Java-реализация PlatformInterface.
+         С 24.11.2026 Java-платформа включена во все сборки по умолчанию: на телефоне
+         она не даёт зависаний MonoVM после фона, проверена на телефоне, планшете и ТВ. -->
+    <TestBuild Condition="'$(TestBuild)' == ''">false</TestBuild>
+    <TvBuild Condition="'$(TvBuild)' == ''">false</TvBuild>
+    <AndroidJavaPlatform Condition="'$(AndroidJavaPlatform)' == ''">true</AndroidJavaPlatform>
+    <ApplicationId Condition="'$(TvBuild)' != 'true' and '$(TestBuild)' != 'true'">com.vienlink.app</ApplicationId>
+    <ApplicationId Condition="'$(TvBuild)' != 'true' and '$(TestBuild)' == 'true'">com.vienlink.app.test</ApplicationId>
+    <ApplicationId Condition="'$(TvBuild)' == 'true'">com.vienlink.app.tv</ApplicationId>
     <ApplicationVersion>$(VieNLinkVersionCode)</ApplicationVersion>
     <ApplicationDisplayVersion>$(VieNLinkVersion)</ApplicationDisplayVersion>
     <Version>$(VieNLinkVersion)</Version>
@@ -27,10 +36,27 @@
     <!-- Debug-сборка тоже должна быть самодостаточной: APK ставим вручную через adb,
          без Fast Deployment (иначе приложение падает с «No assemblies found»). -->
     <EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>
+
+    <!-- Android 11 (Lenovo TB-J706F): Release с AOT падает SIGSEGV через секунду
+         после старта; с JIT (как Debug) работает. Для планшетов и ТВ AOT выключаем. -->
+    <RunAOTCompilation>false</RunAOTCompilation>
+    <AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(StoreBuild)' == 'true'">
     <DefineConstants>$(DefineConstants);STORE_BUILD</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TestBuild)' == 'true'">
+    <DefineConstants>$(DefineConstants);TEST_BUILD</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TvBuild)' == 'true'">
+    <DefineConstants>$(DefineConstants);TV_BUILD</DefineConstants>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(AndroidJavaPlatform)' == 'true'">
+    <DefineConstants>$(DefineConstants);JAVA_PLATFORM</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -45,14 +71,34 @@
     <AndroidManifestOverlay Include="Store\SideloadManifest.xml" />
   </ItemGroup>
 
+  <!-- Android TV: LEANBACK_LAUNCHER, баннер, альбомная ориентация, без обязательного тача. -->
+  <ItemGroup Condition="'$(TvBuild)' == 'true'">
+    <AndroidManifestOverlay Include="Store\TvManifest.xml" />
+  </ItemGroup>
+
   <ItemGroup>
     <AndroidAarLibrary Include="Libs\*.aar" />
+  </ItemGroup>
+
+  <!-- Java-платформа libbox: в тестовой сборке ядро вызывает Java, а не C#. -->
+  <ItemGroup Condition="'$(AndroidJavaPlatform)' == 'true'">
+    <AndroidJavaSource Include="Java\**\*.java" />
+    <ProguardConfiguration Include="keep-java.txt" />
+  </ItemGroup>
+
+  <!-- Переменные окружения среды выполнения (Mono). Нужны из-за дедлока остановки
+       мира: приложение зависало в фоне, см. docs/plan-2026.md от 23.11.2026. -->
+  <ItemGroup>
+    <AndroidEnvironment Include="Environment.txt" />
   </ItemGroup>
 
   <!-- Тексты лицензий кладём в APK: GPL-3.0 и сторонние компоненты. -->
   <ItemGroup>
     <AndroidAsset Include="..\LICENSE" Link="Assets\LICENSE.txt" />
     <AndroidAsset Include="..\THIRD-PARTY-NOTICES.md" Link="Assets\THIRD-PARTY-NOTICES.md" />
+    <!-- Стартовый набор серверов: генерируется режимом SelfTest `exportseed` перед релизом.
+         В обычной/тестовой сборке файла может не быть — тогда APK без seed. -->
+    <AndroidAsset Include="..\seed.txt" Link="Assets\seed.txt" Condition="Exists('..\seed.txt')" />
   </ItemGroup>
 
 </Project>

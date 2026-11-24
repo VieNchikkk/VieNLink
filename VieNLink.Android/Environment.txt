@@ -1,0 +1,2 @@
+MONO_GC_PARAMS=nursery-size=16m
+MONO_THREADS_SUSPEND=coop

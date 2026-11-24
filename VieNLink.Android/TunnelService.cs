@@ -864,6 +864,11 @@ public sealed class TunnelService : VpnService
 
             CoreRuntime.EnsureSetup(this);
 
+#if JAVA_PLATFORM
+            // Java-платформа берёт TUN и protect у текущей службы.
+            JavaBridge.SetService(this);
+#endif
+
             // Конфиг сохраняем рядом с данными: по нему видно, что реально ушло в ядро.
             try
             {
@@ -890,7 +895,11 @@ public sealed class TunnelService : VpnService
 
             Android.Util.Log.Info("VieNLink", "шаг 4: служба запущена");
 
+#if JAVA_PLATFORM
+            State = JavaBridge.HasTun() ? TunnelState.Running : TunnelState.Stopped;
+#else
             State = _tunDescriptor is null ? TunnelState.Stopped : TunnelState.Running;
+#endif
 
             // В уведомлении показываем сервер, чтобы его не выбирать вслепую.
             if (State == TunnelState.Running)
@@ -915,6 +924,9 @@ public sealed class TunnelService : VpnService
 
             // Ядро могло успеть создать TUN до ошибки: закрываем fd, иначе система
             // считает VPN поднятым, а трафик никуда не идёт.
+#if JAVA_PLATFORM
+            JavaBridge.CloseTun();
+#else
             try
             {
                 _tunDescriptor?.Close();
@@ -925,6 +937,7 @@ public sealed class TunnelService : VpnService
             }
 
             _tunDescriptor = null;
+#endif
             CoreRuntime.Stop();
 
             try
@@ -963,8 +976,11 @@ public sealed class TunnelService : VpnService
             // (AddAllowedApplication), либо «все, кроме списка» (AddDisallowedApplication).
             // Оба способа одновременно вызывать нельзя.
             var routing = _bypassMode ? null : AndroidSettingsStore.Current;
-            var mode = routing?.AppRouteMode ?? AppRouteMode.All;
-            var selected = routing?.AllowedPackages.ToList() ?? new List<string>();
+            // Маршрутизация по приложениям пока отключена: старый split-tunnel оставлял
+            // YouTube и браузер вне туннеля, и они «не работали при рабочем сервере».
+            // Весь трафик идёт через VPN (свой процесс исключается ниже).
+            var mode = AppRouteMode.All;
+            var selected = new List<string>();
             var applied = 0;
 
             if (mode == AppRouteMode.OnlyListed && selected.Count > 0)

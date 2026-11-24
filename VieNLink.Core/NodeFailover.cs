@@ -66,6 +66,60 @@ internal static class NodeFailover
     private static string FirstSource(string? sourceName) =>
         SplitSources(sourceName).FirstOrDefault() ?? string.Empty;
 
+    /// <summary>
+    /// Берёт до <paramref name="take"/> серверов, но в первом проходе — не больше
+    /// <paramref name="capOf"/> с одного источника. Так большой мёртвый список не занимает
+    /// всю партию: сначала идут источники, которые уже давали рабочие серверы, а «нулевые»
+    /// получают по 2–3 попытки. Если мест не хватило, остаток добирается без ограничения.
+    /// </summary>
+    public static List<ProxyNode> TakeWithSourceCap(
+        IEnumerable<ProxyNode> nodes,
+        int take,
+        Func<ProxyNode, int> capOf)
+    {
+        if (take <= 0)
+        {
+            return new List<ProxyNode>();
+        }
+
+        var result = new List<ProxyNode>(Math.Min(take, 256));
+        var used = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var overflow = new List<ProxyNode>();
+
+        foreach (var node in nodes)
+        {
+            if (result.Count >= take)
+            {
+                break;
+            }
+
+            var key = FirstSource(node.SourceName);
+            var cap = Math.Max(1, capOf(node));
+            used.TryGetValue(key, out var current);
+            if (current < cap)
+            {
+                result.Add(node);
+                used[key] = current + 1;
+            }
+            else
+            {
+                overflow.Add(node);
+            }
+        }
+
+        foreach (var node in overflow)
+        {
+            if (result.Count >= take)
+            {
+                break;
+            }
+
+            result.Add(node);
+        }
+
+        return result;
+    }
+
     /// <summary>Названия источников сервера (в кэше они склеены через «, »).</summary>
     public static IReadOnlyList<string> SplitSources(string? sourceName) =>
         string.IsNullOrWhiteSpace(sourceName)

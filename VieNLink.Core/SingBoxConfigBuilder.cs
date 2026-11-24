@@ -115,7 +115,31 @@ internal static class SingBoxConfigBuilder
         {
             // dnsThroughProxy: DNS по TCP через сервер. Нужно там, где локальный UDP/53
             // зарезан или подменяется (мобильные сети, Android без root).
-            config["dns"] = dnsThroughProxy
+            // explicitDns: прямой UDP-DNS без прокси. Нужен там, где адрес самого
+            // прокси — домен: DNS через прокси даёт «DNS query loopback» (чтобы
+            // подключиться к прокси, нужно разрешить его домен, а резолвер идёт в прокси).
+            config["dns"] = explicitDns
+                ? new JsonObject
+                {
+                    ["servers"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["type"] = "udp",
+                            ["tag"] = "udp",
+                            ["server"] = "77.88.8.8",
+                        },
+                        new JsonObject
+                        {
+                            ["type"] = "udp",
+                            ["tag"] = "udp2",
+                            ["server"] = "1.1.1.1",
+                        },
+                    },
+                    ["final"] = "udp",
+                    ["strategy"] = "ipv4_only",
+                }
+                : dnsThroughProxy
                 ? new JsonObject
                 {
                     ["servers"] = new JsonArray
@@ -129,6 +153,9 @@ internal static class SingBoxConfigBuilder
                         },
                     },
                     ["final"] = "remote",
+                    // Только IPv4: IPv6-маршруты внутри TUN на Android часто недоступны
+                    // (`::/0 unreachable`), и клиенты, получив AAAA, висят в рукопожатии.
+                    ["strategy"] = "ipv4_only",
                 }
                 : new JsonObject
                 {
@@ -141,6 +168,7 @@ internal static class SingBoxConfigBuilder
                         },
                     },
                     ["final"] = "local",
+                    ["strategy"] = "ipv4_only",
                 };
         }
         else if (dnsThroughProxy)

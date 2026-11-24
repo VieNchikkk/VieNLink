@@ -16,7 +16,7 @@ namespace VieNLink.Mobile;
     GrantUriPermissions = true)]
 public sealed class UpdateFileProvider : ContentProvider
 {
-    public const string Authority = "com.vienlink.app.updates";
+    public const string Authority = BuildInfo.UpdateAuthority;
 
     public override bool OnCreate() => true;
 

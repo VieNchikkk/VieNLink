@@ -14,10 +14,10 @@ namespace VieNLink;
 internal static class SubscriptionParser
 {
     private static readonly Regex LinkRegex = new(
-        @"(?i)\b(?:vless|vmess|trojan|ss|hysteria2|hy2)://[^\s""'<>\\]+",
+        @"(?i)\b(?:vless|vmess|trojan|ss|hysteria2|hy2|tuic)://[^\s""'<>\\]+",
         RegexOptions.Compiled);
 
-    private static readonly string[] AllowedSchemes = { "vless", "vmess", "trojan", "ss", "hysteria2", "hy2" };
+    private static readonly string[] AllowedSchemes = { "vless", "vmess", "trojan", "ss", "hysteria2", "hy2", "tuic" };
 
     public static List<ProxyNode> Parse(string content, string sourceName)
     {

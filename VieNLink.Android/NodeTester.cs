@@ -25,9 +25,9 @@ internal static class NodeTester
     /// идёт через сервер и тратит его трафик. 200 — крупнее партия, значит меньше
     /// холодных запусков процесса :probe и меньше нагрузки на телефон.
     /// </summary>
-    public const int MaxBatch = 200;
+    public static int MaxBatch => DeviceProfile.IsTelevision ? 60 : 200;
 
-    public const int Concurrency = 12;
+    public static int Concurrency => DeviceProfile.IsTelevision ? 6 : 12;
     public const int TimeoutMs = 4000;
 
     /// <summary>
@@ -44,15 +44,40 @@ internal static class NodeTester
     /// из-за блокировки одного домена. Несколько адресов на сервис — чтобы блокировка
     /// одного домена не прятала рабочий сервер.
     /// </summary>
-    private static readonly (string Service, string Url)[] ProbeUrls =
+    private static readonly (string Service, string Url)[] ProbeUrls = BuildProbeUrls();
+
+    /// <summary>
+    /// На телевизоре проверяем только универсальный доступ и YouTube: Telegram и Discord
+    /// там не нужны, а каждый лишний адрес — это ещё один запрос через сервер.
+    /// </summary>
+    private static (string Service, string Url)[] BuildProbeUrls()
     {
-        ("Cloudflare", "https://cp.cloudflare.com/generate_204"),
-        ("YouTube", "https://www.youtube.com/"),
-        ("YouTube", "https://redirector.googlevideo.com/generate_204"),
-        ("Telegram", "https://t.me/"),
-        ("Telegram", "https://web.telegram.org/"),
-        ("Discord", "https://discord.com/"),
-    };
+        if (DeviceProfile.IsTelevision)
+        {
+            // Телевизор: только YouTube и Zona. У Zona нет одного «главного» адреса —
+            // приложение ходит в mzona.net / zona.pub / zonasearch.com; проверяем два,
+            // которые отвечают 200. Внутреннее имя службы «Cloudflare» означает
+            // универсальный доступ: его задержка показывается и по ней выбирается лучший.
+            return
+            [
+                ("Cloudflare", "https://az1.zona.pub/"),
+                ("Cloudflare", "https://sync.zonasearch.com/"),
+                ("YouTube", "https://www.youtube.com/"),
+                ("YouTube", "https://redirector.googlevideo.com/generate_204"),
+            ];
+        }
+
+        var urls = new List<(string Service, string Url)>
+        {
+            ("Cloudflare", "https://cp.cloudflare.com/generate_204"),
+            ("YouTube", "https://www.youtube.com/"),
+            ("YouTube", "https://redirector.googlevideo.com/generate_204"),
+            ("Telegram", "https://t.me/"),
+            ("Telegram", "https://web.telegram.org/"),
+            ("Discord", "https://discord.com/"),
+        };
+        return urls.ToArray();
+    }
 
     /// <summary>
     /// Полный список заблокированных доменов (тот же, что у zapret/десинка).
@@ -249,8 +274,11 @@ internal static class NodeTester
 
                         // Сколько всего заблокированных доменов открывается: главный показатель
                         // качества сервера. Считаем только у живых, иначе это 18 таймаутов впустую.
-                        node.OpenDomains = await CountOpenDomainsAsync(api, node.Tag, cancellationToken)
-                            .ConfigureAwait(false);
+                        // На ТВ полный список не гоняем — это минуты на партию.
+                        node.OpenDomains = DeviceProfile.IsTelevision
+                            ? 0
+                            : await CountOpenDomainsAsync(api, node.Tag, cancellationToken)
+                                .ConfigureAwait(false);
 
                         NodeHealth.RegisterSuccess(node);
                         NodeStore.RegisterWorking(node);
@@ -800,11 +828,6 @@ internal static class NodeTester
         var recovered = new List<ProxyNode>();
         var failed = new List<ProxyNode>();
         var timeoutMs = Math.Max(WorkingTimeoutMs, 6000);
-        var urls = new (string Service, string Url)[]
-        {
-            ("Cloudflare", "https://cp.cloudflare.com/generate_204"),
-            ("YouTube", "https://www.youtube.com/"),
-        };
 
         progress?.Report($"Подтверждаю провал {nodes.Count} рабочих серверов…");
         AppLog.Write("test", $"Подтверждаю провал {nodes.Count} рабочих серверов");
@@ -814,31 +837,37 @@ internal static class NodeTester
             await limiter.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                (string Service, int? Delay)? opened = null;
-                foreach (var probe in urls)
+                // Подтверждение — последняя защита: у рабочего сервера разовая заминка
+                // сети или занятость не должны засчитываться как провал. Поэтому даём
+                // две попытки по одному адресу за раз, без общей нагрузки партии.
+                var hit = await ConfirmOnceAsync(api, node.Tag, timeoutMs, cancellationToken)
+                    .ConfigureAwait(false);
+                if (hit is null && !cancellationToken.IsCancellationRequested)
                 {
-                    if (cancellationToken.IsCancellationRequested)
+                    try
                     {
-                        break;
+                        await Task.Delay(800, cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Партию остановили во время паузы: провал не засчитываем.
                     }
 
-                    var delay = await api.TestDelayAsync(node.Tag, timeoutMs, cancellationToken, probe.Url)
-                        .ConfigureAwait(false);
-                    if (delay is not null)
+                    if (!cancellationToken.IsCancellationRequested)
                     {
-                        opened = (probe.Service, delay);
-                        break;
+                        hit = await ConfirmOnceAsync(api, node.Tag, timeoutMs, cancellationToken)
+                            .ConfigureAwait(false);
                     }
                 }
 
-                if (opened is { } hit)
+                if (hit is { } confirmed)
                 {
                     node.CheckedAtUtc = DateTime.UtcNow;
                     node.TriedAtUtc = DateTime.UtcNow;
-                    node.DelayMs = hit.Delay;
-                    node.UniversalOk = node.UniversalOk == true || hit.Service == "Cloudflare";
-                    node.YoutubeOk = node.YoutubeOk == true || hit.Service == "YouTube";
-                    node.TelegramOk = node.TelegramOk == true || hit.Service == "Telegram";
+                    node.DelayMs = confirmed.Delay;
+                    node.UniversalOk = node.UniversalOk == true || confirmed.Service == "Cloudflare";
+                    node.YoutubeOk = node.YoutubeOk == true || confirmed.Service == "YouTube";
+                    node.TelegramOk = node.TelegramOk == true || confirmed.Service == "Telegram";
                     NodeHealth.RegisterSuccess(node);
                     lock (recovered)
                     {
@@ -846,18 +875,21 @@ internal static class NodeTester
                     }
 
                     AppLog.Write("test",
-                        $"«{node.Name}»: подтверждён после провала партии ({hit.Service}, {hit.Delay} мс)");
+                        $"«{node.Name}»: подтверждён после провала партии ({confirmed.Service}, {confirmed.Delay} мс)");
                 }
                 else
                 {
                     node.TriedAtUtc = DateTime.UtcNow;
+                    var failuresBefore = node.FailCount;
                     NodeHealth.RegisterFailure(node);
                     lock (failed)
                     {
                         failed.Add(node);
                     }
 
-                    AppLog.Write("test", $"«{node.Name}»: провал подтверждён");
+                    AppLog.Write("test",
+                        $"«{node.Name}»: провал подтверждён — FailCount {node.FailCount} " +
+                        $"(было {failuresBefore}), {RejectedNode.Describe(node)}");
                 }
             }
             catch (OperationCanceledException)
@@ -872,6 +904,37 @@ internal static class NodeTester
 
         await Task.WhenAll(tasks).ConfigureAwait(false);
         return (recovered, failed);
+    }
+
+    /// <summary>
+    /// Один раунд подтверждения: открылся ли у сервера Cloudflare или YouTube.
+    /// Адреса идут по одному: нагруженный канал и параллельные рукопожатия дают ложные
+    /// провалы, поэтому здесь всё последовательно.
+    /// </summary>
+    private static async Task<(string Service, int? Delay)?> ConfirmOnceAsync(
+        ClashApiClient api,
+        string tag,
+        int timeoutMs,
+        CancellationToken cancellationToken)
+    {
+        var urls = new (string Service, string Url)[]
+        {
+            ("Cloudflare", "https://cp.cloudflare.com/generate_204"),
+            ("YouTube", "https://www.youtube.com/"),
+        };
+
+        foreach (var probe in urls)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var delay = await api.TestDelayAsync(tag, timeoutMs, cancellationToken, probe.Url)
+                .ConfigureAwait(false);
+            if (delay is not null)
+            {
+                return (probe.Service, delay);
+            }
+        }
+
+        return null;
     }
 
     /// <summary>Сколько доменов из списка заблокированных открывает сервер.</summary>

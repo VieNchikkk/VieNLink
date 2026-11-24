@@ -443,9 +443,11 @@ public sealed class ProbeService : Service
                 // Меньше одновременно проверяемых серверов и больше времени на ответ:
                 // 8 узлов × 6 адресов на мобильном канале давали ложные провалы,
                 // особенно у серверов, которые только что были рабочими.
-                concurrency: 6,
+                concurrency: ProbeProfile.ProbeConcurrency,
                 timeoutMs: 4000,
-                fullDomains: request?.FullDomains ?? true);
+                // На ТВ полный список заблокированных доменов не гоняем: 18 запросов
+                // через сервер на каждый узел — это минуты на партию при слабом CPU.
+                fullDomains: (request?.FullDomains ?? true) && !DeviceProfile.IsTelevision);
 
             foreach (var (id, node) in accepted)
             {

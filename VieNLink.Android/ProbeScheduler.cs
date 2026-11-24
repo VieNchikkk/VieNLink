@@ -7,17 +7,18 @@ namespace VieNLink.Mobile;
 /// </summary>
 internal static class ProbeScheduler
 {
-    private static readonly TimeSpan TickInterval = TimeSpan.FromMinutes(1);
+    private static TimeSpan TickInterval => ProbeProfile.TickInterval;
 
     /// <summary>Как часто искать новые серверы: чаще при недоборе квоты, реже когда всё в порядке.</summary>
-    private static readonly TimeSpan SearchInterval = TimeSpan.FromMinutes(10);
-    private static readonly TimeSpan SearchIntervalWhenFew = TimeSpan.FromMinutes(2);
+    private static TimeSpan SearchInterval => ProbeProfile.SearchInterval;
+    private static TimeSpan SearchIntervalWhenFew => ProbeProfile.SearchIntervalWhenFew;
 
     /// <summary>Сколько партий по 150 серверов проверять за такт, пока нет сервера для YouTube.</summary>
     private const int YouTubeBatches = 2;
 
-    /// <summary>Сколько рабочих серверов перепроверять за минутный такт.</summary>
-    private const int RecheckBatch = 20;
+    /// <summary>Сколько рабочих серверов перепроверять за минутный такт
+    /// (на телевизоре меньше — см. <see cref="ProbeProfile.RecheckBatch"/>).</summary>
+    private static int RecheckBatch => ProbeProfile.RecheckBatch;
 
     private static Timer? _timer;
     private static DateTime _lastSearchUtc = DateTime.MinValue;
@@ -42,7 +43,9 @@ internal static class ProbeScheduler
         // Первый такт через 2 секунды: после запуска счётчики должны наполниться
         // свежими проверками, а не показывать ноль до первой минуты.
         _timer = new Timer(_ => Tick(context), null, TimeSpan.FromSeconds(2), TickInterval);
-        AppLog.Write("probe", "Фоновая проверка серверов запущена (такт 1 минута, серверы — каждые 5 минут)");
+        AppLog.Write("probe",
+            $"Фоновая проверка серверов запущена (такт {TickInterval.TotalMinutes:0} мин, " +
+            $"рабочие — каждые {NodeLimits.WorkingRecheckMinutes} мин)");
 
         // Результаты, записанные :probe перед тем, как основной процесс убили,
         // применяем при старте: фоновая работа не должна пропадать.
@@ -154,11 +157,11 @@ internal static class ProbeScheduler
 
             var counts = NodeStore.Summary();
             var quotaMissing =
-                counts.Working < NodeLimits.MinWorkingNodes ||
-                counts.Youtube < NodeLimits.MinWorkingPerService ||
-                counts.Telegram < NodeLimits.MinWorkingPerService ||
-                counts.Discord < NodeLimits.MinWorkingPerService ||
-                counts.Universal < NodeLimits.MinWorkingPerService;
+                counts.Working < ProbeProfile.MinWorking ||
+                counts.Youtube < ProbeProfile.MinWorkingPerService ||
+                counts.Telegram < ProbeProfile.MinWorkingPerService ||
+                counts.Discord < ProbeProfile.MinWorkingPerService ||
+                counts.Universal < ProbeProfile.MinWorkingPerService;
 
             // Поиск новых серверов — реже; в остальные минуты только освежаем счётчики:
             // перепроверяем рабочие, у которых истекает окно свежести (5 минут).
@@ -180,7 +183,7 @@ internal static class ProbeScheduler
             }
 
             _lastSearchUtc = now;
-            var summary = await ProbeClient.RunBatchAsync(max: 10, CancellationToken.None)
+            var summary = await ProbeClient.RunBatchAsync(max: ProbeProfile.ForegroundBatch, CancellationToken.None)
                 .ConfigureAwait(false);
             if (summary.Tested > 0)
             {
@@ -191,13 +194,13 @@ internal static class ProbeScheduler
 
             // Рабочих серверов должно быть не меньше десяти: пока их мало, проверяем
             // партии подряд, не ожидая следующего такта.
-            if (NodeStore.Summary().Working < NodeLimits.MinWorkingNodes)
+            if (NodeStore.Summary().Working < ProbeProfile.MinWorking)
             {
                 var working = await ProbeClient
                     .EnsureWorkingQuotaAsync(4, NodeTester.MaxBatch, CancellationToken.None)
                     .ConfigureAwait(false);
                 AppLog.Write("probe",
-                    $"Минимум рабочих серверов: {working} из {NodeLimits.MinWorkingNodes}");
+                    $"Минимум рабочих серверов: {working} из {ProbeProfile.MinWorking}");
             }
 
             // Кнопки сервисов должны иметь живые серверы: если для YouTube, Telegram,
@@ -206,22 +209,22 @@ internal static class ProbeScheduler
             // все такты, а остальные не искались вовсе.
             var serviceCounts = NodeStore.Summary();
             var missing = new List<NodeStore.QuickService>();
-            if (serviceCounts.Youtube < NodeLimits.MinWorkingPerService)
+            if (serviceCounts.Youtube < ProbeProfile.MinWorkingPerService)
             {
                 missing.Add(NodeStore.QuickService.YouTube);
             }
 
-            if (serviceCounts.Telegram < NodeLimits.MinWorkingPerService)
+            if (serviceCounts.Telegram < ProbeProfile.MinWorkingPerService && !DeviceProfile.IsTelevision)
             {
                 missing.Add(NodeStore.QuickService.Telegram);
             }
 
-            if (serviceCounts.Discord < NodeLimits.MinWorkingPerService)
+            if (serviceCounts.Discord < ProbeProfile.MinWorkingPerService && !DeviceProfile.IsTelevision)
             {
                 missing.Add(NodeStore.QuickService.Discord);
             }
 
-            if (serviceCounts.Universal < NodeLimits.MinWorkingPerService)
+            if (serviceCounts.Universal < ProbeProfile.MinWorkingPerService)
             {
                 missing.Add(NodeStore.QuickService.Universal);
             }
@@ -233,7 +236,7 @@ internal static class ProbeScheduler
                     .EnsureServiceNodeAsync(focus, 1, CancellationToken.None)
                     .ConfigureAwait(false);
                 AppLog.Write("probe", found is null
-                    ? $"{focus}: рабочих серверов меньше {NodeLimits.MinWorkingPerService}, поиск продолжится"
+                    ? $"{focus}: рабочих серверов меньше {ProbeProfile.MinWorkingPerService}, поиск продолжится"
                     : $"{focus}: рабочий сервер найден автоматически");
             }
         }

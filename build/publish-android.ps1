@@ -23,7 +23,20 @@ param(
     [string]$Keystore,
     [string]$Alias = 'vienlink',
     [string]$StorePass,
-    [string]$OutputPath
+    [string]$OutputPath,
+    # Тестовая сборка: package com.vienlink.app.test, имя VieNLink Test, Java-платформа.
+    [switch]$TestBuild,
+    # Телевизионная сборка: package com.vienlink.app.tv, LEANBACK_LAUNCHER, пульт.
+    [switch]$TvBuild,
+    # Отключить AOT: на Android 11 (Lenovo TB-J706F) Release с AOT падает SIGSEGV.
+    [switch]$NoAot,
+    # Целевой ABI. Пусто — как решит .NET (arm64-v8a + x86_64). armeabi-v7a — 32-битные
+    # телевизоры (Xiaomi MiTV-MOOQ1, Android 11): нужен RuntimeIdentifier android-arm
+    # и 32-битный libgojni.so (Libs\libgojni-armeabi-v7a.so), его в libbox.aar нет.
+    [ValidateSet('', 'armeabi-v7a', 'arm64-v8a')]
+    [string]$Abi = '',
+    # Собрать с C#-платформой libbox (аварийный откат и проверка гипотез).
+    [switch]$NoJava
 )
 
 $ErrorActionPreference = 'Stop'
@@ -115,17 +128,44 @@ foreach ($dir in @($objDir, $binDir)) {
 $publishDir = Join-Path $root "VieNLink.Android\bin\Release\net10.0-android\publish"
 if (Test-Path -LiteralPath $publishDir) { Remove-Item -LiteralPath $publishDir -Recurse -Force }
 
-Write-Host "Сборка Android $Version (versionCode $VersionCode)..." -ForegroundColor Cyan
-& $dotnet publish $project `
-    -c Release `
-    -f net10.0-android `
-    -p:AndroidSdkDirectory="$sdk" `
-    -p:JavaSdkDirectory="$jdk" `
-    -p:ApplicationDisplayVersion="$Version" `
-    -p:ApplicationVersion="$VersionCode" `
-    -p:AndroidPackageFormat=apk `
-    -p:EmbedAssembliesIntoApk=true `
-    -o $publishDir
+Write-Host "Сборка Android $Version (versionCode $VersionCode)$(if ($TestBuild) { ', тестовая' } else { '' })..." -ForegroundColor Cyan
+$publishArgs = @(
+    'publish', $project,
+    '-c', 'Release',
+    '-f', 'net10.0-android',
+    "-p:AndroidSdkDirectory=$sdk",
+    "-p:JavaSdkDirectory=$jdk",
+    "-p:ApplicationDisplayVersion=$Version",
+    "-p:ApplicationVersion=$VersionCode",
+    '-p:AndroidPackageFormat=apk',
+    '-p:EmbedAssembliesIntoApk=true',
+    '-o', $publishDir
+)
+if ($TestBuild) {
+    $publishArgs += '-p:TestBuild=true'
+}
+if ($TvBuild) {
+    $publishArgs += '-p:TvBuild=true'
+}
+if ($NoAot) {
+    $publishArgs += '-p:RunAOTCompilation=false'
+    $publishArgs += '-p:AndroidEnableProfiledAot=false'
+}
+if ($NoJava) {
+    # Аварийный откат на C#-платформу libbox (проверка гипотез, диагностика).
+    $publishArgs += '-p:AndroidJavaPlatform=false'
+}
+if ($Abi -eq 'armeabi-v7a') {
+    # 32-битный ARM: в libbox.aar только arm64-v8a, 32-битную библиотеку
+    # добавляем в APK после сборки (см. ниже).
+    $publishArgs += '-r'
+    $publishArgs += 'android-arm'
+}
+elseif ($Abi -eq 'arm64-v8a') {
+    $publishArgs += '-r'
+    $publishArgs += 'android-arm64'
+}
+& $dotnet @publishArgs
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish завершился с кодом $LASTEXITCODE." }
 
 $builtApk = Get-ChildItem -LiteralPath $publishDir -Filter '*-Signed.apk' |
@@ -136,10 +176,42 @@ if (-not $builtApk) {
 }
 if (-not $builtApk) { throw "APK не найден в $publishDir." }
 
+# 32-битный ARM: в libbox.aar есть только jni/arm64-v8a/libgojni.so, поэтому
+# 32-битную библиотеку ядра добавляем в готовый APK перед выравниванием и подписью.
+if ($Abi -eq 'armeabi-v7a') {
+    $libsDir = Join-Path $root 'VieNLink.Android\Libs'
+    $armSo = Join-Path $libsDir 'libgojni-armeabi-v7a.so'
+    $armZip = "$armSo.zip"
+    if (-not (Test-Path -LiteralPath $armSo)) {
+        # В репозитории библиотека лежит сжатой: 110 МБ — много для git (лимит 100 МБ).
+        if (-not (Test-Path -LiteralPath $armZip)) {
+            throw "Нет 32-битной библиотеки ядра: $armSo или $armZip (см. docs\android-design.md §15)."
+        }
+        $armSo = Join-Path $env:TEMP 'libgojni-armeabi-v7a.so'
+        Write-Host 'Распаковываю 32-битную библиотеку ядра...' -ForegroundColor Cyan
+        Expand-Archive -LiteralPath $armZip -DestinationPath (Split-Path -Parent $armSo) -Force
+    }
+    Write-Host 'Добавляю 32-битную библиотеку ядра (armeabi-v7a)...' -ForegroundColor Cyan
+    Add-Type -AssemblyName System.IO.Compression.FileSystem | Out-Null
+    $zip = [System.IO.Compression.ZipFile]::Open($builtApk.FullName, 'Update')
+    try {
+        $entryName = 'lib/armeabi-v7a/libgojni.so'
+        $old = $zip.GetEntry($entryName)
+        if ($old) { $old.Delete() }
+        $entry = $zip.CreateEntry($entryName, [System.IO.Compression.CompressionLevel]::Optimal)
+        $dst = $entry.Open()
+        $src = [System.IO.File]::OpenRead($armSo)
+        try { $src.CopyTo($dst) } finally { $src.Dispose(); $dst.Dispose() }
+    }
+    finally { $zip.Dispose() }
+}
+
 $releaseDir = Join-Path $root 'release'
 New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
 if (-not $OutputPath) {
-    $OutputPath = Join-Path $releaseDir "VieNLink-$Version-android.apk"
+    $suffix = if ($TvBuild) { '-tv' } elseif ($TestBuild) { '-test' } else { '-phone' }
+    if ($Abi -eq 'armeabi-v7a') { $suffix += '-arm32' }
+    $OutputPath = Join-Path $releaseDir "VieNLink-$Version$suffix.apk"
 }
 
 $aligned = Join-Path $env:TEMP "vienlink-android-$Version-aligned.apk"

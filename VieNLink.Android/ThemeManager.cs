@@ -151,10 +151,14 @@ public abstract class BaseActivity : Activity
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
-        // Приложение — вертикальное. Фиксируем портрет, чтобы окно не крутилось
-        // само по датчику и не зависело от системного автоповорота. Системную
-        // настройку приложение не меняет.
-        RequestedOrientation = ScreenOrientation.Portrait;
+        // Телефон — портрет; планшет — любая ориентация; телевизор — альбомная.
+        // Системную настройку автоповорота приложение не меняет.
+        DeviceProfile.Initialize(this);
+        RequestedOrientation = DeviceProfile.IsTelevision
+            ? ScreenOrientation.Landscape
+            : DeviceProfile.IsTablet
+                ? ScreenOrientation.FullSensor
+                : ScreenOrientation.Portrait;
         ThemeManager.ApplyTheme(this);
         base.OnCreate(savedInstanceState);
         P = ThemeManager.Palette;

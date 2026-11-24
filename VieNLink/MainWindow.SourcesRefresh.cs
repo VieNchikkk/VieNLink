@@ -80,6 +80,14 @@ public partial class MainWindow
             }
         }
 
+        // «Бесплодные» источники (давние, ноль рабочих) отключаем — карантин, не удаление.
+        foreach (var source in collected.SourcesToDisable)
+        {
+            source.Enabled = false;
+            _sourceRows.FirstOrDefault(r => ReferenceEquals(r.Source, source))?.Refresh();
+            AppendLog($"Источник отключён как бесплодный: {source.Name}");
+        }
+
         var nodes = collected.Nodes;
         MergeMtProto(collected.MtProto);
 
@@ -134,7 +142,7 @@ public partial class MainWindow
         });
 
         var trimmedNote = nodes.Count > kept.Count ? $" (лимит {_settings.MaxTotalNodes}, отброшено {nodes.Count - kept.Count})" : string.Empty;
-        var nodeSourceCount = _sources.Count(s => s.Enabled && !SourceKinds.IsProxy(s));
+        var nodeSourceCount = _sources.Count(s => s.Enabled && SourceKinds.IsServerSource(s));
         var summary = $"Загружено {kept.Count} серверов и {_mtprotoRows.Count} MTProto из {nodeSourceCount} источников серверов{trimmedNote}";
         StatusDetail.Text = summary;
         AppendLog(summary);

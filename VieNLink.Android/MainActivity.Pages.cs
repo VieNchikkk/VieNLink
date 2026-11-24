@@ -18,28 +18,44 @@ public sealed partial class MainActivity
 
         page.AddView(Ui.Section(this, "Быстрое подключение", P));
 
+        // На телевизоре оставляем только YouTube и «Универсальный»: Telegram и Discord
+        // на ТВ не нужны, а каждый лишний сервис — это отдельные проверки и счётчики.
+        var tv = DeviceProfile.IsTelevision;
+
         var first = Ui.Row(this);
         AddWeighted(first, Ui.ServiceButton(this, P, "YouTube", Resource.Drawable.ic_service_youtube_brand,
             P.YouTube, P.YouTubeSurface, () => StartForService(NodeStore.QuickService.YouTube),
-            tintIcon: false), 8);
-        AddWeighted(first, Ui.ServiceButton(this, P, "Discord", Resource.Drawable.ic_service_discord,
-            P.Discord, P.DiscordSurface, () => StartForService(NodeStore.QuickService.Discord)), 0);
+            tintIcon: false), tv ? 0 : 8);
+        if (!tv)
+        {
+            AddWeighted(first, Ui.ServiceButton(this, P, "Discord", Resource.Drawable.ic_service_discord,
+                P.Discord, P.DiscordSurface, () => StartForService(NodeStore.QuickService.Discord)), 0);
+        }
         page.AddView(first);
 
         var second = Ui.Row(this);
         var secondLayout = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
         secondLayout.TopMargin = Ui.Dp(this, 8);
-        var universal = Ui.ServiceButton(this, P, "Универсальный", Resource.Drawable.ic_service_universal,
+        // На ТВ вторая кнопка — «Zona»: приложению нужен обычный доступ в интернет,
+        // поэтому сервис тот же — универсальный, меняется только подпись и иконка.
+        var universal = Ui.ServiceButton(this, P, tv ? "Zona" : "Универсальный",
+            tv ? Resource.Drawable.ic_service_zona : Resource.Drawable.ic_service_universal,
             P.Universal, P.UniversalSurface, () => StartForService(NodeStore.QuickService.Universal));
-        AddWeighted(second, universal, 8);
-        AddWeighted(second, Ui.ServiceButton(this, P, "Telegram", Resource.Drawable.ic_service_telegram,
-            P.Telegram, P.TelegramSurface, () => StartForService(NodeStore.QuickService.Telegram)), 0);
+        AddWeighted(second, universal, tv ? 0 : 8);
+        if (!tv)
+        {
+            AddWeighted(second, Ui.ServiceButton(this, P, "Telegram", Resource.Drawable.ic_service_telegram,
+                P.Telegram, P.TelegramSurface, () => StartForService(NodeStore.QuickService.Telegram)), 0);
+        }
         page.AddView(second, secondLayout);
 
-        var mtproto = Ui.Pill(this, P, "Telegram MTProtoProxies", UiButtonKind.Secondary,
-            () => Open(typeof(TelegramActivity)), Resource.Drawable.ic_mtproto, tone: P.Telegram);
-        Ui.Add(page, mtproto, 8);
+        if (!tv)
+        {
+            var mtproto = Ui.Pill(this, P, "Telegram MTProtoProxies", UiButtonKind.Secondary,
+                () => Open(typeof(TelegramActivity)), Resource.Drawable.ic_mtproto, tone: P.Telegram);
+            Ui.Add(page, mtproto, 8);
+        }
 
         var explanation = Ui.Banner(P, this, P.Accent, "Кратко",
             "Нажмите кнопку сервиса — VieNLink сам выберет проверенный сервер с доступом к нему " +
@@ -190,9 +206,12 @@ public sealed partial class MainActivity
         AddTile(page, Resource.Drawable.ic_tunnel, "Туннелирование",
             "Маршрутизация по доменам и приложениям",
             () => Open(typeof(TunnelActivity)), P.Discord);
-        AddTile(page, Resource.Drawable.ic_service_telegram, "Telegram MTProtoProxies",
-            $"{MtProtoStore.WorkingCount} рабочих прокси · каналы через RSS",
-            () => Open(typeof(TelegramActivity)), P.Telegram);
+        if (!DeviceProfile.IsTelevision)
+        {
+            AddTile(page, Resource.Drawable.ic_service_telegram, "Telegram MTProtoProxies",
+                $"{MtProtoStore.WorkingCount} рабочих прокси · каналы через RSS",
+                () => Open(typeof(TelegramActivity)), P.Telegram);
+        }
         AddTile(page, Resource.Drawable.ic_delete, "Отсев — Перепроверка",
             "Рабочие серверы, переставшие работать",
             () => Open(typeof(RejectedActivity)), P.Warning);
@@ -248,7 +267,8 @@ public sealed partial class MainActivity
         {
             var result = await SourceDiscoveryService.DiscoverAsync(
                 NodeStore.SnapshotSources(), null, CancellationToken.None,
-                NodeStore.Settings.SourceFreshnessHours);
+                NodeStore.Settings.SourceFreshnessHours,
+                includeWeb: !DeviceProfile.IsTelevision);
             var added = await Task.Run(() => NodeStore.AddDiscovered(result));
             var mtproto = MtProtoStore.AddDiscovered(result.MtProto);
             var message = $"Новых источников {added}, серверов {result.Nodes.Count}, MTProto {mtproto}" +

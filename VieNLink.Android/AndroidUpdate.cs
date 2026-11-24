@@ -100,6 +100,7 @@ internal static class AndroidUpdate
                     string? apkName = null;
                     string? shaUrl = null;
                     long apkSize = 0;
+                    var checksums = new List<(string Name, string Url)>();
                     if (item.TryGetProperty("assets", out var assets) && assets.ValueKind == JsonValueKind.Array)
                     {
                         foreach (var asset in assets.EnumerateArray())
@@ -117,6 +118,16 @@ internal static class AndroidUpdate
 
                             if (name.EndsWith(".apk", StringComparison.OrdinalIgnoreCase))
                             {
+                                // В релизе лежат APK для телефона и для телевизора. Телефону
+                                // предлагаем только обычный APK, телевизору — только TV-сборку;
+                                // магазинные сборки (-store) не обновляются сами.
+                                var isTvAsset = name.Contains("-tv", StringComparison.OrdinalIgnoreCase);
+                                var isStoreAsset = name.Contains("-store", StringComparison.OrdinalIgnoreCase);
+                                if (isStoreAsset || isTvAsset != BuildInfo.IsTelevisionBuild)
+                                {
+                                    continue;
+                                }
+
                                 apkUrl = download;
                                 apkName = Path.GetFileName(name);
                                 if (asset.TryGetProperty("size", out var sizeElement) &&
@@ -127,7 +138,25 @@ internal static class AndroidUpdate
                             }
                             else if (name.EndsWith(".apk.sha256", StringComparison.OrdinalIgnoreCase))
                             {
-                                shaUrl = download;
+                                // В релизе несколько APK (телефон и телевизор), и у каждого
+                                // своя контрольная сумма. Запоминаем все и берём ту, что
+                                // относится именно к выбранному APK, — иначе телефон
+                                // скачивал свой APK, а сверял его с хешем ТВ-сборки
+                                // («Контрольная сумма APK не совпала», 1.3.45).
+                                checksums.Add((Path.GetFileName(name), download));
+                            }
+                        }
+                    }
+
+                    if (apkName is not null)
+                    {
+                        var checksumName = apkName + ".sha256";
+                        foreach (var checksum in checksums)
+                        {
+                            if (checksum.Name.Equals(checksumName, StringComparison.OrdinalIgnoreCase))
+                            {
+                                shaUrl = checksum.Url;
+                                break;
                             }
                         }
                     }
@@ -203,7 +232,8 @@ internal static class AndroidUpdate
 
     /// <summary>
     /// Разбирает atom-ленту релизов. Тег берётся из ссылки, версия — из тега;
-    /// адрес APK собирается по правилу сборки: <c>VieNLink-&lt;версия&gt;-android.apk</c>.
+    /// адрес APK собирается по правилу сборки: <c>VieNLink-&lt;версия&gt;-phone.apk</c>
+    /// для телефона и <c>VieNLink-&lt;версия&gt;-tv-arm32.apk</c> для телевизора.
     /// </summary>
     private static Release? ParseAtom(string xml)
     {
@@ -233,6 +263,13 @@ internal static class AndroidUpdate
                 continue;
             }
 
+            // Телефон и телевизор лежат в разных релизах одной версии, поэтому
+            // тег отбирается по своей платформе.
+            if (tag.Contains("-tv", StringComparison.OrdinalIgnoreCase) != BuildInfo.IsTelevisionBuild)
+            {
+                continue;
+            }
+
             var version = ParseVersion(tag);
             var versionText = VersionText(tag);
             if (version is null || versionText is null)
@@ -245,7 +282,9 @@ internal static class AndroidUpdate
                 continue;
             }
 
-            var apkName = $"VieNLink-{versionText}-android.apk";
+            var apkName = BuildInfo.IsTelevisionBuild
+                ? $"VieNLink-{versionText}-tv-arm32.apk"
+                : $"VieNLink-{versionText}-phone.apk";
             var apkUrl = $"{ReleasesPage}/download/{tag}/{apkName}";
             var updated = Regex.Match(block, "<updated>([^<]+)</updated>");
             var published = updated.Success &&

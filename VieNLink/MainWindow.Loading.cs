@@ -337,6 +337,18 @@ public partial class MainWindow
         // Рабочие лежат отдельным файлом: он маленький и всегда свежий.
         var nodes = NodeCacheWriter.Load(freshAfter, out var droppedNodes, out var duplicateNodes, out _);
 
+        // Первый запуск без кэша: подгружаем встроенный стартовый набор серверов,
+        // чтобы не ждать первый сбор и проверку. Файл кладёт установщик рядом с exe.
+        if (nodes.Count == 0)
+        {
+            var seed = NodeSourceService.LoadSeed(Path.Combine(AppContext.BaseDirectory, "seed.txt"));
+            if (seed.Count > 0)
+            {
+                nodes = seed;
+                AppLog.Write("seed", $"Встроенный набор: {seed.Count} серверов");
+            }
+        }
+
         // Кэш мог вырасти до десятков тысяч: жёстко ограничиваем список и оставляем
         // личные и проверенные серверы, а не первые попавшиеся.
         var (keptNodes, trimmedNodes) = NodeLimits.Trim(nodes, settings.MaxTotalNodes);
