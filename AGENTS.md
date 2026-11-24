@@ -44,6 +44,10 @@ CoreLog, TrayState, ProductFeatures, BypassProfiles, Layout); сервисы `Si
 `publish-android.ps1` (GitHub APK), `publish-store.ps1` (APK для RuStore + AAB для Play),
 `installer.iss`, `VieNLink.Android/Store/SideloadManifest.xml`, `tv-restore.ps1` (возврат
 почищенного ТВ Xiaomi).
+**Браузер (отдельное приложение):** `VieNLink.Browser/` — `BrowserWindow` (вкладки, панель VPN,
+поиск по странице, история, загрузки, стартовая страница с плитками), `BrowserSettings`,
+`BrowserHistory`, `BrowserDownloads`, `VpnClient` (канал к VPN), `VpnInstaller` (проверка и
+установка VPN), `BrowserVersion.props`, `publish-browser.ps1`, `browser-installer.iss`.
 
 **Документы:** `docs/plan-2026.md` (журнал работ и решений, архив), `docs/handoff.md` (состояние
 и следующий шаг), `docs/VERSIONING.md`, `docs/android-design.md`, `docs/privacy.md`,
@@ -167,6 +171,11 @@ CoreLog, TrayState, ProductFeatures, BypassProfiles, Layout); сервисы `Si
 ## Релизы
 - Перед сборкой закрыть `VieNLink.exe`.
 - Windows: `build\publish-installer.ps1` → портативный ZIP + `setup.exe` (подпись `CN=VieN`).
+- Браузер — **отдельное приложение** `VieNLink.Browser` со своей версией
+  (`build/BrowserVersion.props`) и своим установщиком: `build\publish-browser.ps1` →
+  `release\VieNLink-Browser-<версия>-setup.exe` + ZIP (`build\browser-installer.iss`).
+  Связь с VPN — локальный канал `VieNLink.Vpn` (`VpnClient` в браузере, `VpnPipeServer` в VPN).
+  Релизы браузера пока **не публикуются** (решение владельца), сборка только локально.
 - Android: `build\publish-android.ps1` (подписанный APK + `.apk.sha256`), магазинная сборка
   `build\publish-store.ps1` (`StoreBuild=true`: APK для RuStore и AAB для Play, без
   `REQUEST_INSTALL_PACKAGES` и самообновления). **Правило: магазинную сборку собирать при каждом
@@ -220,6 +229,7 @@ dotnet run --project VieNLink.SelfTest -- hiddenprobe 5 # скрытая про�
 dotnet run --project VieNLink.SelfTest -- videoprobe   # проба видео автоподбора (нужен админ)
 dotnet run --project VieNLink.SelfTest -- liveness 60 <url>
 dotnet run --project VieNLink.SelfTest -- mtprotocheck 40
+build\clean.ps1                                # убрать старые артефакты, bin/obj и временные файлы
 ```
 С 24.11.2026 Java-платформа libbox включена во **все** Android-сборки по умолчанию
 (обычная, тестовая, ТВ): на телефоне она не даёт зависаний MonoVM после фона.
@@ -240,6 +250,10 @@ $dotnet = "$env:LOCALAPPDATA\dotnet\dotnet.exe"
 - Только точечные правки, без переписывания архитектуры без просьбы. UI — в XAML (кроме трея).
 - Задачу считать сделанной только после прогона проверки (`dotnet build`, нужный режим `SelfTest`),
   а не после написания кода. Результат сборки сообщать.
+- **Не копить мусор.** После сборки/релиза в `release\` остаётся только текущая версия; старые
+  установщики, ZIP, APK, `.idsig` и распакованные папки удаляются. Для этого есть
+  `build\clean.ps1` (его же вызывают `publish-android.ps1`, `publish-installer.ps1`,
+  `publish-store.ps1` в конце). Промежуточные `bin/obj` и временные файлы сборки тоже не держим.
 - Архитектурные решения фиксировать в `docs/plan-2026.md` («Решения») с датой и причиной.
 - Перед передачей сессии обновлять `docs/handoff.md` (состояние, следующий шаг, грабли).
 - Секреты (ключи подписи, токены подписок) в репозиторий не попадают.

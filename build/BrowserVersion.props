@@ -1,0 +1,10 @@
+<Project>
+  <!--
+    Версия браузера VieNLink. Отдельная от VPN-приложения: браузер ставится и
+    обновляется независимо, поэтому у него свой номер и свой versionCode.
+  -->
+  <PropertyGroup>
+    <VieNLinkBrowserVersion>1.0.0</VieNLinkBrowserVersion>
+    <VieNLinkBrowserVersionCode>10000</VieNLinkBrowserVersionCode>
+  </PropertyGroup>
+</Project>

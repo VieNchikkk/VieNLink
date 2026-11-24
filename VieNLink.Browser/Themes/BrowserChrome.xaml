@@ -1,0 +1,169 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Тёмное стекло поверх обоев, как в Яндекс Браузере. -->
+    <LinearGradientBrush x:Key="ChromeBackdropBrush" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#F21C2523" Offset="0" />
+        <GradientStop Color="#F2212A2E" Offset="0.34" />
+        <GradientStop Color="#F2252E35" Offset="0.68" />
+        <GradientStop Color="#F2343D47" Offset="1" />
+    </LinearGradientBrush>
+
+    <LinearGradientBrush x:Key="ChromeToolbarBrush" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#F227302E" Offset="0" />
+        <GradientStop Color="#F22A3338" Offset="0.34" />
+        <GradientStop Color="#F22C363E" Offset="0.68" />
+        <GradientStop Color="#F238424D" Offset="1" />
+    </LinearGradientBrush>
+
+    <SolidColorBrush x:Key="ChromePillBrush" Color="#E8FFFFFF" />
+    <SolidColorBrush x:Key="ChromeTextBrush" Color="#FFF2F7F6" />
+    <SolidColorBrush x:Key="ChromeMutedBrush" Color="#B9D3DAD8" />
+    <SolidColorBrush x:Key="ChromeHoverBrush" Color="#2EFFFFFF" />
+    <SolidColorBrush x:Key="ChromeTabActiveBrush" Color="#26FFFFFF" />
+
+    <!-- Кнопки панели: круглые, светлые иконки, мягкая подсветка. -->
+    <Style x:Key="BrowserToolButton" TargetType="Button">
+        <Setter Property="Width" Value="28" />
+        <Setter Property="Height" Value="28" />
+        <Setter Property="Margin" Value="2,0" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Foreground" Value="{DynamicResource ChromeTextBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Chrome" Background="{TemplateBinding Background}" CornerRadius="14">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource ChromeHoverBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Chrome" Property="Opacity" Value="0.65" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Chrome" Property="Opacity" Value="0.32" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Адресная строка: большая полупрозрачная «таблетка». -->
+    <Style x:Key="BrowserAddressBox" TargetType="TextBox">
+        <Setter Property="Height" Value="32" />
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="Foreground" Value="{DynamicResource ChromeTextBrush}" />
+        <Setter Property="Background" Value="{DynamicResource ChromePillBrush}" />
+        <Setter Property="BorderBrush" Value="#33FFFFFF" />
+        <Setter Property="BorderThickness" Value="1" />
+        <Setter Property="Padding" Value="16,0" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="CaretBrush" Value="#FF1B2124" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TextBox">
+                    <Border x:Name="Chrome" Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="16">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="16" ShadowDepth="0" Opacity="0.55" Color="#86C2A2" />
+                        </Border.Effect>
+                        <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"
+                                      VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            <Setter TargetName="Chrome" Property="Effect">
+                                <Setter.Value>
+                                    <DropShadowEffect BlurRadius="22" ShadowDepth="0" Opacity="0.9" Color="#86C2A2" />
+                                </Setter.Value>
+                            </Setter>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Кнопки окна: плоские, светлые, крайняя — красная при наведении. -->
+    <Style x:Key="WindowChromeButton" TargetType="Button">
+        <Setter Property="Width" Value="46" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Foreground" Value="{DynamicResource ChromeTextBrush}" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Chrome" Background="{TemplateBinding Background}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource ChromeHoverBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Chrome" Property="Opacity" Value="0.65" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="WindowCloseButton" TargetType="Button" BasedOn="{StaticResource WindowChromeButton}">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Chrome" Background="{TemplateBinding Background}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="#FFE81123" />
+                            <Setter Property="Foreground" Value="White" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Chrome" Property="Opacity" Value="0.75" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+    <!-- Строка меню ☰: тёмная панель с иконкой, текстом и подсказкой горячей клавиши. -->
+    <Style x:Key="MenuRowButton" TargetType="Button">
+        <Setter Property="Height" Value="38" />
+        <Setter Property="Padding" Value="12,0" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Chrome" Background="{TemplateBinding Background}" CornerRadius="8"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="#16FFFFFF" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Chrome" Property="Opacity" Value="0.7" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+</ResourceDictionary>

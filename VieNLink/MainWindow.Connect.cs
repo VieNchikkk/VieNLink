@@ -874,7 +874,10 @@ public partial class MainWindow
     /// Сначала серверы выбранного сервиса (по возрастанию пинга), затем остальные —
     /// поэтому при «Универсальном» переключение не уходит на сервер без универсального доступа.
     /// </summary>
-    private async void OnNextNodeClick(object sender, RoutedEventArgs e)
+    private async void OnNextNodeClick(object sender, RoutedEventArgs e) => await SwitchToNextNodeAsync();
+
+    /// <summary>Переключение на следующий сервер: кнопка шапки и панель VPN в браузере.</summary>
+    private async Task SwitchToNextNodeAsync()
     {
         if (!_manager.IsConnected || _closing)
         {
@@ -1046,6 +1049,7 @@ public partial class MainWindow
 
     private void UpdateConnectionUi()
     {
+        BrowserVpnStateChanged?.Invoke();
         var connected = _manager.IsConnected;
         var held = _manager.IsKillSwitchHeld;
         var delay = _manager.CurrentNode?.DelayMs;

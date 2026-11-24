@@ -1,0 +1,114 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Светлая тема: тёплая бумага дневника, белые карточки и лесной зелёный акцент. -->
+    <SolidColorBrush x:Key="AppBackgroundBrush" Color="#FFF2F4F0" />
+    <SolidColorBrush x:Key="PanelBrush" Color="#FFFFFFFF" />
+    <LinearGradientBrush x:Key="HeaderBackgroundBrush" StartPoint="0,0" EndPoint="1,0">
+        <GradientStop Color="#FFFFFFFF" Offset="0" />
+        <GradientStop Color="#FFF4F8F4" Offset="0.62" />
+        <GradientStop Color="#FFEDF6EF" Offset="1" />
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="CardBrush" Color="#FFF8FAF7" />
+    <LinearGradientBrush x:Key="HeaderInfoBackgroundBrush" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FFFFFFFF" Offset="0" />
+        <GradientStop Color="#FFF1F8F3" Offset="0.55" />
+        <GradientStop Color="#FFE7F4EC" Offset="1" />
+    </LinearGradientBrush>
+    <!-- Фон статуса: градиент привязан к пикселям, поэтому не «прыгает» при смене ширины блока. -->
+    <LinearGradientBrush x:Key="HeaderStatusBackgroundBrush" StartPoint="0,0" EndPoint="640,0"
+                         MappingMode="Absolute">
+        <GradientStop Color="#FFFFFFFF" Offset="0" />
+        <GradientStop Color="#FFF1F8F3" Offset="0.55" />
+        <GradientStop Color="#FFE7F4EC" Offset="1" />
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="HeaderInfoBorderBrush" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF9CCBB0" Offset="0" />
+        <GradientStop Color="#FFDCE3DB" Offset="1" />
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="SurfaceBrush" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="ChipBrush" Color="#FFEAF2EB" />
+    <SolidColorBrush x:Key="InnerBrush" Color="#FFF2F5F1" />
+    <SolidColorBrush x:Key="SecondaryButtonBrush" Color="#FFEDF1EC" />
+    <LinearGradientBrush x:Key="ButtonSurfaceBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#FFFFFFFF" Offset="0" />
+        <GradientStop Color="#FFE9EFEA" Offset="1" />
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="PrimarySurfaceBrush" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#FF3D9A68" Offset="0" />
+        <GradientStop Color="#FF2A7A50" Offset="1" />
+    </LinearGradientBrush>
+    <SolidColorBrush x:Key="PrimaryHoverBrush" Color="#FF4AAE79" />
+    <SolidColorBrush x:Key="PrimaryPressedBrush" Color="#FF226845" />
+    <SolidColorBrush x:Key="SelectionSurfaceBrush" Color="#FFE3EFFA" />
+    <SolidColorBrush x:Key="SelectionBorderBrush" Color="#FF9CBEDC" />
+    <SolidColorBrush x:Key="SelectionTextBrush" Color="#FF1F5F96" />
+    <SolidColorBrush x:Key="StrategyChipSurfaceBrush" Color="#FFF1F6FB" />
+    <SolidColorBrush x:Key="StrategyChipBorderBrush" Color="#FFC9D8E6" />
+
+    <SolidColorBrush x:Key="BorderBrush" Color="#FFDCE3DB" />
+    <SolidColorBrush x:Key="BorderSoftBrush" Color="#FFD6DED7" />
+    <SolidColorBrush x:Key="BorderStrongBrush" Color="#FFC2CCC4" />
+    <SolidColorBrush x:Key="BorderHoverBrush" Color="#FF9DAAA1" />
+
+    <SolidColorBrush x:Key="TextBrush" Color="#FF1E2621" />
+    <SolidColorBrush x:Key="TextStrongBrush" Color="#FF111814" />
+    <SolidColorBrush x:Key="TextSoftBrush" Color="#FF2F3B34" />
+    <SolidColorBrush x:Key="MutedBrush" Color="#FF68746D" />
+    <SolidColorBrush x:Key="MutedStrongBrush" Color="#FF45514A" />
+
+    <SolidColorBrush x:Key="AccentBrush" Color="#FF2E7D52" />
+    <SolidColorBrush x:Key="AccentContrastBrush" Color="#FFFFFFFF" />
+
+    <!-- Брендовые цвета сервисов: тонированные кнопки и значки. -->
+    <SolidColorBrush x:Key="YouTubeBrush" Color="#FFCC0000" />
+    <SolidColorBrush x:Key="YouTubeSurfaceBrush" Color="#1AFF0000" />
+    <SolidColorBrush x:Key="YouTubeBorderBrush" Color="#66FF0000" />
+
+    <SolidColorBrush x:Key="DiscordBrush" Color="#FF4752C4" />
+    <SolidColorBrush x:Key="DiscordSurfaceBrush" Color="#1A5865F2" />
+    <SolidColorBrush x:Key="DiscordBorderBrush" Color="#665865F2" />
+
+    <SolidColorBrush x:Key="TelegramBrush" Color="#FF1F8AC0" />
+    <SolidColorBrush x:Key="TelegramSurfaceBrush" Color="#1A2AABEE" />
+    <SolidColorBrush x:Key="TelegramSelectedSurfaceBrush" Color="#332AABEE" />
+    <SolidColorBrush x:Key="TelegramBorderBrush" Color="#662AABEE" />
+
+    <SolidColorBrush x:Key="UniversalBrush" Color="#FF2E7D52" />
+    <SolidColorBrush x:Key="UniversalSurfaceBrush" Color="#1A2E7D52" />
+    <SolidColorBrush x:Key="UniversalBorderBrush" Color="#6652B88D" />
+
+    <!-- Подсветка важных действий «второго плана»: тонированная плашка в цвет акцента. -->
+    <SolidColorBrush x:Key="AccentSurfaceBrush" Color="#FFE7F4EC" />
+    <SolidColorBrush x:Key="AccentBorderBrush" Color="#FF9CCBB0" />
+    <SolidColorBrush x:Key="PositiveTextBrush" Color="#FF2E7D52" />
+
+    <SolidColorBrush x:Key="DangerBrush" Color="#FFB7303F" />
+    <SolidColorBrush x:Key="DangerSurfaceBrush" Color="#FFFCEAEC" />
+    <SolidColorBrush x:Key="DangerPressedBrush" Color="#FFF6D7DB" />
+
+    <SolidColorBrush x:Key="PlaceholderBrush" Color="#FF939D97" />
+    <SolidColorBrush x:Key="PlaceholderIconBrush" Color="#FFB6C0B9" />
+
+    <SolidColorBrush x:Key="WarningBrush" Color="#FFA26A00" />
+    <SolidColorBrush x:Key="WarningSurfaceBrush" Color="#33E0A100" />
+
+    <SolidColorBrush x:Key="TableBackgroundBrush" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="TableRowBrush" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="TableAlternateRowBrush" Color="#FFF7F9F6" />
+    <SolidColorBrush x:Key="MaskedRowBrush" Color="#FFFFF3B0" />
+    <SolidColorBrush x:Key="WorkingRowBrush" Color="#FFE4F5E8" />
+    <SolidColorBrush x:Key="UntestedRowBrush" Color="#FFFCE4E4" />
+    <SolidColorBrush x:Key="TableGridLineBrush" Color="#FFE5EAE4" />
+    <SolidColorBrush x:Key="TableHoverBrush" Color="#FFEDF3ED" />
+    <SolidColorBrush x:Key="TableSelectionBrush" Color="#FFDCEBE0" />
+    <SolidColorBrush x:Key="TableHeaderHoverBrush" Color="#FFF0F5F0" />
+
+    <SolidColorBrush x:Key="TabHoverBrush" Color="#FFEFF4EF" />
+    <SolidColorBrush x:Key="TabSelectedBrush" Color="#FFE6EFE7" />
+    <SolidColorBrush x:Key="TabSelectedStrongBrush" Color="#FFDCE9DF" />
+
+    <SolidColorBrush x:Key="ToggleTrackBrush" Color="#FFC7D0C9" />
+    <SolidColorBrush x:Key="ScrollThumbBrush" Color="#FFC3CCC5" />
+    <SolidColorBrush x:Key="ScrollThumbHoverBrush" Color="#FFA9B5AC" />
+    <SolidColorBrush x:Key="ScrollThumbDragBrush" Color="#FF93A098" />
+</ResourceDictionary>

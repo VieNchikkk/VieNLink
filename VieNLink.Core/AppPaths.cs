@@ -30,6 +30,12 @@ internal static class AppPaths
 
     public static string SettingsPath { get; } = Path.Combine(DataDirectory, "settings.json");
 
+    /// <summary>Настройки встроенного браузера: поиск, домашняя страница, закладки, вкладки.</summary>
+    public static string BrowserSettingsPath { get; } = Path.Combine(DataDirectory, "browser.json");
+
+    /// <summary>История посещений встроенного браузера.</summary>
+    public static string BrowserHistoryPath { get; } = Path.Combine(DataDirectory, "browser-history.json");
+
     /// <summary>Рабочие серверы, переставшие работать: храним отдельно для ручной перепроверки.</summary>
     public static string RejectedNodesPath { get; } = Path.Combine(DataDirectory, "nodes-rejected.json");
     public static string LogsDirectory { get; } = Path.Combine(DataDirectory, "logs");

@@ -1,6 +1,7 @@
 <Solution>
   <Project Path="VieNLink.Core/VieNLink.Core.csproj" />
   <Project Path="VieNLink/VieNLink.csproj" />
+  <Project Path="VieNLink.Browser/VieNLink.Browser.csproj" />
   <Project Path="VieNLink.SelfTest/VieNLink.SelfTest.csproj" />
   <Project Path="VieNLink.Android/VieNLink.Android.csproj" />
 </Solution>

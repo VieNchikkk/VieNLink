@@ -239,3 +239,6 @@ Write-Host 'Готово:' -ForegroundColor Green
 Write-Host "  APK:    $OutputPath ($sizeMb МБ)"
 Write-Host "  SHA256: $shaFile"
 Write-Host "  $hash"
+
+# После сборки убираем артефакты прошлых версий: не копим мусор в release\.
+& (Join-Path $PSScriptRoot 'clean.ps1') -Keep $Version

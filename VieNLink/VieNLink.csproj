@@ -50,4 +50,8 @@
     <ProjectReference Include="..\VieNLink.Core\VieNLink.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4370.26" />
+  </ItemGroup>
+
 </Project>

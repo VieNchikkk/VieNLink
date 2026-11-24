@@ -120,3 +120,6 @@ Write-Host ''
 Write-Host 'Готово. Два варианта поставки:' -ForegroundColor Green
 Write-Host "  1) Портативный: $outDir (ZIP: $zipPath, $zipSize МБ)"
 Write-Host "  2) Установщик:  $setupPath ($setupSize МБ)"
+
+# После сборки убираем артефакты прошлых версий: не копим мусор в release\.
+& (Join-Path $PSScriptRoot 'clean.ps1') -Keep $Version

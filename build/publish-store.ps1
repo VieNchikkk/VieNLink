@@ -169,3 +169,6 @@ foreach ($file in @($apkPath, $aabPath)) {
     Write-Host "  $file ($sizeMb МБ)" -ForegroundColor Green
     Write-Host "  SHA256: $hash"
 }
+
+# После сборки убираем артефакты прошлых версий: не копим мусор в release\.
+& (Join-Path $PSScriptRoot 'clean.ps1') -Keep $Version

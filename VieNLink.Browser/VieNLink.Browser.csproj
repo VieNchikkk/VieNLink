@@ -1,0 +1,43 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Своя версия: браузер обновляется независимо от VPN-приложения. -->
+  <Import Project="..\build\BrowserVersion.props" />
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.17763.0</SupportedOSPlatformVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+
+    <Version>$(VieNLinkBrowserVersion)</Version>
+    <AssemblyVersion>$(VieNLinkBrowserVersion).0</AssemblyVersion>
+    <FileVersion>$(VieNLinkBrowserVersion).0</FileVersion>
+    <InformationalVersion>$(VieNLinkBrowserVersion)</InformationalVersion>
+    <AssemblyName>VieNLink.Browser</AssemblyName>
+    <RootNamespace>VieNLink</RootNamespace>
+    <Product>VieNLink Браузер</Product>
+    <AssemblyTitle>VieNLink Браузер</AssemblyTitle>
+    <Description>VieNLink Браузер — встроенный браузер на WebView2 с подключением к VPN VieNLink.</Description>
+    <Company>VieN</Company>
+    <Authors>VieN</Authors>
+    <Copyright>© 2026 VieN</Copyright>
+    <NeutralLanguage>ru-RU</NeutralLanguage>
+    <ApplicationIcon>Assets\browser-icon.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\browser-icon.ico" />
+    <Resource Include="Assets\browser-icon.png" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4370.26" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\VieNLink.Core\VieNLink.Core.csproj" />
+  </ItemGroup>
+
+</Project>

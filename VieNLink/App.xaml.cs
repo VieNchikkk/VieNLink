@@ -90,6 +90,15 @@ public partial class App : Application
 
         AppLog.Write("app", "Запуск " + AppInfo.DisplayName);
         base.OnStartup(e);
+
+        // Локальный канал для отдельного приложения «VieNLink Браузер»: состояние и команды VPN.
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (MainWindow is MainWindow main)
+            {
+                VpnPipeServer.Start(main);
+            }
+        }, DispatcherPriority.ApplicationIdle);
     }
 
     protected override void OnExit(ExitEventArgs e)

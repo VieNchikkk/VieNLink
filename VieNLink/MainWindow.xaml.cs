@@ -176,15 +176,16 @@ public partial class MainWindow : Window
         AppendLog(AppInfo.DisplayName + " запущен. Обновите списки, проверьте серверы и подключитесь.");
         Loaded += async (_, _) =>
         {
-            await _initialLoad;
-
             var arguments = Environment.GetCommandLineArgs();
 
             // Автозапуск из ключа Run: стартуем в трее, не выкидывая окно поверх работы.
+            // Прячем до загрузки кэша, иначе окно успевает мигнуть.
             if (arguments.Any(arg => arg.Equals("--minimized", StringComparison.OrdinalIgnoreCase)))
             {
                 Hide();
             }
+
+            await _initialLoad;
 
             // Запуск после повышения прав из виджета: показываем только виджет,
             // главное окно остаётся в трее.
@@ -589,6 +590,60 @@ public partial class MainWindow : Window
         {
             EndOperation();
             UpdateConnectionUi();
+        }
+    }
+
+    /// <summary>
+    /// Браузер — отдельная установка (`VieNLink.Browser.exe`): запускаем его как отдельный процесс.
+    /// </summary>
+    private void OnOpenBrowserClick(object sender, RoutedEventArgs e) => LaunchBrowser();
+
+    /// <summary>Ищет и запускает VieNLink.Browser.exe (рядом с приложением или в своей установке).</summary>
+    private static void LaunchBrowser()
+    {
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, "VieNLink.Browser.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Programs", "VieNLink Browser", "VieNLink.Browser.exe"),
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                "VieNLink Browser", "VieNLink.Browser.exe"),
+        };
+
+        foreach (var candidate in candidates)
+        {
+            if (!File.Exists(candidate))
+            {
+                continue;
+            }
+
+            try
+            {
+                Process.Start(new ProcessStartInfo(candidate) { UseShellExecute = true });
+                return;
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write("browser", "Не удалось запустить браузер", exception);
+            }
+        }
+
+        MessageBox.Show(
+            "Браузер VieNLink не найден. Он ставится отдельно (VieNLink Браузер) и обновляется " +
+            "независимо от VPN-приложения.",
+            "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
+    }
+
+    /// <summary>Ctrl+Shift+B — быстрый доступ к браузеру из любого места окна.</summary>
+    private void OnMainWindowPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    {
+        if (e.Key == System.Windows.Input.Key.B &&
+            (System.Windows.Input.Keyboard.Modifiers &
+             (System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Shift)) ==
+            (System.Windows.Input.ModifierKeys.Control | System.Windows.Input.ModifierKeys.Shift))
+        {
+            LaunchBrowser();
+            e.Handled = true;
         }
     }
 
