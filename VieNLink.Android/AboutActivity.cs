@@ -40,7 +40,8 @@ public sealed class AboutActivity : BaseActivity
         logo.SetImageResource(Resource.Mipmap.ic_launcher);
         logo.Background = Ui.Rounded(P.Inner, 20, this, P.Border);
         logo.ClipToOutline = true;
-        var logoLayout = new LinearLayout.LayoutParams(Ui.Dp(this, 84), Ui.Dp(this, 84));
+        var logoLayout = new LinearLayout.LayoutParams(
+            Ui.Dp(this, Ui.IsCompactLayout ? 72 : 84), Ui.Dp(this, Ui.IsCompactLayout ? 72 : 84));
         logoLayout.Gravity = GravityFlags.CenterHorizontal;
         hero.AddView(logo, logoLayout);
 

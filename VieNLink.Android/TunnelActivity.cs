@@ -60,6 +60,7 @@ public sealed class TunnelActivity : BaseActivity
         {
             var radio = new RadioButton(this) { Text = label };
             radio.SetTextColor(P.TextSoft());
+            Ui.StyleSystemText(radio);
             group.AddView(radio);
             // Checked задаём через группу уже после AddView: иначе RadioGroup не запоминает
             // выбранный элемент и после первого тапа остаются отмеченными два.
@@ -93,7 +94,7 @@ public sealed class TunnelActivity : BaseActivity
         };
         _domains.SetTextColor(P.Text);
         _domains.SetHintTextColor(P.Muted);
-        _domains.TextSize = 13f;
+        Ui.StyleSystemText(_domains, 13f);
         _domains.SetSingleLine(false);
         _domains.SetMinLines(4);
         _domains.SetPadding(Ui.Dp(this, 12), Ui.Dp(this, 10), Ui.Dp(this, 12), Ui.Dp(this, 10));
@@ -136,6 +137,7 @@ public sealed class TunnelActivity : BaseActivity
         {
             var radio = new RadioButton(this) { Text = label };
             radio.SetTextColor(P.TextSoft());
+            Ui.StyleSystemText(radio);
             appGroup.AddView(radio);
             // Как и выше: выбор задаём через группу, иначе остаются два отмеченных.
             if (android.AppRouteMode == mode)

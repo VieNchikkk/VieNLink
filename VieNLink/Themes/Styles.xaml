@@ -450,7 +450,13 @@
                                 BorderBrush="{DynamicResource TableGridLineBrush}"
                                 BorderThickness="0,1,0,1"
                                 Background="{DynamicResource PanelBrush}">
-                            <TabPanel IsItemsHost="True" Margin="8,0" />
+                            <!-- Вкладки в горизонтальной прокрутке: в узком окне они
+                                 не обрезаются, а прокручиваются. -->
+                            <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                          VerticalScrollBarVisibility="Disabled"
+                                          Focusable="False">
+                                <TabPanel IsItemsHost="True" Margin="8,0" />
+                            </ScrollViewer>
                         </Border>
                         <ContentPresenter ContentSource="SelectedContent" Margin="0" />
                     </DockPanel>

@@ -1,6 +1,7 @@
 ﻿using Android.Content;
 using Android.Graphics;
 using Android.Graphics.Drawables;
+using Android.OS;
 using Android.Views;
 using Android.Widget;
 
@@ -28,13 +29,49 @@ internal static class Ui
     /// <summary>Масштаб шрифтов для 10-foot UI.</summary>
     public static float FontScale { get; set; } = 1f;
 
+    /// <summary>
+    /// Поправка на системный «Размер текста»: уважаем его, но не выше предела,
+    /// иначе подписи не помещаются в тесные ряды кнопок. 1.0 — системный масштаб
+    /// не мешает; меньше 1.0 — Android просит слишком крупный шрифт.
+    /// </summary>
+    public static float FontLimit { get; set; } = 1f;
+
+    /// <summary>Узкий экран (до 360dp): компактные отступы, короткие подписи.</summary>
+    public static bool IsCompactLayout { get; set; }
+
+    /// <summary>Низкий экран (ландшафт, окно в несколько окон).</summary>
+    public static bool IsShortLayout { get; set; }
+
     /// <summary>Телевизор: крупные элементы и подсветка фокуса для пульта.</summary>
     public static bool IsTelevision { get; set; }
 
     public static int Dp(Context context, double value) =>
         (int)Math.Round(value * LayoutScale * context.Resources!.DisplayMetrics!.Density);
 
-    public static float Sp(float value) => value * FontScale;
+    /// <summary>
+    /// Ширина в dp как доля экрана, но не больше <paramref name="maxDp"/>.
+    /// Нужна для фиксированных ширин (имя сервера и т. п.): на узком экране они
+    /// не должны выдавливать соседние элементы.
+    /// </summary>
+    public static int Share(Context context, double fraction, double maxDp) =>
+        Dp(context, Math.Min(maxDp, Math.Max(1, DeviceProfile.WidthDp) * fraction));
+
+    /// <summary>Высота в dp как доля экрана, но не больше предела (журнал, редакторы).</summary>
+    public static int ShareHeight(Context context, double fraction, double maxDp) =>
+        Dp(context, Math.Min(maxDp, Math.Max(1, DeviceProfile.HeightDp) * fraction));
+
+    public static float Sp(float value) => value * FontScale * FontLimit;
+
+    /// <summary>
+    /// Размер текста для виджетов, созданных не через <see cref="Text"/>
+    /// (CheckBox, RadioButton, Button, EditText): иначе системный масштаб
+    /// шрифта не ограничен и подписи вылезают из строк.
+    /// </summary>
+    public static void StyleSystemText(TextView view, float size = 14f)
+    {
+        view.TextSize = Sp(size);
+        view.SetIncludeFontPadding(false);
+    }
 
     public static int StatusBar(Context context) => Dimension(context, "status_bar_height");
 
@@ -50,6 +87,103 @@ internal static class Ui
         catch (Exception)
         {
             return 0;
+        }
+    }
+
+    /// <summary>
+    /// Отступы системных панелей по реальным WindowInsets (вырез экрана, жестовая
+    /// навигация, ландшафт). Если система инсеты не отдала (экран не edge-to-edge),
+    /// берётся высота строки состояния/панели навигации из ресурсов — как раньше.
+    /// Без этого на разных устройствах содержимое то уезжало под строку состояния,
+    /// то получало лишний отступ снизу.
+    /// </summary>
+    public static void ApplyInsets(
+        View view,
+        int leftDp,
+        int topDp,
+        int rightDp,
+        int bottomDp,
+        bool insetTop = true,
+        bool insetBottom = true,
+        bool insetSides = true)
+    {
+        var context = view.Context!;
+        var left = Dp(context, leftDp);
+        var top = Dp(context, topDp);
+        var right = Dp(context, rightDp);
+        var bottom = Dp(context, bottomDp);
+        var fallbackTop = insetTop ? StatusBar(context) : 0;
+        var fallbackBottom = insetBottom ? NavigationBar(context) : 0;
+        view.SetPadding(left, top + fallbackTop, right, bottom + fallbackBottom);
+        view.SetOnApplyWindowInsetsListener(new InsetsPaddingListener(
+            left, top, right, bottom, fallbackTop, fallbackBottom, insetTop, insetBottom, insetSides));
+        view.RequestApplyInsets();
+    }
+
+    private sealed class InsetsPaddingListener : Java.Lang.Object, View.IOnApplyWindowInsetsListener
+    {
+        private readonly int _left;
+        private readonly int _top;
+        private readonly int _right;
+        private readonly int _bottom;
+        private readonly int _fallbackTop;
+        private readonly int _fallbackBottom;
+        private readonly bool _insetTop;
+        private readonly bool _insetBottom;
+        private readonly bool _insetSides;
+
+        public InsetsPaddingListener(
+            int left,
+            int top,
+            int right,
+            int bottom,
+            int fallbackTop,
+            int fallbackBottom,
+            bool insetTop,
+            bool insetBottom,
+            bool insetSides)
+        {
+            _left = left;
+            _top = top;
+            _right = right;
+            _bottom = bottom;
+            _fallbackTop = fallbackTop;
+            _fallbackBottom = fallbackBottom;
+            _insetTop = insetTop;
+            _insetBottom = insetBottom;
+            _insetSides = insetSides;
+        }
+
+        public WindowInsets OnApplyWindowInsets(View view, WindowInsets insets)
+        {
+            // DisplayCutout появился в Android 9 (API 28); на 8.0 его нет.
+            var cutout = Build.VERSION.SdkInt >= BuildVersionCodes.P ? insets.DisplayCutout : null;
+            var insetLeft = _insetSides
+                ? Math.Max(insets.SystemWindowInsetLeft, cutout?.SafeInsetLeft ?? 0)
+                : 0;
+            var insetRight = _insetSides
+                ? Math.Max(insets.SystemWindowInsetRight, cutout?.SafeInsetRight ?? 0)
+                : 0;
+            var insetTop = _insetTop
+                ? Math.Max(insets.SystemWindowInsetTop, cutout?.SafeInsetTop ?? 0)
+                : 0;
+            var insetBottom = _insetBottom
+                ? Math.Max(insets.SystemWindowInsetBottom, cutout?.SafeInsetBottom ?? 0)
+                : 0;
+
+            // Инсеты не пришли — оставляем запасной отступ из ресурсов.
+            if (insetTop <= 0)
+            {
+                insetTop = _fallbackTop;
+            }
+
+            if (insetBottom <= 0)
+            {
+                insetBottom = _fallbackBottom;
+            }
+
+            view.SetPadding(_left + insetLeft, _top + insetTop, _right + insetRight, _bottom + insetBottom);
+            return insets;
         }
     }
 
@@ -126,6 +260,9 @@ internal static class Ui
             Text = text,
             TextSize = Sp(size),
         };
+        // Без дополнительного поля шрифта строки одинаковы на всех прошивках,
+        // и текст не «съезжает» вниз при смене системного шрифта.
+        view.SetIncludeFontPadding(false);
         view.SetTextColor(color);
         if (bold)
         {
@@ -135,8 +272,15 @@ internal static class Ui
         return view;
     }
 
-    public static TextView Title(Context context, string text, Palette palette) =>
-        Text(context, text, 22f, palette.TextStrong, bold: true);
+    public static TextView Title(Context context, string text, Palette palette)
+    {
+        // Длинное название экрана не переносится на вторую строку и не выдавливает
+        // значок справа: обрезается многоточием в конце.
+        var view = Text(context, text, 22f, palette.TextStrong, bold: true);
+        view.SetSingleLine(true);
+        view.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        return view;
+    }
 
     public static TextView Section(Context context, string text, Palette palette)
     {
@@ -397,7 +541,7 @@ internal static class Ui
         };
         input.SetTextColor(palette.Text);
         input.SetHintTextColor(palette.Muted);
-        input.TextSize = 13.5f;
+        StyleSystemText(input, 13.5f);
         input.SetSingleLine(true);
         input.SetPadding(Dp(context, 12), Dp(context, 10), Dp(context, 12), Dp(context, 10));
         input.Background = Rounded(palette.Inner, 12, context, palette.Border);

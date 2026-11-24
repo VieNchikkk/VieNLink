@@ -45,7 +45,7 @@ public sealed class TelegramActivity : BaseActivity
         var back = Ui.Pill(this, P, "Назад", UiButtonKind.Ghost, Finish);
         top.AddView(back, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
-        var title = Ui.Title(this, "Telegram MTProtoProxies", P);
+        var title = Ui.Title(this, Ui.IsCompactLayout ? "MTProto" : "Telegram MTProtoProxies", P);
         title.SetPadding(Ui.Dp(this, 10), 0, 0, 0);
         top.AddView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         top.AddView(Ui.Badge(this, P, "MTProto", P.Telegram));

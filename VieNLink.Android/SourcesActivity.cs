@@ -270,6 +270,7 @@ public sealed class SourcesActivity : BaseActivity
         var name = Ui.Input(this, P, "Название (необязательно)");
         var mine = new CheckBox(this) { Text = "Моя подписка" };
         mine.SetTextColor(P.TextSoft());
+        Ui.StyleSystemText(mine, 14f);
 
         var paste = Ui.Pill(this, P, "Вставить из буфера", UiButtonKind.Ghost, () =>
         {

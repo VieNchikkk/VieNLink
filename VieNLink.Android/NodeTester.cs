@@ -868,6 +868,7 @@ internal static class NodeTester
                     node.UniversalOk = node.UniversalOk == true || confirmed.Service == "Cloudflare";
                     node.YoutubeOk = node.YoutubeOk == true || confirmed.Service == "YouTube";
                     node.TelegramOk = node.TelegramOk == true || confirmed.Service == "Telegram";
+                    node.DiscordOk = node.DiscordOk == true || confirmed.Service == "Discord";
                     NodeHealth.RegisterSuccess(node);
                     lock (recovered)
                     {
@@ -907,9 +908,12 @@ internal static class NodeTester
     }
 
     /// <summary>
-    /// Один раунд подтверждения: открылся ли у сервера Cloudflare или YouTube.
-    /// Адреса идут по одному: нагруженный канал и параллельные рукопожатия дают ложные
-    /// провалы, поэтому здесь всё последовательно.
+    /// Один раунд подтверждения: открылся ли у сервера Cloudflare, YouTube, Telegram
+    /// или Discord. Адреса идут по одному: нагруженный канал и параллельные рукопожатия
+    /// дают ложные провалы, поэтому здесь всё последовательно. Список тот же, что и в
+    /// партии (и как на ПК): рабочий сервер, который после партии открыл только
+    /// Telegram/Discord, не должен считаться мёртвым из-за того, что Cloudflare/YouTube
+    /// в этот момент не ответили.
     /// </summary>
     private static async Task<(string Service, int? Delay)?> ConfirmOnceAsync(
         ClashApiClient api,
@@ -921,6 +925,9 @@ internal static class NodeTester
         {
             ("Cloudflare", "https://cp.cloudflare.com/generate_204"),
             ("YouTube", "https://www.youtube.com/"),
+            ("Telegram", "https://t.me/"),
+            ("Telegram", "https://web.telegram.org/"),
+            ("Discord", "https://discord.com/"),
         };
 
         foreach (var probe in urls)

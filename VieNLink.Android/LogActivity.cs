@@ -64,14 +64,16 @@ public sealed class LogActivity : BaseActivity
 
         _coreLog = new CheckBox(this) { Text = "Лог ядра (stderr)" };
         _coreLog.SetTextColor(P.TextSoft());
+        Ui.StyleSystemText(_coreLog);
         _coreLog.CheckedChange += async (_, _) => await LoadAsync();
         Ui.Add(page, _coreLog, 8);
 
         _view = new TextView(this)
         {
-            TextSize = 11f,
+            TextSize = Ui.Sp(11f),
             Typeface = Typeface.Monospace,
         };
+        _view.SetIncludeFontPadding(false);
         _view.SetTextColor(P.MutedStrong);
         _view.SetTextIsSelectable(true);
         _view.SetBackgroundColor(P.Inner);
@@ -81,8 +83,11 @@ public sealed class LogActivity : BaseActivity
         scroll.AddView(_view);
         _scroll = scroll;
 
+        // Высота журнала — доля экрана, а не фиксированные 460dp: в ландшафте
+        // и в окне небольшой высоты фиксированная высота выталкивала подсказку за экран.
         var scrollLayout = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MatchParent, Ui.Dp(this, 460));
+            ViewGroup.LayoutParams.MatchParent,
+            Math.Max(Ui.Dp(this, 140), Ui.ShareHeight(this, 0.42, 460)));
         scrollLayout.TopMargin = Ui.Dp(this, 10);
         page.AddView(scroll, scrollLayout);
 

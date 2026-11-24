@@ -16,6 +16,9 @@ public partial class MainWindow
 {
     // ---------- шапка, статистика, обновление ядра и интеграция с Windows ----------
 
+    /// <summary>Кэш значков сервисов в шапке: не пересобираем на каждый такт.</summary>
+    private string _headerServicesSignature = string.Empty;
+
     /// <summary>Отсчёт приходит из фонового потока: в UI переносим через диспетчер.</summary>
     private void OnTrafficUpdated(TrafficSample sample)
     {
@@ -127,6 +130,12 @@ public partial class MainWindow
 
         if (node is null)
         {
+            _headerServicesSignature = string.Empty;
+            if (HeaderServicesPanel is not null)
+            {
+                HeaderServicesPanel.Visibility = Visibility.Collapsed;
+            }
+
             if (!TryShowBypassHeader())
             {
                 // Hidden, а не Collapsed: слот в шапке сохраняется, кнопки не прыгают.
@@ -212,7 +221,86 @@ public partial class MainWindow
             $"Качество: {rating}",
             brushKey,
             string.Join(Environment.NewLine, details));
+        UpdateHeaderServices(node, connecting);
     }
+
+    /// <summary>
+    /// Значки сервисов у подключённого сервера — как в отсеве: пользователь сразу видит,
+    /// что открывает текущий сервер. В отличие от счётчиков в шапке, это про один сервер.
+    /// </summary>
+    private void UpdateHeaderServices(ProxyNode node, bool connecting)
+    {
+        if (HeaderServicesPanel is null)
+        {
+            return;
+        }
+
+        // Пока идёт подключение, результата проверки этого сервера ещё нет.
+        if (connecting)
+        {
+            HeaderServicesPanel.Children.Clear();
+            HeaderServicesPanel.Visibility = Visibility.Collapsed;
+            _headerServicesSignature = string.Empty;
+            return;
+        }
+
+        var signature = $"{node.Id}|{node.YoutubeOk == true}|{node.TelegramOk == true}|" +
+                        $"{node.DiscordOk == true}|{node.UniversalOk == true}";
+        if (signature == _headerServicesSignature)
+        {
+            if (HeaderServicesPanel.Children.Count > 0)
+            {
+                HeaderServicesPanel.Visibility = Visibility.Visible;
+            }
+
+            return;
+        }
+
+        _headerServicesSignature = signature;
+        HeaderServicesPanel.Children.Clear();
+        if (node.YoutubeOk == true)
+        {
+            HeaderServicesPanel.Children.Add(ServiceChip("YT", "YouTube"));
+        }
+
+        if (node.TelegramOk == true)
+        {
+            HeaderServicesPanel.Children.Add(ServiceChip("TG", "Telegram"));
+        }
+
+        if (node.DiscordOk == true)
+        {
+            HeaderServicesPanel.Children.Add(ServiceChip("DS", "Discord"));
+        }
+
+        if (node.UniversalOk == true)
+        {
+            HeaderServicesPanel.Children.Add(ServiceChip("Другие", "Universal"));
+        }
+
+        HeaderServicesPanel.Visibility = HeaderServicesPanel.Children.Count > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    /// <summary>Цветная плашка сервиса (подпись в цвете бренда) для шапки.</summary>
+    private FrameworkElement ServiceChip(string label, string service) => new Border
+    {
+        Background = (Brush)FindResource(service + "SurfaceBrush"),
+        BorderBrush = (Brush)FindResource(service + "BorderBrush"),
+        BorderThickness = new Thickness(1),
+        CornerRadius = new CornerRadius(6),
+        Padding = new Thickness(5, 0, 6, 1),
+        Margin = new Thickness(0, 0, 4, 3),
+        VerticalAlignment = VerticalAlignment.Center,
+        Child = new TextBlock
+        {
+            Text = label,
+            FontSize = 10.5,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = (Brush)FindResource(service + "Brush"),
+        },
+    };
 
     /// <summary>Обход блокировок без прокси-сервера: показываем режим, стратегию и статус.</summary>
     private bool TryShowBypassHeader()

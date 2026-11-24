@@ -207,7 +207,10 @@ public sealed class AppPickerActivity : BaseActivity
 
             var texts = Ui.Column(_activity);
             texts.AddView(Ui.Text(_activity, entry.Label, 14f, _palette.TextStrong, bold: true));
-            texts.AddView(Ui.Text(_activity, entry.Package, 10.5f, _palette.Muted));
+            var packageText = Ui.Text(_activity, entry.Package, 10.5f, _palette.Muted);
+            packageText.SetSingleLine(true);
+            packageText.Ellipsize = Android.Text.TextUtils.TruncateAt.Middle;
+            texts.AddView(packageText);
             row.AddView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
 
             var check = new CheckBox(_activity)

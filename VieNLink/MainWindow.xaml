@@ -4,7 +4,7 @@
         Title="VieNLink (бета) — свободные серверы"
         Icon="pack://application:,,,/Assets/VieNLink.ico"
         Height="680" Width="980"
-        MinHeight="620" MinWidth="953"
+        MinHeight="420" MinWidth="760"
         WindowStartupLocation="CenterScreen"
         ResizeMode="CanResize"
         Background="{DynamicResource AppBackgroundBrush}"
@@ -68,8 +68,9 @@
                                                Foreground="{DynamicResource WarningBrush}" />
                                 </Border>
                             </StackPanel>
-                            <!-- Компактные счётчики сервисов: значок и число, как на Android -->
-                            <StackPanel Orientation="Horizontal" Margin="0,2,0,0" VerticalAlignment="Center">
+                            <!-- Компактные счётчики сервисов: значок и число, как на Android.
+                                 WrapPanel: на узком окне счётчики переносятся, а не обрезаются. -->
+                            <WrapPanel Margin="0,2,0,0" VerticalAlignment="Center">
                                 <!-- Рабочие серверы: значок и число, как на Android -->
                                 <Border Background="{DynamicResource AccentSurfaceBrush}"
                                         BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1"
@@ -144,7 +145,7 @@
                                                    Foreground="{DynamicResource UniversalBrush}" VerticalAlignment="Center" />
                                     </StackPanel>
                                 </Border>
-                            </StackPanel>
+                            </WrapPanel>
                             <TextBlock x:Name="StatusDetail" Style="{StaticResource HintText}" Text="Списки серверов ещё не загружены" />
                         </StackPanel>
                     </Grid>
@@ -163,6 +164,10 @@
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
                                 <StackPanel Grid.Column="0" MaxWidth="220">
                                     <TextBlock x:Name="HeaderConnectionText" FontSize="12.5" FontWeight="SemiBold"
                                                Foreground="{DynamicResource TextStrongBrush}" TextTrimming="CharacterEllipsis" />
@@ -177,6 +182,9 @@
                                 </StackPanel>
                                 <TextBlock x:Name="HeaderStatsText" Visibility="Collapsed" />
                                 <TextBlock x:Name="HeaderExitText" Visibility="Collapsed" />
+                                <!-- Какие сервисы открывает подключённый сервер — как значки в отсеве. -->
+                                <WrapPanel x:Name="HeaderServicesPanel" Grid.Row="1" Grid.ColumnSpan="2"
+                                           Margin="0,6,0,0" Visibility="Collapsed" />
                             </Grid>
                         </DockPanel>
                     </Border>
@@ -561,16 +569,16 @@
                         <TextBlock Text="Статус: в разработке — экспериментально, возможны сбои" Foreground="{DynamicResource WarningBrush}" FontWeight="SemiBold" TextWrapping="Wrap" />
                         <TextBlock x:Name="TunBypassStatusText" Style="{StaticResource HintText}" TextWrapping="Wrap" Text="Проверка…" />
                         <TextBlock x:Name="TunBypassActiveText" Style="{StaticResource HintText}" Margin="0,4,0,0" TextWrapping="Wrap" FontWeight="SemiBold" />
-                        <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                            <Button x:Name="TunBypassToggleButton" Content="Включить TUN-обход" Style="{StaticResource PrimaryButton}" Margin="0,0,8,0"
+                        <WrapPanel Margin="0,10,0,0">
+                            <Button x:Name="TunBypassToggleButton" Content="Включить TUN-обход" Style="{StaticResource PrimaryButton}" Margin="0,0,8,8"
                                     Click="OnTunBypassToggleClick" ToolTip="Включить или остановить TUN-обход без прокси-сервера" />
-                            <Button x:Name="TunBypassAutoConnectButton" Content="Автоподключение" Style="{StaticResource AccentSmallButton}" Margin="0,0,8,0"
+                            <Button x:Name="TunBypassAutoConnectButton" Content="Автоподключение" Style="{StaticResource AccentSmallButton}" Margin="0,0,8,8"
                                     Click="OnTunBypassAutoConnectClick"
                                     ToolTip="Перебрать все стратегии фрагментации, выбрать рабочую и подключиться (нужны права администратора)" />
                             <Button x:Name="TunBypassProbeButton" Content="Проверить напрямую" Style="{StaticResource SmallButton}"
                                     Click="OnTunBypassProbeClick"
                                     ToolTip="Проверить Cloudflare, YouTube и t.me через TUN-обход (запрос идёт отдельным процессом)" />
-                        </StackPanel>
+                        </WrapPanel>
 
                         <TextBlock Style="{StaticResource SectionTitle}" Text="Стратегия фрагментации" Margin="0,20,0,6" />
                         <ScrollViewer MaxHeight="360" VerticalScrollBarVisibility="Auto">
@@ -1356,7 +1364,7 @@
                     <StackPanel DockPanel.Dock="Top">
                         <TextBlock x:Name="RejectedSummaryText" Style="{StaticResource HintText}"
                                    TextWrapping="Wrap" Margin="0,0,0,6" />
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <WrapPanel Margin="0,0,0,6">
                             <RadioButton x:Name="RejectedAllRadio" Content="Все" Tag="all"
                                          Style="{StaticResource AppRadioButton}" GroupName="RejectedService"
                                          IsChecked="True" Checked="OnRejectedServiceChecked" Margin="0,0,8,0" />
@@ -1372,8 +1380,8 @@
                             <RadioButton Content="Универсальный" Tag="universal"
                                          Style="{StaticResource AppRadioButton}" GroupName="RejectedService"
                                          Checked="OnRejectedServiceChecked" />
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        </WrapPanel>
+                        <WrapPanel Margin="0,0,0,6">
                             <Button Content="Подключение" Style="{StaticResource PrimaryButton}"
                                     Margin="0,0,8,0" Click="OnRejectConnectClick"
                                     ToolTip="Попробовать подключиться к выбранному серверу и вернуть его в рабочие" />
@@ -1386,8 +1394,8 @@
                             <Button Content="Вернуть (В рабочие)" Style="{StaticResource AccentSmallButton}"
                                     Click="OnRejectReturnClick"
                                     ToolTip="Вернуть выбранные серверы в рабочие без проверки" />
-                        </StackPanel>
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        </WrapPanel>
+                        <WrapPanel Margin="0,0,0,6">
                             <Button x:Name="RejectedAutoButton" Content="● Авто-перепроверка: вкл"
                                     Style="{StaticResource AccentSmallButton}" Margin="0,0,8,0"
                                     Click="OnToggleRejectedAutoClick"
@@ -1401,7 +1409,7 @@
                             <Button Content="Убрать из отсева" Style="{StaticResource SmallButton}"
                                     Click="OnRemoveRejectedClick"
                                     ToolTip="Удалить выбранные серверы из файла отсева без проверки" />
-                        </StackPanel>
+                        </WrapPanel>
                     </StackPanel>
                     <DataGrid x:Name="RejectedGrid" Style="{StaticResource AppDataGrid}"
                               SelectionMode="Extended" SelectionUnit="FullRow">
@@ -1473,8 +1481,14 @@
         <!-- Нижняя строка -->
         <Border Grid.Row="2" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource TableGridLineBrush}" BorderThickness="0,1,0,0" Padding="20,8">
             <Grid>
-                <TextBlock x:Name="FooterText" Style="{StaticResource HintText}" Text="Готово" />
-                <TextBlock HorizontalAlignment="Right" Style="{StaticResource HintText}"
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="FooterText" Style="{StaticResource HintText}" Text="Готово"
+                           TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="1" HorizontalAlignment="Right" Style="{StaticResource HintText}"
+                           Margin="12,0,0,0" TextTrimming="CharacterEllipsis"
                            Text="Бесплатные серверы не гарантируют скорость и приватность" />
             </Grid>
         </Border>

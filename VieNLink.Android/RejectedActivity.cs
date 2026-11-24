@@ -107,7 +107,7 @@ public sealed class RejectedActivity : BaseActivity
 
         var top = Ui.Row(this);
         top.AddView(Ui.Pill(this, P, "Назад", UiButtonKind.Ghost, Finish));
-        var title = Ui.Title(this, "Отсев — Перепроверка", P);
+        var title = Ui.Title(this, Ui.IsCompactLayout ? "Отсев" : "Отсев — Перепроверка", P);
         title.SetPadding(Ui.Dp(this, 10), 0, 0, 0);
         top.AddView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         page.AddView(top);
@@ -131,7 +131,7 @@ public sealed class RejectedActivity : BaseActivity
         _youtubeCount = AddMetric(metrics, "YouTube", P.YouTube);
         _telegramCount = AddMetric(metrics, "Telegram", P.Telegram);
         _discordCount = AddMetric(metrics, "Discord", P.Discord);
-        _universalCount = AddMetric(metrics, "Универс.", P.Accent);
+        _universalCount = AddMetric(metrics, Ui.IsCompactLayout ? "Унив." : "Универс.", P.Accent);
         summaryCard.AddView(metrics);
         Ui.Add(page, summaryCard, 12);
 
@@ -562,14 +562,15 @@ public sealed class RejectedActivity : BaseActivity
     private TextView AddMetric(LinearLayout row, string label, Android.Graphics.Color tone)
     {
         var column = Ui.Column(this);
-        column.SetPadding(Ui.Dp(this, 8), Ui.Dp(this, 7), Ui.Dp(this, 8), Ui.Dp(this, 7));
+        var pad = Ui.IsCompactLayout ? 5 : 8;
+        column.SetPadding(Ui.Dp(this, pad), Ui.Dp(this, 7), Ui.Dp(this, pad), Ui.Dp(this, 7));
         column.Background = Ui.Rounded(P.Inner, 12, this, P.BorderSoft);
         column.SetGravity(GravityFlags.Center);
         var value = Ui.Text(this, "0", 18f, tone, bold: true);
         value.Gravity = GravityFlags.Center;
         column.AddView(value, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        var caption = Ui.Text(this, label, 9.5f, P.Muted);
+        var caption = Ui.Text(this, label, Ui.IsCompactLayout ? 9f : 9.5f, P.Muted);
         caption.Gravity = GravityFlags.Center;
         caption.SetSingleLine(true);
         column.AddView(caption, new LinearLayout.LayoutParams(

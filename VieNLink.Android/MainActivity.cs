@@ -16,6 +16,7 @@ namespace VieNLink.Mobile;
     ConfigurationChanges = Android.Content.PM.ConfigChanges.Orientation |
                            Android.Content.PM.ConfigChanges.ScreenSize |
                            Android.Content.PM.ConfigChanges.SmallestScreenSize |
+                           Android.Content.PM.ConfigChanges.FontScale |
                            Android.Content.PM.ConfigChanges.UiMode,
     Theme = "@style/Theme.VieNLink")]
 [IntentFilter(
@@ -41,11 +42,12 @@ public sealed partial class MainActivity : BaseActivity
 
     private TextView? _statusText;
     private TextView? _nodeText;
+    private TextView? _nodeSubText;
+    private TextView? _delayText;
     private TextView? _exitText;
-    private TextView? _speedText;
     private TextView? _trafficText;
     private TextView? _stateDot;
-    private TextView? _disconnect;
+    private ImageView? _disconnect;
     private TextView? _youtubeCount;
     private TextView? _workingCount;
     private TextView? _workingDelta;
@@ -59,6 +61,10 @@ public sealed partial class MainActivity : BaseActivity
     private TextView? _discordCount;
     private TextView? _telegramCount;
     private TextView? _universalCount;
+    /// <summary>Блок «Сервер открывает»: значки сервисов у выбранного (подключённого) сервера.</summary>
+    private LinearLayout? _serverServicesRow;
+    private LinearLayout? _serverServicesBadges;
+    private string _serverServicesSignature = string.Empty;
     private TextView? _connectionStatus;
     private TextView? _probeBadge;
     private TextView? _shareButton;
@@ -87,51 +93,7 @@ public sealed partial class MainActivity : BaseActivity
     {
         base.OnCreate(savedInstanceState);
 
-        var shell = Ui.Column(this);
-        shell.SetBackgroundColor(P.Background);
-
-        if (DeviceProfile.IsLargeScreen)
-        {
-            // Планшет/ТВ: шапка и действия слева, содержимое вкладки справа.
-            // Каждая колонка прокручивается независимо; внизу — общая навигация.
-            var row = Ui.Row(this);
-            row.SetGravity(GravityFlags.Top);
-
-            var left = new ScrollView(this) { FillViewport = true, VerticalScrollBarEnabled = false };
-            _headerHost = Ui.Column(this);
-            _headerHost.SetPadding(Ui.Dp(this, 16), Ui.StatusBar(this) + Ui.Dp(this, 8),
-                Ui.Dp(this, 8), Ui.Dp(this, 16));
-            left.AddView(_headerHost, new ScrollView.LayoutParams(
-                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-
-            var right = new ScrollView(this) { FillViewport = true, VerticalScrollBarEnabled = false };
-            _pageHost = Ui.Column(this);
-            _pageHost.SetPadding(Ui.Dp(this, 8), Ui.StatusBar(this) + Ui.Dp(this, 8),
-                Ui.Dp(this, 16), Ui.Dp(this, 16));
-            right.AddView(_pageHost, new ScrollView.LayoutParams(
-                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-
-            row.AddView(left, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MatchParent, 0.44f));
-            row.AddView(right, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MatchParent, 0.56f));
-            shell.AddView(row, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MatchParent, 0, 1f));
-        }
-        else
-        {
-            var scroll = new ScrollView(this) { FillViewport = true, VerticalScrollBarEnabled = false };
-            _pageHost = Ui.Column(this);
-            _pageHost.SetPadding(Ui.Dp(this, 16), Ui.StatusBar(this) + Ui.Dp(this, 8),
-                Ui.Dp(this, 16), Ui.Dp(this, 16));
-            scroll.AddView(_pageHost, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-            shell.AddView(scroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MatchParent, 0, 1f));
-        }
-
-        _nav = BuildNavigation();
-        shell.AddView(_nav, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        SetContentView(shell);
+        BuildShell();
 
         EnsureNotificationPermission();
         ScheduleMaintenance();
@@ -170,6 +132,71 @@ public sealed partial class MainActivity : BaseActivity
         // Автопроверка обновлений при запуске: релиз с более высокой версией
         // скачивается и предлагается к установке.
         UpdateCenter.StartLaunchCheck(this, Intent?.GetBooleanExtra("checkUpdate", false) == true);
+    }
+
+    /// <summary>
+    /// Корневая раскладка: на телефоне одна колонка, на планшете и ТВ — шапка слева,
+    /// страница справа. Строится заново при повороте и изменении размера окна,
+    /// поэтому отступы и колонки всегда соответствуют текущему экрану.
+    /// </summary>
+    private void BuildShell()
+    {
+        _navIcons.Clear();
+        _navLabels.Clear();
+        _headerHost = null;
+
+        var shell = Ui.Column(this);
+        shell.SetBackgroundColor(P.Background);
+
+        if (DeviceProfile.IsLargeScreen)
+        {
+            // Планшет/ТВ: шапка и действия слева, содержимое вкладки справа.
+            // Каждая колонка прокручивается независимо; внизу — общая навигация.
+            var row = Ui.Row(this);
+            row.SetGravity(GravityFlags.Top);
+
+            var left = new ScrollView(this) { FillViewport = true, VerticalScrollBarEnabled = false };
+            _headerHost = Ui.Column(this);
+            _headerHost.SetPadding(Ui.Dp(this, 16), Ui.Dp(this, 8), Ui.Dp(this, 8), Ui.Dp(this, 16));
+            left.AddView(_headerHost, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
+            var right = new ScrollView(this) { FillViewport = true, VerticalScrollBarEnabled = false };
+            _pageHost = Ui.Column(this);
+            _pageHost.SetPadding(Ui.Dp(this, 8), Ui.Dp(this, 8), Ui.Dp(this, 16), Ui.Dp(this, 16));
+            right.AddView(_pageHost, new ScrollView.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+
+            row.AddView(left, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MatchParent, 0.44f));
+            row.AddView(right, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MatchParent, 0.56f));
+            shell.AddView(row, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, 0, 1f));
+            // Строка состояния и вырез — сверху над обеими колонками; низ закрывает навигация.
+            Ui.ApplyInsets(row, 0, 0, 0, 0, insetBottom: false);
+        }
+        else
+        {
+            var scroll = new ScrollView(this) { FillViewport = true, VerticalScrollBarEnabled = false };
+            _pageHost = Ui.Column(this);
+            _pageHost.SetPadding(Ui.Dp(this, 16), Ui.Dp(this, 8), Ui.Dp(this, 16), Ui.Dp(this, 16));
+            scroll.AddView(_pageHost, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+            shell.AddView(scroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MatchParent, 0, 1f));
+            Ui.ApplyInsets(scroll, 0, 0, 0, 0, insetBottom: false);
+        }
+
+        _nav = BuildNavigation();
+        shell.AddView(_nav, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        SetContentView(shell);
+    }
+
+    /// <summary>Поворот, изменение размера окна, смена системного шрифта.</summary>
+    protected override void OnLayoutConfigurationChanged()
+    {
+        BuildShell();
+        SelectTab(_tab);
     }
 
     protected override void OnNewIntent(Intent? intent)
@@ -327,8 +354,8 @@ public sealed partial class MainActivity : BaseActivity
     private LinearLayout BuildNavigation()
     {
         var nav = Ui.Row(this);
-        nav.SetPadding(Ui.Dp(this, 6), Ui.Dp(this, 6), Ui.Dp(this, 6),
-            Ui.NavigationBar(this) + Ui.Dp(this, 6));
+        // Нижний отступ — по реальному инсету панели навигации (кнопочной или жестовой).
+        Ui.ApplyInsets(nav, 6, 6, 6, 6, insetTop: false);
         nav.SetBackgroundColor(P.Panel);
 
         var icons = new[]
@@ -343,7 +370,8 @@ public sealed partial class MainActivity : BaseActivity
         {
             var item = Ui.Column(this);
             item.SetGravity(GravityFlags.Center);
-            item.SetPadding(0, Ui.Dp(this, 7), 0, Ui.Dp(this, 6));
+            item.SetPadding(Ui.Dp(this, 2), Ui.Dp(this, Ui.IsShortLayout ? 4 : 7),
+                Ui.Dp(this, 2), Ui.Dp(this, 6));
             item.Clickable = true;
             item.Focusable = true;
 
@@ -369,9 +397,12 @@ public sealed partial class MainActivity : BaseActivity
                 image.SetImageDrawable(drawable);
             }
 
-            item.AddView(image, new LinearLayout.LayoutParams(Ui.Dp(this, 22), Ui.Dp(this, 22)));
-            var label = Ui.Text(this, TabTitles[index], 10.5f, P.Muted, bold: true);
+            var iconSize = Ui.Dp(this, Ui.IsCompactLayout ? 20 : 22);
+            item.AddView(image, new LinearLayout.LayoutParams(iconSize, iconSize));
+            var label = Ui.Text(this, TabTitles[index], Ui.IsCompactLayout ? 10f : 10.5f, P.Muted, bold: true);
             label.Gravity = GravityFlags.Center;
+            label.SetSingleLine(true);
+            label.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
             label.SetPadding(0, Ui.Dp(this, 3), 0, 0);
             item.AddView(label, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
@@ -470,8 +501,13 @@ public sealed partial class MainActivity : BaseActivity
         _probeBadgeText = null;
         _probeBadgeTone = null;
         _connectionStatusTone = null;
+        // Значки сервисов пересоздаются пустыми: без сброса подписи обновление
+        // посчитало бы их уже нарисованными и оставило строку пустой.
+        _serverServicesSignature = string.Empty;
 
         var card = Ui.HeaderCard(P, this);
+        // Логотип и название чуть выше: меньше верхнего отступа карточки.
+        card.SetPadding(Ui.Dp(this, 16), Ui.Dp(this, 8), Ui.Dp(this, 16), Ui.Dp(this, 14));
 
         var top = Ui.Row(this);
         var logo = new ImageView(this);
@@ -479,93 +515,299 @@ public sealed partial class MainActivity : BaseActivity
         logo.SetImageResource(Resource.Mipmap.ic_launcher);
         logo.Background = Ui.Rounded(P.Inner, 12, this, P.Border);
         logo.ClipToOutline = true;
-        top.AddView(logo, new LinearLayout.LayoutParams(Ui.Dp(this, 46), Ui.Dp(this, 46)));
+        var logoSide = Ui.Dp(this, Ui.IsCompactLayout ? 40 : 46);
+        top.AddView(logo, new LinearLayout.LayoutParams(logoSide, logoSide));
 
-        var titles = Ui.Column(this);
+        // Название, метка «БЕТА» и номер версии. Название ужимается первым
+        // (одна строка с многоточием), метка и версия не сжимаются никогда:
+        // раньше при крупном системном шрифте версия переносилась по буквам.
+        var titles = Ui.Row(this);
         titles.SetPadding(Ui.Dp(this, 12), 0, 0, 0);
-        var nameRow = Ui.Row(this);
-        nameRow.AddView(Ui.Text(this, "VieNLink", 21f, P.TextStrong, bold: true));
-        nameRow.AddView(Ui.Badge(this, P, "БЕТА", P.Warning));
-        titles.AddView(nameRow);
-        var subtitle = Ui.Text(this,
-            (StoreBuildInfo.IsStoreBuild
-                ? "Прокси и подключение · v"
-                : "Прокси, обход блокировок и Telegram · v") + UpdateCenter.CurrentVersion(this),
-            11.5f, P.Muted);
-        subtitle.SetPadding(0, Ui.Dp(this, 2), 0, 0);
-        titles.AddView(subtitle);
+        var nameText = Ui.Text(this, "VieNLink", 21f, P.TextStrong, bold: true);
+        nameText.SetSingleLine(true);
+        nameText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        titles.AddView(nameText, new LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WrapContent, 1f));
+        var betaBadge = Ui.Badge(this, P, "БЕТА", P.Warning);
+        var betaLayout = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent);
+        betaLayout.LeftMargin = Ui.Dp(this, 8);
+        titles.AddView(betaBadge, betaLayout);
         top.AddView(titles, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        var versionText = Ui.Text(this, "v" + UpdateCenter.CurrentVersion(this), 12f, P.Muted, bold: true);
+        versionText.SetSingleLine(true);
+        versionText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        versionText.SetPadding(Ui.Dp(this, 8), 0, 0, 0);
+        top.AddView(versionText, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
         card.AddView(top);
 
         var statusRow = Ui.Row(this);
-        statusRow.SetPadding(0, Ui.Dp(this, 14), 0, 0);
+        statusRow.SetPadding(0, 0, 0, Ui.Dp(this, 8));
+        // Постоянная высота строки статуса: кнопки появляются, но текст ниже не съезжает.
+        statusRow.SetMinimumHeight(Ui.Dp(this, 44));
         _stateDot = Ui.Text(this, "●", 15f, P.Muted);
         statusRow.AddView(_stateDot);
-        _statusText = Ui.Text(this, "VPN не подключён", 15f, P.TextStrong, bold: true);
+        _statusText = Ui.Text(this, "VPN отключён", 13f, P.TextStrong, bold: true);
         _statusText.SetPadding(Ui.Dp(this, 7), 0, 0, 0);
-        statusRow.AddView(_statusText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        _disconnect = Ui.Pill(this, P, "Отключить", UiButtonKind.Danger, StopEverything, Resource.Drawable.ic_power);
-        _disconnect.Visibility = ViewStates.Gone;
-        statusRow.AddView(_disconnect);
-        card.AddView(statusRow);
+        // Подпись статуса занимает всё свободное место и обрезается многоточием:
+        // кнопки справа всегда прижаты к краю и никогда не выдавливаются за карточку
+        // (раньше при крупном шрифте значок «выключить» обрезался).
+        _statusText.SetSingleLine(true);
+        _statusText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        statusRow.AddView(_statusText, new LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WrapContent, 1f));
 
-        var nodeRow = Ui.Row(this);
-        _nodeText = Ui.Text(this, "Сервер не выбран", 13f, P.MutedStrong);
-        _nodeText.SetPadding(0, Ui.Dp(this, 6), 0, 0);
-        nodeRow.AddView(_nodeText);
-        card.AddView(nodeRow);
+        // «Сменить сервер» — компактная кнопка: мелкая надпись «сменить» и стрелка «далее».
+        _nextNodeButton = Ui.Column(this);
+        _nextNodeButton.SetPadding(Ui.Dp(this, 4), Ui.Dp(this, 2), Ui.Dp(this, 4), Ui.Dp(this, 2));
+        _nextNodeButton.SetGravity(GravityFlags.Center);
+        _nextNodeButton.Background = Ui.Pressable(this,
+            Ui.Blend(P.Card, P.Telegram, 0.20f), Ui.Blend(P.Card, P.Telegram, 0.30f), 12,
+            Color.Argb(150, P.Telegram.R, P.Telegram.G, P.Telegram.B));
+        _nextNodeButton.Clickable = true;
+        _nextNodeButton.Focusable = true;
+        _nextNodeButton.Click += (_, _) => _ = SwitchToNextNodeAsync();
+        _nextNodeButton.ContentDescription = "Сменить сервер";
+        _nextNodeButton.Visibility = ViewStates.Visible;
+        _nextNodeButton.Enabled = false;
+        _nextNodeButton.Alpha = 0.4f;
 
-        var metrics = Ui.Row(this);
-        metrics.SetPadding(0, Ui.Dp(this, 6), 0, 0);
-        _exitText = Ui.Text(this, "Выход: —", 11.5f, P.Muted);
-        _speedText = Ui.Text(this, "Скорость: —", 11.5f, P.Muted);
-        metrics.AddView(_exitText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        metrics.AddView(_speedText);
-        card.AddView(metrics);
-
-        _trafficText = Ui.Text(this, "Трафик: —", 11.5f, P.Muted);
-        _trafficText.SetPadding(0, Ui.Dp(this, 4), 0, 0);
-        card.AddView(_trafficText);
-
-        // Общее число рабочих серверов — отдельной строкой, чтобы его не путали
-        // со счётчиками проверки по сервисам.
-        var workingRow = Ui.Row(this);
-        workingRow.SetPadding(0, Ui.Dp(this, 10), 0, 0);
-        var workingChip = ServiceCounter(Resource.Drawable.ic_nodes, P.Positive, out _workingCount);
-        workingRow.AddView(workingChip, new LinearLayout.LayoutParams(
+        var changeLabel = Ui.Text(this, "сменить", 8f, P.Telegram, bold: true);
+        changeLabel.Gravity = GravityFlags.CenterHorizontal;
+        changeLabel.SetSingleLine(true);
+        _nextNodeButton.AddView(changeLabel, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
-        // Сколько прибавилось и сколько убыло после проверок: «+3 −1».
-        _workingDelta = Ui.Text(this, string.Empty, 11.5f, P.Muted, bold: true);
-        _workingDelta.SetPadding(Ui.Dp(this, 8), 0, 0, 0);
-        _workingDelta.Visibility = ViewStates.Gone;
-        workingRow.AddView(_workingDelta, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
-        card.AddView(workingRow);
 
-        // Мини-иконки сервисов с числом проверенных серверов, которые к ним подключаются.
-        var counters = Ui.Row(this);
-        counters.SetPadding(0, Ui.Dp(this, 6), 0, 0);
-        counters.AddView(ServiceCounter(Resource.Drawable.ic_service_youtube_brand, P.YouTube, out _youtubeCount,
-                tintIcon: false),
-            new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        counters.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 6), 1));
-        if (!DeviceProfile.IsTelevision)
+        var nextIconView = new ImageView(this);
+        var nextIcon = Ui.Icon(this, Resource.Drawable.ic_next);
+        if (nextIcon is not null)
         {
-            counters.AddView(ServiceCounter(Resource.Drawable.ic_service_discord, P.Discord, out _discordCount),
-                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-            counters.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 6), 1));
-            counters.AddView(ServiceCounter(Resource.Drawable.ic_service_telegram, P.Telegram, out _telegramCount),
-                new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-            counters.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 6), 1));
+            nextIcon.SetTint(P.Telegram);
+            nextIconView.SetImageDrawable(nextIcon);
         }
-        counters.AddView(ServiceCounter(
-                DeviceProfile.IsTelevision ? Resource.Drawable.ic_service_zona : Resource.Drawable.ic_service_universal,
-                P.Universal, out _universalCount),
-            new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        card.AddView(counters);
+        var nextIconLayout = new LinearLayout.LayoutParams(Ui.Dp(this, 18), Ui.Dp(this, 18));
+        nextIconLayout.Gravity = GravityFlags.CenterHorizontal;
+        _nextNodeButton.AddView(nextIconView, nextIconLayout);
+
+        var headerButtonWidth = Ui.Dp(this, Ui.IsCompactLayout ? 46 : 52);
+        var headerButtonHeight = Ui.Dp(this, 40);
+        var nextNodeLayout = new LinearLayout.LayoutParams(headerButtonWidth, headerButtonHeight);
+        nextNodeLayout.LeftMargin = Ui.Dp(this, 8);
+        nextNodeLayout.RightMargin = Ui.Dp(this, 6);
+        statusRow.AddView(_nextNodeButton, nextNodeLayout);
+
+        // «Отключить/Отмена» — только значок питания, без подписи.
+        _disconnect = new ImageView(this);
+        var powerIcon = Ui.Icon(this, Resource.Drawable.ic_power);
+        if (powerIcon is not null)
+        {
+            powerIcon.SetTint(P.Danger);
+            _disconnect.SetImageDrawable(powerIcon);
+        }
+        _disconnect.SetPadding(Ui.Dp(this, 10), Ui.Dp(this, 10), Ui.Dp(this, 10), Ui.Dp(this, 10));
+        _disconnect.Background = Ui.Pressable(this,
+            Ui.Blend(P.Card, P.Danger, 0.18f), Ui.Blend(P.Card, P.Danger, 0.30f), 12,
+            Color.Argb(150, P.Danger.R, P.Danger.G, P.Danger.B));
+        _disconnect.Clickable = true;
+        _disconnect.Focusable = true;
+        _disconnect.Click += (_, _) => StopEverything();
+        _disconnect.ContentDescription = "Отключить";
+        _disconnect.Visibility = ViewStates.Visible;
+        _disconnect.Enabled = false;
+        _disconnect.Alpha = 0.4f;
+        statusRow.AddView(_disconnect, new LinearLayout.LayoutParams(headerButtonWidth, headerButtonHeight));
+        // Строка статуса добавляется внутрь блока информации о сервере (ниже).
+
+        // Информация о сервере — отдельный блок с рамкой и стабильными строками,
+        // чтобы при подключении ничего не прыгало и не переносилось криво.
+        var nodeCard = Ui.Column(this);
+        nodeCard.SetPadding(Ui.Dp(this, 12), Ui.Dp(this, 2), Ui.Dp(this, 12), Ui.Dp(this, 9));
+        nodeCard.Background = Ui.Rounded(P.Inner, 12, this, P.Border);
+        var nodeCardLayout = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+        nodeCardLayout.TopMargin = Ui.Dp(this, 6);
+
+        // Строка статуса и кнопки «сменить/выключить» — сверху внутри блока.
+        nodeCard.AddView(statusRow);
+
+        var nodeNameRow = Ui.Row(this);
+        _nodeText = Ui.Text(this, "Сервер не подключён", 14f, P.TextStrong, bold: true);
+        _nodeText.SetSingleLine(true);
+        _nodeText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        // Ширина имени — доля экрана с пределом: на узком экране имя не выдавливает
+        // задержку за край карточки.
+        _nodeText.SetMaxWidth(Ui.Share(this, 0.55, 200));
+        nodeNameRow.AddView(_nodeText, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        // Пинг — сразу за названием, а не у правого края.
+        _delayText = Ui.Text(this, string.Empty, 12.5f, P.Positive, bold: true);
+        _delayText.SetSingleLine(true);
+        _delayText.SetPadding(Ui.Dp(this, 8), 0, 0, 0);
+        nodeNameRow.AddView(_delayText);
+        nodeCard.AddView(nodeNameRow);
+
+        _nodeSubText = Ui.Text(this, "Нажмите кнопку сервиса", 11.5f, P.MutedStrong);
+        _nodeSubText.SetSingleLine(true);
+        _nodeSubText.Ellipsize = Android.Text.TextUtils.TruncateAt.Middle;
+        _nodeSubText.SetPadding(0, Ui.Dp(this, 3), 0, 0);
+        nodeCard.AddView(_nodeSubText);
+
+        // «Выход» и «Трафик» — в одной строке: две отдельные строки съедали
+        // высоту шапки, и на низких экранах кнопки не помещались целиком.
+        var infoRow = Ui.Row(this);
+        infoRow.SetPadding(0, Ui.Dp(this, 3), 0, 0);
+        _exitText = Ui.Text(this, "Выход: —", 11.5f, P.Accent);
+        _exitText.SetSingleLine(true);
+        _exitText.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        infoRow.AddView(_exitText, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        _trafficText = Ui.Text(this, "Трафик: —", 11.5f, P.Positive);
+        _trafficText.SetSingleLine(true);
+        _trafficText.Gravity = GravityFlags.Right;
+        _trafficText.SetPadding(Ui.Dp(this, 8), 0, 0, 0);
+        infoRow.AddView(_trafficText, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        nodeCard.AddView(infoRow);
+
+        card.AddView(nodeCard, nodeCardLayout);
+
+        // Что открывает именно выбранный (подключённый) сервер — как значки в отсеве.
+        // Сюда попадают только сервисы этого сервера, в отличие от счётчиков ниже,
+        // которые показывают, сколько серверов вообще готовы к каждому сервису.
+        // Подпись и значки — в одной строке (раньше это были две строки).
+        _serverServicesRow = Ui.Row(this);
+        _serverServicesRow.SetPadding(0, Ui.Dp(this, 8), 0, 0);
+        var servicesLabel = Ui.Text(this, "СЕРВЕР ОТКРЫВАЕТ", 10.5f, P.Positive, bold: true);
+        servicesLabel.LetterSpacing = 0.06f;
+        servicesLabel.SetPadding(Ui.Dp(this, 8), Ui.Dp(this, 3), Ui.Dp(this, 8), Ui.Dp(this, 3));
+        servicesLabel.Background = Ui.Rounded(Color.Argb(36, P.Positive.R, P.Positive.G, P.Positive.B), 8, this,
+            Color.Argb(110, P.Positive.R, P.Positive.G, P.Positive.B));
+        _serverServicesRow.AddView(servicesLabel, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        _serverServicesBadges = Ui.Row(this);
+        _serverServicesBadges.SetPadding(Ui.Dp(this, 6), 0, 0, 0);
+        // Горизонтальная прокрутка: четыре значка сервисов на узком экране
+        // не помещаются и раньше обрезались справа.
+        var servicesScroll = new HorizontalScrollView(this)
+        {
+            HorizontalScrollBarEnabled = false,
+        };
+        servicesScroll.AddView(_serverServicesBadges, new FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        _serverServicesRow.AddView(servicesScroll, new LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WrapContent, 1f));
+        _serverServicesRow.Visibility = ViewStates.Visible;
+        nodeCard.AddView(_serverServicesRow);
+
+        // Одна общая рамка: слева «Быстрое подключение», справа — рабочие серверы
+        // (щит, число, дельта, подпись) без отдельных вложенных плашек.
+        var servicesHeaderRow = Ui.Row(this);
+        servicesHeaderRow.SetPadding(Ui.Dp(this, 10), Ui.Dp(this, 3), Ui.Dp(this, 10), Ui.Dp(this, 3));
+        servicesHeaderRow.Background = Ui.Rounded(Color.Argb(36, P.Accent.R, P.Accent.G, P.Accent.B), 10, this,
+            Color.Argb(110, P.Accent.R, P.Accent.G, P.Accent.B));
+        var servicesHeaderLayout = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+        servicesHeaderLayout.TopMargin = Ui.Dp(this, 8);
+
+        var servicesTitle = Ui.Text(this, "БЫСТРОЕ ПОДКЛЮЧЕНИЕ", 9f, P.Accent, bold: true);
+        servicesTitle.LetterSpacing = 0f;
+        servicesTitle.SetSingleLine(true);
+        servicesTitle.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        // Заголовок занимает свободное место: счётчик и подпись справа не сжимаются
+        // и не переносятся на узком экране.
+        servicesHeaderRow.AddView(servicesTitle, new LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WrapContent, 1f));
+
+        var shield = new ImageView(this);
+        var shieldDrawable = Ui.Icon(this, Resource.Drawable.ic_nodes);
+        if (shieldDrawable is not null)
+        {
+            shieldDrawable.SetTint(P.Positive);
+            shield.SetImageDrawable(shieldDrawable);
+        }
+
+        servicesHeaderRow.AddView(shield,
+            new LinearLayout.LayoutParams(Ui.Dp(this, 15), Ui.Dp(this, 15)));
+        _workingCount = Ui.Text(this, "—", 12f, P.Positive, bold: true);
+        _workingCount.SetPadding(Ui.Dp(this, 5), 0, 0, 0);
+        servicesHeaderRow.AddView(_workingCount, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        // Подпись «рабочих серверов», затем дельта — вплотную за подписью (не у края).
+        // На узком экране подпись короче: иначе она выдавливала заголовок.
+        var workingLabel = Ui.Text(this, Ui.IsCompactLayout ? "рабочих" : "рабочих серверов",
+            10f, P.Positive, bold: true);
+        workingLabel.SetSingleLine(true);
+        workingLabel.SetPadding(Ui.Dp(this, 5), 0, 0, 0);
+        servicesHeaderRow.AddView(workingLabel, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+
+        _workingDelta = Ui.Text(this, string.Empty, 11.5f, P.Muted, bold: true);
+        _workingDelta.SetPadding(Ui.Dp(this, 4), 0, 0, 0);
+        _workingDelta.SetMinWidth(Ui.Dp(this, Ui.IsCompactLayout ? 18 : 24));
+        _workingDelta.Gravity = GravityFlags.Left;
+        _workingDelta.Visibility = ViewStates.Invisible;
+        servicesHeaderRow.AddView(_workingDelta, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        card.AddView(servicesHeaderRow, servicesHeaderLayout);
+        var tv = DeviceProfile.IsTelevision;
+        var serviceRow1 = Ui.Row(this);
+        serviceRow1.SetPadding(0, Ui.Dp(this, 6), 0, 0);
+        AddWeighted(serviceRow1, ServiceHeaderButton("YouTube", Resource.Drawable.ic_service_youtube_brand,
+            NodeStore.QuickService.YouTube, P.YouTube, P.YouTubeSurface, out _youtubeCount, tintIcon: false),
+            tv ? 0 : 8);
+        if (!tv)
+        {
+            AddWeighted(serviceRow1, ServiceHeaderButton("Discord", Resource.Drawable.ic_service_discord,
+                NodeStore.QuickService.Discord, P.Discord, P.DiscordSurface, out _discordCount), 0);
+        }
+        card.AddView(serviceRow1);
+
+        var serviceRow2 = Ui.Row(this);
+        var serviceRow2Layout = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+        serviceRow2Layout.TopMargin = Ui.Dp(this, 6);
+        AddWeighted(serviceRow2, ServiceHeaderButton(
+            tv ? "Zona" : Ui.IsCompactLayout ? "Универс." : "Универсальный",
+            tv ? Resource.Drawable.ic_service_zona : Resource.Drawable.ic_service_universal,
+            NodeStore.QuickService.Universal, P.Universal, P.UniversalSurface, out _universalCount),
+            tv ? 0 : 8);
+        if (!tv)
+        {
+            AddWeighted(serviceRow2, ServiceHeaderButton("Telegram", Resource.Drawable.ic_service_telegram,
+                NodeStore.QuickService.Telegram, P.Telegram, P.TelegramSurface, out _telegramCount), 0);
+        }
+        card.AddView(serviceRow2, serviceRow2Layout);
+
+        // Служебные кнопки — одной строкой: MTProto-прокси и «Добавить».
+        // Раньше это были две отдельные строки на всю ширину, и шапка не
+        // помещалась на низких экранах (640dp и меньше).
+        var utilityRow = Ui.Row(this);
+        var utilityLayout = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+        utilityLayout.TopMargin = Ui.Dp(this, 8);
+        if (!tv)
+        {
+            var mtproto = Ui.Pill(this, P, DeviceProfile.IsTablet ? "MTProto-прокси" : "MTProto",
+                UiButtonKind.Secondary, () => Open(typeof(TelegramActivity)),
+                Resource.Drawable.ic_mtproto, tone: P.Telegram);
+            CompactHeaderUtilityButton(mtproto);
+            StyleHeaderAction(mtproto, P.Telegram, filled: false);
+            utilityRow.AddView(mtproto, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WrapContent, 1f));
+            utilityRow.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 8), 1));
+        }
+
+        _addServerButton = Ui.Pill(this, P,
+            tv ? "Добавить сервер" : Ui.IsCompactLayout ? "Добавить" : "Добавить сервер",
+            UiButtonKind.Accent, ShowAddServerDialog, Resource.Drawable.ic_add);
+        CompactHeaderUtilityButton(_addServerButton);
+        StyleHeaderAction(_addServerButton, P.Positive, filled: false);
+        utilityRow.AddView(_addServerButton, new LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WrapContent, 1f));
+        card.AddView(utilityRow, utilityLayout);
 
         var actions = Ui.Row(this);
-        actions.SetPadding(0, Ui.Dp(this, 14), 0, 0);
+        actions.SetPadding(0, Ui.Dp(this, 10), 0, 0);
         // Главное действие — на всю ширину, ниже два оформленных действия рядом.
         _findButton = Ui.Pill(this, P, _finding ? "Проверяю серверы…" : "Проверить серверы",
             UiButtonKind.Primary, () => _ = FindNodesAsync(), Resource.Drawable.ic_nodes);
@@ -578,11 +820,11 @@ public sealed partial class MainActivity : BaseActivity
         // фоновая проверка серверов и отсева. Раньше стояла отдельной строкой;
         // теперь делит ряд с «Поделиться», а «Сменить сервер» — на всю ширину ниже.
         _actionsRow2 = Ui.Row(this);
-        _actionsRow2.SetPadding(0, Ui.Dp(this, 8), 0, 0);
-        _autoButton = Ui.Pill(this, P, "Авто-проверка: вкл", UiButtonKind.Secondary,
-            ToggleAutoCheck, Resource.Drawable.ic_refresh);
-        _shareButton = Ui.Pill(this, P, "Поделиться сервером", UiButtonKind.Secondary,
-            ShareCurrentNode, Resource.Drawable.ic_export);
+        _actionsRow2.SetPadding(0, Ui.Dp(this, 6), 0, 0);
+        _autoButton = Ui.Pill(this, P, Ui.IsCompactLayout ? "Авто: вкл" : "Авто-проверка: вкл",
+            UiButtonKind.Secondary, ToggleAutoCheck, Resource.Drawable.ic_refresh);
+        _shareButton = Ui.Pill(this, P, Ui.IsCompactLayout ? "Поделиться" : "Поделиться сервером",
+            UiButtonKind.Secondary, ShareCurrentNode, Resource.Drawable.ic_export);
         CompactWrapHeaderButton(_autoButton);
         CompactWrapHeaderButton(_shareButton);
         _autoButton.TextSize = Ui.Sp(12f);
@@ -596,32 +838,11 @@ public sealed partial class MainActivity : BaseActivity
         _actionsRow2.AddView(_shareButton, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         card.AddView(_actionsRow2);
 
-        // «Сменить сервер» — отдельной строкой на всю ширину: важное действие,
-        // раньше делило ряд с «Поделиться».
-        var nextRow = Ui.Row(this);
-        nextRow.SetPadding(0, Ui.Dp(this, 8), 0, 0);
-        _nextNodeButton = Ui.Pill(this, P, "Сменить сервер", UiButtonKind.Accent,
-            () => _ = SwitchToNextNodeAsync(), Resource.Drawable.ic_refresh);
-        CompactWideHeaderButton(_nextNodeButton);
-        StyleHeaderAction(_nextNodeButton, P.Telegram, filled: false);
-        nextRow.AddView(_nextNodeButton, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        card.AddView(nextRow);
-
-        // Ручное добавление — отдельной строкой под двумя кнопками: в тесном ряду
-        // из трёх подпись «Поделиться сервером» ломалась посреди слова.
-        var addRow = Ui.Row(this);
-        addRow.SetPadding(0, Ui.Dp(this, 8), 0, 0);
-        _addServerButton = Ui.Pill(this, P, "Добавить сервер", UiButtonKind.Accent,
-            ShowAddServerDialog, Resource.Drawable.ic_add);
-        CompactWideHeaderButton(_addServerButton);
-        StyleHeaderAction(_addServerButton, P.Positive, filled: false);
-        addRow.AddView(_addServerButton, new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
-        card.AddView(addRow);
+        // «Сменить сервер» теперь в строке состояния, рядом с «Отключить/Отмена».
+        // «Добавить сервер» — в общем ряду служебных кнопок выше (вместе с MTProto).
 
         var probeStatusRow = Ui.Row(this);
-        probeStatusRow.SetPadding(0, Ui.Dp(this, 10), 0, 0);
+        probeStatusRow.SetPadding(0, Ui.Dp(this, 8), 0, 0);
         _probeBadge = Ui.Badge(this, P, "○ АВТО-ПРОВЕРКА", P.MutedStrong);
         probeStatusRow.AddView(_probeBadge, new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
@@ -637,12 +858,12 @@ public sealed partial class MainActivity : BaseActivity
     /// <summary>Кнопка с длинной подписью: две строки, перенос только по словам.</summary>
     private void CompactWrapHeaderButton(TextView button)
     {
-        button.SetPadding(Ui.Dp(this, 8), Ui.Dp(this, 4), Ui.Dp(this, 8), Ui.Dp(this, 4));
-        button.TextSize = Ui.Sp(12f);
+        button.SetPadding(Ui.Dp(this, 8), Ui.Dp(this, 3), Ui.Dp(this, 8), Ui.Dp(this, 3));
+        button.TextSize = Ui.Sp(11.5f);
         button.SetSingleLine(false);
         button.SetMaxLines(2);
         button.Gravity = Android.Views.GravityFlags.Center;
-        button.SetMinHeight(Ui.Dp(this, 48));
+        button.SetMinHeight(Ui.Dp(this, 42));
         // Без переносов по слогам: «Подел/иться» выглядело как ошибка.
         button.BreakStrategy = Android.Text.BreakStrategy.Balanced;
         button.HyphenationFrequency = Android.Text.HyphenationFrequency.None;
@@ -651,10 +872,19 @@ public sealed partial class MainActivity : BaseActivity
     /// <summary>Кнопка главного действия на всю ширину.</summary>
     private void CompactWideHeaderButton(TextView button)
     {
-        button.TextSize = Ui.Sp(13.5f);
+        button.TextSize = Ui.Sp(12.5f);
         button.SetSingleLine(true);
         button.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
-        button.SetMinHeight(Ui.Dp(this, 48));
+        button.SetMinHeight(Ui.Dp(this, 42));
+    }
+
+    /// <summary>Служебная кнопка шапки (MTProto, «Добавить»): одна строка, ниже основного действия.</summary>
+    private void CompactHeaderUtilityButton(TextView button)
+    {
+        button.TextSize = Ui.Sp(12f);
+        button.SetSingleLine(true);
+        button.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        button.SetMinHeight(Ui.Dp(this, 38));
     }
 
     /// <summary>Градиент и цвет значка для кнопки шапки.</summary>
@@ -681,15 +911,68 @@ public sealed partial class MainActivity : BaseActivity
     }
 
     /// <summary>
-    /// Мини-иконка сервиса и число проверенных серверов с доступом к нему:
-    /// пользователь сразу видит, сколько серверов готово для каждой кнопки.
+    /// Кнопка сервиса в шапке: нажатие подключает к сервису, а на самой кнопке —
+    /// сколько серверов к нему готовы. Раньше это были отдельные кнопки на «Подключении»
+    /// и некликабельные счётчики в шапке — теперь одно и то же.
     /// </summary>
-    private LinearLayout ServiceCounter(int icon, Color tone, out TextView? count, bool tintIcon = true)
+    private LinearLayout ServiceHeaderButton(
+        string label,
+        int icon,
+        NodeStore.QuickService service,
+        Color tone,
+        Color surface,
+        out TextView? count,
+        bool tintIcon = true)
+    {
+        var layout = Ui.Row(this);
+        layout.SetPadding(Ui.Dp(this, Ui.IsCompactLayout ? 6 : 8), Ui.Dp(this, 6),
+            Ui.Dp(this, Ui.IsCompactLayout ? 6 : 8), Ui.Dp(this, 6));
+        layout.Background = Ui.Pressable(this, surface, Ui.Blend(surface, tone, 0.16f), 12,
+            Color.Argb(120, tone.R, tone.G, tone.B));
+        layout.Clickable = true;
+        layout.Focusable = true;
+        layout.Click += (_, _) => StartForService(service);
+        layout.SetMinimumHeight(Ui.Dp(this, 40));
+
+        var image = new ImageView(this);
+        var drawable = Ui.Icon(this, icon);
+        if (drawable is not null)
+        {
+            if (tintIcon)
+            {
+                drawable.SetTint(tone);
+            }
+
+            image.SetImageDrawable(drawable);
+        }
+
+        var iconSide = Ui.Dp(this, Ui.IsCompactLayout ? 16 : 18);
+        layout.AddView(image, new LinearLayout.LayoutParams(iconSide, iconSide));
+
+        var text = Ui.Text(this, label, Ui.IsCompactLayout ? 11.5f : 12.5f, tone, bold: true);
+        text.SetSingleLine(true);
+        text.Ellipsize = Android.Text.TextUtils.TruncateAt.End;
+        text.SetPadding(Ui.Dp(this, 6), 0, Ui.Dp(this, 4), 0);
+        layout.AddView(text, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+
+        // Счётчик сервиса — прямо на кнопке.
+        count = Ui.Text(this, "—", Ui.IsCompactLayout ? 11.5f : 12.5f, tone, bold: true);
+        count.SetSingleLine(true);
+        layout.AddView(count, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent));
+        return layout;
+    }
+
+    /// <summary>
+    /// Некликабельный счётчик (например, общее число рабочих серверов): иконка + число.
+    /// Кнопки сервисов со счётчиками — <see cref="ServiceHeaderButton"/>.
+    /// </summary>
+    private LinearLayout CounterChip(int icon, Color tone, out TextView? count, bool tintIcon = true)
     {
         var chip = Ui.Row(this);
         chip.SetPadding(Ui.Dp(this, 6), Ui.Dp(this, 4), Ui.Dp(this, 6), Ui.Dp(this, 4));
-        chip.Background = Ui.Rounded(Color.Argb(28, tone.R, tone.G, tone.B), 10, this,
-            Color.Argb(90, tone.R, tone.G, tone.B));
+        chip.Background = Ui.Rounded(Color.Argb(36, tone.R, tone.G, tone.B), 10, this,
+            Color.Argb(120, tone.R, tone.G, tone.B));
 
         var image = new ImageView(this);
         var drawable = Ui.Icon(this, icon);
@@ -719,17 +1002,18 @@ public sealed partial class MainActivity : BaseActivity
     {
         if (_workingCount is not null)
         {
-            // Общее число рабочих серверов — из списка рабочих, отдельно от значков сервисов.
+            // Рабочие — с иконкой-щитом и подписью «рабочих серверов».
             _workingCount.Text = workingServers.ToString();
         }
 
         if (_workingDelta is not null)
         {
-            // Одна цифра у значка — последнее изменение: «+2» или «−1». Держим её,
-            // пока число рабочих снова не изменится; при нуле не показываем.
+            // Слот под дельту держим всегда (место зарезервировано), чтобы подпись
+            // «рабочих серверов» не прыгала. При нуле показываем пустой слот.
             if (_workingChange == 0)
             {
-                _workingDelta.Visibility = ViewStates.Gone;
+                _workingDelta.Text = string.Empty;
+                _workingDelta.Visibility = ViewStates.Invisible;
             }
             else
             {
@@ -761,6 +1045,125 @@ public sealed partial class MainActivity : BaseActivity
         }
     }
 
+    /// <summary>
+    /// Значки сервисов у выбранного (подключённого) сервера — как блок сервисов
+    /// в карточке отсева: пользователь сразу видит, что именно открывает текущий сервер.
+    /// В отличие от счётчиков ниже, это не «сколько серверов готовы к сервису», а
+    /// «какие сервисы открывает именно этот сервер».
+    /// </summary>
+    private void UpdateServerServices(ProxyNode? node, bool running)
+    {
+        if (_serverServicesRow is null || _serverServicesBadges is null)
+        {
+            return;
+        }
+
+        // Показываем только для реально подключённого сервера: до подключения значки
+        // относились бы к серверу, через который трафик не идёт.
+        if (!running || node is null)
+        {
+            // Пока нет подключения — заглушка «—»: блок не пустует и не прыгает по высоте.
+            if (_serverServicesSignature != "none")
+            {
+                _serverServicesSignature = "none";
+                _serverServicesBadges.RemoveAllViews();
+                _serverServicesBadges.AddView(Ui.Badge(this, P, "—", P.Muted));
+            }
+
+            _serverServicesRow.Visibility = ViewStates.Visible;
+            return;
+        }
+
+        // Пересобираем значки только когда сменился сервер или его отметки сервисов:
+        // шапка обновляется каждые несколько секунд, лишние View на каждый такт не нужны.
+        var signature = string.Join('|',
+            node.Id,
+            node.YoutubeOk == true,
+            node.TelegramOk == true,
+            node.DiscordOk == true,
+            node.UniversalOk == true);
+        if (signature == _serverServicesSignature)
+        {
+            _serverServicesRow.Visibility = ViewStates.Visible;
+            return;
+        }
+
+        _serverServicesSignature = signature;
+        _serverServicesBadges.RemoveAllViews();
+        var any = false;
+
+        if (node.YoutubeOk == true)
+        {
+            AddServiceBadge(Resource.Drawable.ic_service_youtube_brand, "YT", P.YouTube, tintIcon: false);
+            any = true;
+        }
+
+        if (node.TelegramOk == true && !DeviceProfile.IsTelevision)
+        {
+            AddServiceBadge(Resource.Drawable.ic_service_telegram, "TG", P.Telegram);
+            any = true;
+        }
+
+        if (node.DiscordOk == true && !DeviceProfile.IsTelevision)
+        {
+            AddServiceBadge(Resource.Drawable.ic_service_discord, "DS", P.Discord);
+            any = true;
+        }
+
+        if (node.UniversalOk == true)
+        {
+            AddServiceBadge(
+                DeviceProfile.IsTelevision ? Resource.Drawable.ic_service_zona : Resource.Drawable.ic_service_universal,
+                DeviceProfile.IsTelevision ? "Zona" : "Другие", P.Universal);
+            any = true;
+        }
+
+        if (!any)
+        {
+            // Сервер выбран, но отметок сервисов нет (старый кэш или ещё не проверен).
+            var hint = Ui.Text(this, "Сервисы не отмечены", 11f, P.Muted);
+            _serverServicesBadges.AddView(hint);
+        }
+
+        _serverServicesRow.Visibility = ViewStates.Visible;
+    }
+
+    /// <summary>Значок сервиса (иконка + подпись) для блока «Сервер открывает».</summary>
+    private void AddServiceBadge(int icon, string label, Color tone, bool tintIcon = true)
+    {
+        if (_serverServicesBadges is null)
+        {
+            return;
+        }
+
+        var chip = Ui.Row(this);
+        chip.SetPadding(Ui.Dp(this, 6), Ui.Dp(this, 3), Ui.Dp(this, 7), Ui.Dp(this, 3));
+        chip.Background = Ui.Rounded(Color.Argb(40, tone.R, tone.G, tone.B), 9, this,
+            Color.Argb(110, tone.R, tone.G, tone.B));
+
+        var image = new ImageView(this);
+        var drawable = Ui.Icon(this, icon);
+        if (drawable is not null)
+        {
+            if (tintIcon)
+            {
+                drawable.SetTint(tone);
+            }
+
+            image.SetImageDrawable(drawable);
+        }
+
+        chip.AddView(image, new LinearLayout.LayoutParams(Ui.Dp(this, 13), Ui.Dp(this, 13)));
+        var text = Ui.Text(this, label, 11f, tone, bold: true);
+        text.SetPadding(Ui.Dp(this, 4), 0, 0, 0);
+        chip.AddView(text);
+
+        var layout = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent);
+        layout.RightMargin = Ui.Dp(this, 5);
+        _serverServicesBadges.AddView(chip, layout);
+    }
+
     private void RefreshHeader()
     {
         if (_statusText is null)
@@ -779,7 +1182,7 @@ public sealed partial class MainActivity : BaseActivity
             ? bypass ? "TUN-обход (бета)" : "Подключено"
             : connecting
                 ? bypass ? "Запускаю TUN-обход (бета)…" : "Подключаюсь…"
-                : "VPN не подключён";
+                : "VPN отключён";
         if (_stateDot is not null)
         {
             _stateDot.SetTextColor(running ? P.Positive : connecting ? P.Warning : P.Muted);
@@ -787,21 +1190,20 @@ public sealed partial class MainActivity : BaseActivity
 
         if (_disconnect is not null)
         {
-            // «Отключить» видно и во время поиска сервера: нажатие прерывает поиск.
-            // Пока только подключаемся (туннеля ещё нет), честнее подпись «Отмена».
-            _disconnect.Text = _connecting && !running ? "Отмена" : "Отключить";
-            _disconnect.Visibility = running || serviceStarting || _connecting || CoreRuntime.IsRunning
-                ? ViewStates.Visible
-                : ViewStates.Gone;
+            // Значок питания виден всегда; без активности — приглушён и неактивен.
+            var canDisconnect = running || serviceStarting || _connecting || CoreRuntime.IsRunning;
+            _disconnect.Visibility = ViewStates.Visible;
+            _disconnect.Enabled = canDisconnect;
+            _disconnect.Alpha = canDisconnect ? 1f : 0.4f;
         }
 
         if (_nextNodeButton is not null)
         {
-            // «Сменить сервер» — отдельная кнопка на всю ширину; без подключения
-            // она неактивна и приглушена, чтобы не выглядела доступной.
+            // «Сменить сервер» виден всегда; без активности — приглушён и неактивен.
+            var showNext = running && !_connecting;
             _nextNodeButton.Visibility = ViewStates.Visible;
-            _nextNodeButton.Enabled = running && !_connecting;
-            _nextNodeButton.Alpha = _nextNodeButton.Enabled ? 1f : 0.55f;
+            _nextNodeButton.Enabled = showNext;
+            _nextNodeButton.Alpha = showNext ? 1f : 0.4f;
         }
 
         var selected = NodeStore.Selected;
@@ -828,41 +1230,66 @@ public sealed partial class MainActivity : BaseActivity
         }
 
         var rating = Rating(selected?.DelayMs);
-        if (_nodeText is not null)
+        if (_nodeText is not null && _nodeSubText is not null && _delayText is not null)
         {
             if (bypass)
             {
-                _nodeText.Text = "Прокси-сервер не используется · стратегия TUN-обхода";
+                _nodeText.Text = "TUN-обход";
+                _delayText.Text = string.Empty;
+                _nodeSubText.Text = "Прокси-сервер не используется";
             }
             else if (!running)
             {
-                // Без активного туннеля не показываем остатки прошлой сессии:
-                // пинг, скорость и звёзды относились к серверу, который уже отключён.
-                _nodeText.Text = connecting
-                    ? "Выбираю проверенный сервер…"
-                    : "Сервер не подключён — нажмите кнопку сервиса";
+                // Без активного туннеля не показываем остатки прошлой сессии.
+                _nodeText.Text = connecting ? "Подключаюсь…" : "Сервер не подключён";
+                _delayText.Text = string.Empty;
+                _nodeSubText.Text = connecting ? "Выбираю проверенный сервер…" : "Нажмите кнопку сервиса";
             }
             else if (selected is null)
             {
                 _nodeText.Text = "Сервер не выбран";
+                _delayText.Text = string.Empty;
+                _nodeSubText.Text = string.Empty;
             }
             else
             {
-                var name = NodeDisplay.Name(selected);
-                if (name.Length > 42)
+                _nodeText.Text = NodeDisplay.Name(selected);
+                _delayText.Text = selected.DisplayDelay;
+                _delayText.SetTextColor(rating >= 4 ? P.Positive : rating >= 2 ? P.Warning : P.Danger);
+
+                // IP, скорость и звёзды — разными цветами.
+                var sub = new Android.Text.SpannableStringBuilder();
+                void Part(string text, Color color)
                 {
-                    name = name[..41] + "…";
+                    if (sub.Length() > 0)
+                    {
+                        sub.Append(" · ");
+                    }
+
+                    var start = sub.Length();
+                    sub.Append(text);
+                    sub.SetSpan(new Android.Text.Style.ForegroundColorSpan(color), start, sub.Length(),
+                        Android.Text.SpanTypes.ExclusiveExclusive);
                 }
 
-                var endpoint = string.IsNullOrWhiteSpace(selected.Server)
-                    ? string.Empty
-                    : $"{selected.Server}:{selected.Port}";
-                var endpointPart = string.IsNullOrWhiteSpace(endpoint) ||
-                                   name.Contains(endpoint, StringComparison.OrdinalIgnoreCase)
-                    ? string.Empty
-                    : " · " + endpoint;
-                var speed = selected.SpeedMbps is { } mbps ? $" · {mbps:0.#} Мбит/с" : string.Empty;
-                _nodeText.Text = $"{name}{endpointPart} · {selected.DisplayDelay}{speed} · {new string('★', rating)}{new string('☆', 5 - rating)}";
+                if (!string.IsNullOrWhiteSpace(selected.Server))
+                {
+                    var endpoint = $"{selected.Server}:{selected.Port}";
+                    // Если имя сервера — это сам адрес, второй раз не дублируем.
+                    if (!_nodeText.Text.Contains(endpoint, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Part(endpoint, P.MutedStrong);
+                    }
+                }
+
+                if (selected.SpeedMbps is { } mbps)
+                {
+                    Part($"{mbps:0.#} Мбит/с", P.Accent);
+                }
+
+                Part(new string('★', rating) + new string('☆', 5 - rating),
+                    rating >= 4 ? P.Positive : rating >= 2 ? P.Warning : P.Danger);
+                _nodeSubText.SetText(sub, TextView.BufferType.Spannable);
             }
         }
 
@@ -880,14 +1307,6 @@ public sealed partial class MainActivity : BaseActivity
                         : "Выход: определяется…";
         }
 
-        if (_speedText is not null)
-        {
-            var show = NodeStore.Settings.ShowTraffic;
-            _speedText.Visibility = show ? ViewStates.Visible : ViewStates.Gone;
-            var speed = running ? NetworkProbe.CachedSpeed ?? NodeStore.Selected?.SpeedMbps : null;
-            _speedText.Text = speed is null ? "Скорость: —" : $"Скорость: {speed:0.#} Мбит/с";
-        }
-
         if (_trafficText is not null)
         {
             var show = NodeStore.Settings.ShowTraffic;
@@ -896,6 +1315,9 @@ public sealed partial class MainActivity : BaseActivity
                 ? "Трафик: —"
                 : $"Трафик: ↓ {FormatBytes(_downBytes)} · ↑ {FormatBytes(_upBytes)}";
         }
+
+        // Что именно открывает подключённый сервер — значки сервисов под его данными.
+        UpdateServerServices(selected, running);
 
         if (_connectionStatus is not null)
         {
@@ -1313,7 +1735,8 @@ public sealed partial class MainActivity : BaseActivity
 
         var enabled = SettingsStore.Current.IdleTestEnabled &&
                       AndroidSettingsStore.Current.AutoProbe;
-        _autoButton.Text = enabled ? "● Авто-проверка: вкл" : "○ Авто-проверка: выкл";
+        var autoLabel = Ui.IsCompactLayout ? "Авто: " : "Авто-проверка: ";
+        _autoButton.Text = (enabled ? "● " : "○ ") + autoLabel + (enabled ? "вкл" : "выкл");
         _autoButton.SetTextColor(enabled ? P.Positive : P.MutedStrong);
     }
 
@@ -1379,7 +1802,7 @@ public sealed partial class MainActivity : BaseActivity
     private TextView? _findButton;
     private TextView? _autoButton;
 
-    private TextView? _nextNodeButton;
+    private LinearLayout? _nextNodeButton;
 
     /// <summary>
     /// Сколько партий по 150 серверов проверять, пока не найдётся сервер с доступом к сервису.
@@ -1756,6 +2179,7 @@ public sealed partial class MainActivity : BaseActivity
             Hint = "vless://… или 1.2.3.4:443",
         };
         input.SetSingleLine(true);
+        Ui.StyleSystemText(input, 14.5f);
         input.SetTextColor(P.TextSoft());
         input.SetHintTextColor(P.Muted);
         var dialog = new AlertDialog.Builder(this)

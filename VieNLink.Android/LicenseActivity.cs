@@ -33,9 +33,10 @@ public sealed class LicenseActivity : BaseActivity
 
         _view = new TextView(this)
         {
-            TextSize = 11.5f,
+            TextSize = Ui.Sp(11.5f),
             Typeface = Android.Graphics.Typeface.Monospace,
         };
+        _view.SetIncludeFontPadding(false);
         _view.SetTextColor(P.MutedStrong);
         _view.SetTextIsSelectable(true);
         _view.SetBackgroundColor(P.Inner);

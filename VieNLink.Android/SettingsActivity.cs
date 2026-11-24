@@ -54,6 +54,7 @@ public sealed class SettingsActivity : BaseActivity
             Checked = ThemeManager.IsLight,
         };
         theme.SetTextColor(P.TextSoft());
+        Ui.StyleSystemText(theme, 14.5f);
         theme.CheckedChange += (_, args) =>
         {
             if (SettingsStore.Current.Theme.Equals(args.IsChecked ? "Light" : "Dark", StringComparison.OrdinalIgnoreCase))
@@ -199,6 +200,7 @@ public sealed class SettingsActivity : BaseActivity
     {
         var box = new CheckBox(this) { Text = title, Checked = value };
         box.SetTextColor(P.TextSoft());
+        Ui.StyleSystemText(box, 14.5f);
         box.CheckedChange += (_, args) =>
         {
             apply(args.IsChecked);

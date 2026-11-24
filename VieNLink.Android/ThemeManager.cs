@@ -1,6 +1,7 @@
 using Android.App;
 using Android.Content;
 using Android.Content.PM;
+using Android.Content.Res;
 using Android.Graphics;
 using Android.OS;
 using Android.Views;
@@ -169,6 +170,25 @@ public abstract class BaseActivity : Activity
         }
     }
 
+    /// <summary>
+    /// Поворот планшета, изменение размера окна (несколько окон), смена системного
+    /// шрифта. Android не пересоздаёт такие экраны, поэтому метрики пересчитываются
+    /// здесь, а экран перестраивает содержимое.
+    /// </summary>
+    public override void OnConfigurationChanged(Configuration newConfig)
+    {
+        base.OnConfigurationChanged(newConfig);
+        DeviceProfile.Initialize(this);
+        P = ThemeManager.Palette;
+        ThemeManager.ApplyWindow(this, P);
+        OnLayoutConfigurationChanged();
+    }
+
+    /// <summary>Экран перестраивает раскладку под новые размеры. По умолчанию — ничего.</summary>
+    protected virtual void OnLayoutConfigurationChanged()
+    {
+    }
+
     /// <summary>Корневой экран: фон, отступы системных панелей и прокрутка содержимого.</summary>
     protected void SetPage(View content, bool scroll = true, bool withInsets = true)
     {
@@ -187,16 +207,23 @@ public abstract class BaseActivity : Activity
 
         var root = new FrameLayout(this);
         root.SetBackgroundColor(P.Background);
-        root.AddView(body, new FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.MatchParent));
+        // На планшете длинная колонка кнопок во всю ширину выглядит растянутой:
+        // содержимое ограничено 900dp и стоит по центру. Телефон и ТВ — во всю ширину.
+        var screenWidth = Resources?.DisplayMetrics?.WidthPixels ?? 0;
+        var maxContent = Ui.Dp(this, 900);
+        var contentWidth = DeviceProfile.IsTablet && screenWidth > maxContent
+            ? maxContent
+            : ViewGroup.LayoutParams.MatchParent;
+        root.AddView(body, new FrameLayout.LayoutParams(contentWidth, ViewGroup.LayoutParams.MatchParent)
+        {
+            Gravity = GravityFlags.CenterHorizontal,
+        });
 
         if (withInsets)
         {
-            var left = Ui.Dp(this, 16);
-            var top = Ui.StatusBar(this) + Ui.Dp(this, 8);
-            var right = Ui.Dp(this, 16);
-            var bottom = Ui.NavigationBar(this) + Ui.Dp(this, 8);
-            root.SetPadding(left, top, right, bottom);
+            // Реальные WindowInsets (вырез, жестовая навигация), а не только высота
+            // строки состояния из ресурсов.
+            Ui.ApplyInsets(root, 16, 8, 16, 8);
         }
 
         SetContentView(root);
@@ -205,7 +232,7 @@ public abstract class BaseActivity : Activity
     protected LinearLayout ColumnPage()
     {
         var page = new LinearLayout(this) { Orientation = Android.Widget.Orientation.Vertical };
-        page.SetPadding(0, 0, 0, Ui.Dp(this, 24));
+        page.SetPadding(0, 0, 0, Ui.Dp(this, Ui.IsShortLayout ? 12 : 24));
         return page;
     }
 

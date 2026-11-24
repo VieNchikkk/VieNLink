@@ -94,6 +94,7 @@ public sealed class BypassActivity : BaseActivity
             Checked = SettingsStore.Current.TunBypassBlockQuic,
         };
         quic.SetTextColor(P.TextSoft());
+        Ui.StyleSystemText(quic);
         quic.CheckedChange += (_, args) =>
         {
             SettingsStore.Current.TunBypassBlockQuic = args.IsChecked;
@@ -139,7 +140,7 @@ public sealed class BypassActivity : BaseActivity
     {
         var button = new Button(this) { Text = text };
         button.SetTextColor(P.AccentContrast);
-        button.SetTextSize(Android.Util.ComplexUnitType.Sp, 13.5f);
+        Ui.StyleSystemText(button, 13.5f);
         button.SetTypeface(Typeface.Create("sans-serif-medium", TypefaceStyle.Normal), TypefaceStyle.Normal);
         button.Background = Ui.Pressable(this, P.Accent, Ui.Blend(P.Accent, P.White, 0.15f), 14);
         button.Click += (_, _) => click();
@@ -150,7 +151,7 @@ public sealed class BypassActivity : BaseActivity
     {
         var button = new Button(this) { Text = text };
         button.SetTextColor(P.Text);
-        button.SetTextSize(Android.Util.ComplexUnitType.Sp, 13.5f);
+        Ui.StyleSystemText(button, 13.5f);
         button.Background = Ui.Pressable(this, P.Surface, P.Inner, 14, P.Border);
         button.Click += (_, _) => click();
         return button;

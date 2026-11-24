@@ -12,30 +12,38 @@ namespace VieNLink;
 /// </summary>
 public partial class MainWindow
 {
-    /// <summary>Фиксированный размер окна: подобран так, чтобы шапка и кнопки помещались.</summary>
+    /// <summary>Желаемый размер окна: подобран так, чтобы шапка и кнопки помещались.</summary>
     private const double PreferredWindowWidth = 980;
 
     private const double PreferredWindowHeight = 680;
 
+    /// <summary>Нижняя граница для обычных экранов; на маленьких подгоняется под рабочую область.</summary>
     private const double MinimumWindowWidth = 953;
     private const double MinimumWindowHeight = 620;
 
     private readonly DispatcherTimer _placementSaveTimer = new() { Interval = TimeSpan.FromMilliseconds(700) };
 
-    /// <summary>Подгоняет размер окна под экран и фиксирует его (только свернуть/восстановить).</summary>
+    /// <summary>
+    /// Подгоняет размер окна под экран: на большом мониторе — 980×680, на маленьком
+    /// (ноутбук 1366×768 при масштабе 125–150 %) — меньше, но целиком в рабочей области.
+    /// Раньше минимум 953×620 был жёстким, и при высоте рабочей области 582dp окно
+    /// выходило за нижний край экрана.
+    /// </summary>
     private void InitializeWindowGeometry()
     {
         var area = SystemParameters.WorkArea;
-        var width = Math.Clamp(PreferredWindowWidth, MinimumWindowWidth, Math.Max(MinimumWindowWidth, area.Width - 40));
-        var height = Math.Clamp(PreferredWindowHeight, MinimumWindowHeight, Math.Max(MinimumWindowHeight, area.Height - 60));
+        var minWidth = Math.Min(MinimumWindowWidth, Math.Max(760, area.Width - 24));
+        var minHeight = Math.Min(MinimumWindowHeight, Math.Max(420, area.Height - 24));
+        var width = Math.Clamp(PreferredWindowWidth, minWidth, Math.Max(minWidth, area.Width - 24));
+        var height = Math.Clamp(PreferredWindowHeight, minHeight, Math.Max(minHeight, area.Height - 24));
 
         // Размер в DIPs одинаков на любом масштабе экрана, поэтому окно не «прыгает» при смене DPI.
         // Обычный размер фиксирован: растянуть окно нельзя, но свернуть и развернуть можно.
         Width = width;
         Height = height;
-        MinWidth = width;
+        MinWidth = minWidth;
         MaxWidth = double.PositiveInfinity;
-        MinHeight = height;
+        MinHeight = minHeight;
         MaxHeight = double.PositiveInfinity;
         ResizeMode = ResizeMode.CanResize;
         SourceInitialized += (_, _) =>
