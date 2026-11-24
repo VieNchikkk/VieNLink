@@ -46,7 +46,7 @@ internal sealed class TunBypassService : IAsyncDisposable
         await SingBoxCore.EnsureAsync(progress, cancellationToken);
         await SingBoxCore.EnsureWintunAsync(progress, cancellationToken);
 
-        await _forwarder.StartAsync(mode, 0);
+        await _forwarder.StartAsync(mode, 0, settings.TunBypassAllHosts);
         try
         {
             _apiPort = FindFreePort(20950);

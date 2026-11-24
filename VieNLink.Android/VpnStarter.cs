@@ -29,6 +29,24 @@ internal static class VpnStarter
     public static void StartAuto(Context context) =>
         StartForeground(context, new Intent(context, typeof(TunnelService)).SetAction(TunnelService.ActionAuto));
 
+    /// <summary>
+    /// Включение «как в прошлый раз»: если последним был TUN-обход — поднимаем его
+    /// с пресетом текущей сети, иначе обычное подключение к серверу.
+    /// </summary>
+    public static void StartPreferred(Context context)
+    {
+        if (AndroidSettingsStore.Current.LastRunWasBypass)
+        {
+            var mode = Enum.TryParse<StreamFragmentMode>(NetworkPresets.GetPage(context), out var parsed)
+                ? parsed
+                : StreamFragmentMode.Oob;
+            StartBypass(context, mode);
+            return;
+        }
+
+        StartAuto(context);
+    }
+
     /// <summary>TUN-обход без сервера: служба поднимет форвардер и TUN-конфиг.</summary>
     public static void StartBypass(Context context, StreamFragmentMode mode) =>
         StartForeground(context, new Intent(context, typeof(TunnelService))
@@ -55,6 +73,40 @@ internal static class VpnStarter
         // Остановка не показывает уведомление: StartForegroundService здесь привёл бы
         // к падению «не вызван startForeground». Приложение на экране — StartService можно.
         context.StartService(intent);
+    }
+
+    /// <summary>TUN-обход сейчас работает.</summary>
+    public static bool IsBypassRunning =>
+        TunnelService.State == TunnelState.Running && TunnelService.IsBypassMode;
+
+    /// <summary>Прокси-сервер сейчас работает.</summary>
+    public static bool IsServerRunning =>
+        TunnelService.State == TunnelState.Running && !TunnelService.IsBypassMode;
+
+    /// <summary>Режимы взаимоисключающие: обход нельзя включать поверх сервера.</summary>
+    public static bool CanStartBypass(out string reason)
+    {
+        if (IsServerRunning)
+        {
+            reason = "Сначала отключите прокси-сервер";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    /// <summary>Сервер нельзя включать поверх TUN-обхода.</summary>
+    public static bool CanStartServer(out string reason)
+    {
+        if (IsBypassRunning)
+        {
+            reason = "Сначала выключите TUN-обход";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
     }
 
     /// <summary>Человеческое описание состояния службы для экранов.</summary>

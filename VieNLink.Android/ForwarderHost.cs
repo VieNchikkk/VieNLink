@@ -21,7 +21,10 @@ internal static class ForwarderHost
     public static long FragmentedConnections => _forwarder?.FragmentedConnections ?? 0;
 
     /// <summary>Запускает форвардер на свободном порту и возвращает его.</summary>
-    public static async Task<int> StartAsync(StreamFragmentMode mode)
+    public static async Task<int> StartAsync(
+        StreamFragmentMode mode,
+        bool fragmentAllHosts = false,
+        StreamFragmentMode videoMode = StreamFragmentMode.None)
     {
         await Gate.WaitAsync().ConfigureAwait(false);
         try
@@ -30,7 +33,7 @@ internal static class ForwarderHost
 
             var forwarder = new TlsFragmentForwarder();
             TlsFragmentForwarder.Trace = line => AppLog.Write("tun-bypass", line);
-            await forwarder.StartAsync(mode).ConfigureAwait(false);
+            await forwarder.StartAsync(mode, 0, fragmentAllHosts, videoMode).ConfigureAwait(false);
             _forwarder = forwarder;
             Mode = mode;
             return forwarder.Port;

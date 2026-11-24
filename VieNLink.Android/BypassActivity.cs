@@ -24,7 +24,8 @@ public sealed class BypassActivity : BaseActivity
     private const int StatusIntervalMs = 2000;
 
     private readonly List<StreamFragmentStrategy> _strategies = TlsFragmentForwarder.Strategies
-        .OrderByDescending(strategy => strategy.Mode == StreamFragmentMode.RecordSplit)
+        .OrderByDescending(strategy => strategy.Mode == StreamFragmentMode.Oob)
+        .ThenByDescending(strategy => strategy.Mode == StreamFragmentMode.RecordSplit)
         .ToList();
 
     private LinearLayout? _list;
@@ -32,6 +33,11 @@ public sealed class BypassActivity : BaseActivity
     private TextView? _forwarder;
     private Button? _start;
     private Button? _stop;
+    private Button? _autotuneButton;
+    private TextView? _autotuneStatus;
+    private CancellationTokenSource? _autotuneCts;
+    private Spinner? _videoSpinner;
+    private bool _videoSpinnerReady;
     private int _selected;
     private Handler? _handler;
     private Action? _tick;
@@ -41,7 +47,12 @@ public sealed class BypassActivity : BaseActivity
         base.OnCreate(savedInstanceState);
         BuildUi();
 
-        var saved = AndroidSettingsStore.Current.TunBypassStrategy;
+        var saved = NetworkPresets.GetPage(this);
+        if (string.IsNullOrWhiteSpace(saved))
+        {
+            saved = AndroidSettingsStore.Current.TunBypassStrategy;
+        }
+
         _selected = Math.Max(0, _strategies.FindIndex(strategy =>
             strategy.Mode.ToString().Equals(saved, StringComparison.OrdinalIgnoreCase)));
 
@@ -88,6 +99,54 @@ public sealed class BypassActivity : BaseActivity
         actions.AddView(_stop, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         Ui.Add(page, actions, 12);
 
+        var autotune = Ui.Card(P, this);
+        var autotuneTop = Ui.Row(this);
+        autotuneTop.AddView(Ui.Text(this, "Автоподбор стратегии", 14.5f, P.TextStrong, bold: true),
+            new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        autotuneTop.AddView(Ui.Badge(this, P, "5–10 МИН", P.Accent));
+        autotune.AddView(autotuneTop);
+        _autotuneStatus = Ui.Hint(this,
+            "Одна кнопка: сначала перебирает все стратегии для страницы (youtube.com, youtubei, " +
+            "ytimg) и сохраняет рабочую, затем — для видео (googlevideo, ggpht) и тоже сохраняет. " +
+            "Затем обе применяются вместе. Обход должен быть выключен; результат — для текущей сети.", P);
+        _autotuneStatus.SetPadding(0, Ui.Dp(this, 4), 0, Ui.Dp(this, 8));
+        autotune.AddView(_autotuneStatus);
+        _autotuneButton = MakeSecondary("Подобрать всё", RunAutotune);
+        autotune.AddView(_autotuneButton);
+        Ui.Add(page, autotune, 12);
+
+        var videoCard = Ui.Card(P, this);
+        videoCard.AddView(Ui.Text(this, "Стратегия для видео (googlevideo)", 14.5f, P.TextStrong, bold: true));
+        videoCard.AddView(Ui.Hint(this,
+            "Для приложения YouTube обычно работает та же OOB, что и для страниц. " +
+            "Если видео тормозит — подберите отдельную стратегию для googlevideo/ytimg.", P));
+        _videoSpinner = new Spinner(this);
+        var videoItems = new List<string> { "Как для страниц" };
+        videoItems.AddRange(_strategies.Select(strategy => strategy.Name));
+        var videoAdapter = new ArrayAdapter<string>(
+            this, Android.Resource.Layout.SimpleSpinnerItem, videoItems);
+        videoAdapter.SetDropDownViewResource(Android.Resource.Layout.SimpleSpinnerDropDownItem);
+        _videoSpinner.Adapter = videoAdapter;
+        var savedVideo = NetworkPresets.GetVideo(this);
+        var savedVideoIndex = _strategies.FindIndex(
+            strategy => strategy.Mode.ToString().Equals(savedVideo, StringComparison.OrdinalIgnoreCase));
+        _videoSpinner.SetSelection(savedVideoIndex >= 0 ? savedVideoIndex + 1 : 0, false);
+        _videoSpinner.ItemSelected += (_, args) =>
+        {
+            if (!_videoSpinnerReady)
+            {
+                return;
+            }
+
+            var position = (int)args.Position;
+            NetworkPresets.SetVideo(this, position <= 0
+                ? string.Empty
+                : _strategies[position - 1].Mode.ToString());
+        };
+        _videoSpinnerReady = true;
+        videoCard.AddView(_videoSpinner);
+        Ui.Add(page, videoCard, 10);
+
         var quic = new CheckBox(this)
         {
             Text = "Блокировать QUIC (UDP/443), чтобы браузер шёл по TCP",
@@ -106,7 +165,26 @@ public sealed class BypassActivity : BaseActivity
         quicHint.SetPadding(Ui.Dp(this, 28), 0, 0, Ui.Dp(this, 8));
         page.AddView(quicHint);
 
-        page.AddView(Ui.Section(this, "Стратегия фрагментации", P));
+        var allHosts = new CheckBox(this)
+        {
+            Text = "Резать все сайты, а не только YouTube / Telegram / Discord",
+            Checked = SettingsStore.Current.TunBypassAllHosts,
+        };
+        allHosts.SetTextColor(P.TextSoft());
+        Ui.StyleSystemText(allHosts);
+        allHosts.CheckedChange += (_, args) =>
+        {
+            SettingsStore.Current.TunBypassAllHosts = args.IsChecked;
+            SettingsStore.Save();
+        };
+        page.AddView(allHosts);
+        var allHostsHint = Ui.Hint(this,
+            "Если провайдер режет сайты вне встроенного списка. Применяется при следующем " +
+            "включении обхода; первые запросы к любому сайту могут стать медленнее.", P);
+        allHostsHint.SetPadding(Ui.Dp(this, 28), 0, 0, Ui.Dp(this, 8));
+        page.AddView(allHostsHint);
+
+        page.AddView(Ui.Section(this, "Стратегия фрагментации · " + NetworkPresets.Label(this), P));
         _list = Ui.Column(this);
         page.AddView(_list);
 
@@ -120,7 +198,9 @@ public sealed class BypassActivity : BaseActivity
             "В Windows автоподбор перезапускает TUN и проверяет сайты через curl.exe. На Android " +
             "сам процесс приложения исключён из TUN (иначе запросы ядра ушли бы в него же), поэтому " +
             "проверить результат изнутри нельзя. В разработке: отдельный процесс проверки, как :probe " +
-            "для серверов. Пока выберите стратегию вручную — «Разрез TLS-записей» обычно лучший.", P));
+            "для серверов. Пока выберите стратегию вручную: начните с рекомендуемой «Разрез TLS-записей», " +
+            "затем пробуйте «Разрез полосы SNI» и «Медленный разрез SNI». Если провайдер режет сайты " +
+            "вне встроенного списка — включите «Резать все сайты».", P));
         Ui.Add(page, dev, 14);
 
         var profile = BypassProfileStore.Ranked("tun").FirstOrDefault();
@@ -169,6 +249,8 @@ public sealed class BypassActivity : BaseActivity
         {
             var strategy = _strategies[index];
             var selected = index == _selected;
+            // Лямбда захватывает переменную цикла: без копии после for там остаётся Count.
+            var selectedIndex = index;
             var card = Ui.Column(this);
             card.SetPadding(Ui.Dp(this, 14), Ui.Dp(this, 11), Ui.Dp(this, 14), Ui.Dp(this, 11));
             card.Background = Ui.Rounded(selected ? P.AccentSurface : P.Card, 14, this,
@@ -176,16 +258,15 @@ public sealed class BypassActivity : BaseActivity
             card.Clickable = true;
             card.Click += (_, _) =>
             {
-                _selected = index;
-                AndroidSettingsStore.Current.TunBypassStrategy = strategy.Mode.ToString();
-                AndroidSettingsStore.Save();
+                _selected = selectedIndex;
+                NetworkPresets.SetPage(this, strategy.Mode.ToString());
                 RenderStrategies();
             };
 
             var row = Ui.Row(this);
             row.AddView(Ui.Text(this, strategy.Name, 14f, selected ? P.Accent : P.TextStrong, bold: true),
                 new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-            if (strategy.Mode == StreamFragmentMode.RecordSplit)
+            if (strategy.Mode == StreamFragmentMode.Oob)
             {
                 row.AddView(Ui.Badge(this, P, "РЕКОМЕНДУЕТСЯ", P.Positive));
             }
@@ -235,6 +316,17 @@ public sealed class BypassActivity : BaseActivity
 
     private void StartBypass()
     {
+        if (!VpnStarter.CanStartBypass(out var blockedReason))
+        {
+            Ui.Toast(this, blockedReason);
+            return;
+        }
+
+        if (_selected < 0 || _selected >= _strategies.Count)
+        {
+            _selected = 0;
+        }
+
         var strategy = _strategies[_selected];
         AndroidSettingsStore.Current.TunBypassStrategy = strategy.Mode.ToString();
         AndroidSettingsStore.Save();
@@ -276,12 +368,118 @@ public sealed class BypassActivity : BaseActivity
 
         if (resultCode == Result.Ok)
         {
+            if (_selected < 0 || _selected >= _strategies.Count)
+            {
+                _selected = 0;
+            }
+
             Launch(_strategies[_selected]);
         }
         else
         {
             Ui.Toast(this, "Разрешение VPN не выдано");
         }
+    }
+
+    private async void RunAutotune()
+    {
+        if (TunnelService.State == TunnelState.Running || ForwarderHost.IsRunning)
+        {
+            Ui.Toast(this, "Сначала выключите обход");
+            return;
+        }
+
+        if (_autotuneCts is not null)
+        {
+            _autotuneCts.Cancel();
+            return;
+        }
+
+        _autotuneCts = new CancellationTokenSource();
+        SetAutotuneEnabled(false);
+
+        IProgress<string> progress = new Progress<string>(line =>
+        {
+            if (_autotuneStatus is not null)
+            {
+                _autotuneStatus.Text = line;
+            }
+        });
+
+        try
+        {
+            progress.Report("Страница: перебираю стратегии…");
+            var page = await StrategyAutotune.RunAsync(AutotuneScope.Page, progress, _autotuneCts.Token);
+            if (page.Strategy is not null)
+            {
+                var index = _strategies.IndexOf(page.Strategy);
+                if (index >= 0)
+                {
+                    _selected = index;
+                    NetworkPresets.SetPage(this, page.Strategy.Mode.ToString());
+                    RenderStrategies();
+                }
+            }
+
+            progress.Report("Видео: перебираю стратегии…");
+            var video = await StrategyAutotune.RunAsync(AutotuneScope.Video, progress, _autotuneCts.Token);
+            var videoStrategy = video.Strategy ?? page.Strategy;
+            if (videoStrategy is not null)
+            {
+                NetworkPresets.SetVideo(this, videoStrategy.Mode.ToString());
+                if (_videoSpinner is not null)
+                {
+                    var index = _strategies.FindIndex(item => item.Mode == videoStrategy.Mode);
+                    _videoSpinner.SetSelection(index >= 0 ? index + 1 : 0, false);
+                }
+            }
+
+            if (page.Strategy is not null || videoStrategy is not null)
+            {
+                Ui.Toast(this,
+                    $"{NetworkPresets.Label(this)}: страница {page.Strategy?.Name ?? "—"} " +
+                    $"({page.Score}/{page.Total}), видео {videoStrategy?.Name ?? "—"} " +
+                    $"({video.Score}/{video.Total})");
+
+                // Сразу применяем: обе стратегии сохранены, включаем обход.
+                if (page.Strategy is not null)
+                {
+                    StartBypass();
+                }
+            }
+            else
+            {
+                Ui.Toast(this, "Ни одна стратегия не открыла домены YouTube");
+            }
+        }
+        catch (System.OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            Ui.Toast(this, "Подбор не удался: " + exception.Message);
+        }
+        finally
+        {
+            _autotuneCts.Dispose();
+            _autotuneCts = null;
+            SetAutotuneEnabled(true);
+        }
+    }
+
+    private void SetAutotuneEnabled(bool enabled)
+    {
+        if (_autotuneButton is not null)
+        {
+            _autotuneButton.Enabled = enabled;
+            _autotuneButton.Alpha = enabled ? 1f : 0.5f;
+        }
+    }
+
+    protected override void OnDestroy()
+    {
+        _autotuneCts?.Cancel();
+        base.OnDestroy();
     }
 
     private void RefreshStatus()

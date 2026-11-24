@@ -111,10 +111,16 @@ public sealed partial class MainActivity
 
     private void StartLastBypass()
     {
-        var name = AndroidSettingsStore.Current.TunBypassStrategy;
+        if (!VpnStarter.CanStartBypass(out var blockedReason))
+        {
+            Ui.Toast(this, blockedReason);
+            return;
+        }
+
+        var name = NetworkPresets.GetPage(this);
         var mode = Enum.TryParse<StreamFragmentMode>(name, out var parsed)
             ? parsed
-            : StreamFragmentMode.RecordSplit;
+            : StreamFragmentMode.Oob;
 
         var request = VpnStarter.PrepareRequest(this);
         if (request is not null)

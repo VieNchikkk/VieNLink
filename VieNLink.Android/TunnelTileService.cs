@@ -28,7 +28,7 @@ public sealed class TunnelTileService : TileService
         }
         else
         {
-            VpnStarter.StartAuto(this);
+            VpnStarter.StartPreferred(this);
         }
 
         UpdateTile();

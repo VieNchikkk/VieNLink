@@ -489,6 +489,12 @@ public sealed class TelegramActivity : BaseActivity
                 return;
             }
 
+            if (!VpnStarter.CanStartServer(out var blockedReason))
+            {
+                Ui.Toast(this, blockedReason);
+                return;
+            }
+
             VpnStarter.Start(this, config);
             SetStatus("Telegram через сервер: туннель запускается");
         }
@@ -531,6 +537,13 @@ public sealed class TelegramActivity : BaseActivity
 
         if (resultCode == Result.Ok && _pendingConfig is not null)
         {
+            if (!VpnStarter.CanStartServer(out var blockedReason))
+            {
+                Ui.Toast(this, blockedReason);
+                _pendingConfig = null;
+                return;
+            }
+
             VpnStarter.Start(this, _pendingConfig);
             SetStatus("Telegram через сервер: туннель запускается");
         }

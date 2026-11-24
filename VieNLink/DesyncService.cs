@@ -2182,55 +2182,8 @@ internal sealed class DesyncService : IDisposable
         packet[offset + 2] = (byte)value;
     }
 
-    private static readonly string[] BenignHosts =
-    {
-        "www.google.com", "www.google.com.",
-        "www.google.ru", "www.google.ru.",
-        "google.com", "google.com.",
-        "google.ru", "google.ru.",
-        "mail.ru", "mail.ru.",
-        "vk.com", "vk.com.",
-        "ya.ru", "ya.ru.",
-        "x.com", "x.com.",
-        "a.co", "a.co.",
-    };
-
-    /// <summary>Домен той же длины, что и настоящий SNI: DPI проверит его вместо цели.</summary>
-    internal static string BenignHost(int length)
-    {
-        const string seed = "www.google.com";
-        if (length <= 0)
-        {
-            return string.Empty;
-        }
-
-        var exact = BenignHosts.FirstOrDefault(host => host.Length == length);
-        if (exact is not null)
-        {
-            return exact;
-        }
-
-        if (length <= seed.Length)
-        {
-            var candidate = seed[..length];
-            return candidate.EndsWith('.') ? new string('a', length) : candidate;
-        }
-
-        var builder = new StringBuilder(seed);
-        while (builder.Length < length)
-        {
-            if (builder.Length + 2 <= length)
-            {
-                builder.Append(".a");
-            }
-            else
-            {
-                builder.Append('a');
-            }
-        }
-
-        return builder.ToString(0, length);
-    }
+    /// <summary>Домен той же длины, что и настоящий SNI (общий с Android-форвардером).</summary>
+    internal static string BenignHost(int length) => TlsHello.BenignHost(length);
 
     /// <summary>Собирает UDP-пакет с шаблоном QUIC Initial от google и заданным TTL.</summary>
     internal static bool TryBuildQuicFake(byte[] packet, byte[] template, byte ttl, out byte[] fake, out string key)

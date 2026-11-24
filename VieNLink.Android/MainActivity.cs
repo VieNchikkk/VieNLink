@@ -2134,6 +2134,12 @@ public sealed partial class MainActivity : BaseActivity
             return;
         }
 
+        if (!VpnStarter.CanStartServer(out var blockedReason))
+        {
+            Ui.Toast(this, blockedReason);
+            return;
+        }
+
         VpnStarter.Start(this, config);
         ScheduleHeaderRefresh();
         ScheduleExitProbe();
@@ -2423,6 +2429,13 @@ public sealed partial class MainActivity : BaseActivity
 
         if (resultCode == Result.Ok && _pendingConfig is not null)
         {
+            if (!VpnStarter.CanStartServer(out var blockedReason))
+            {
+                Ui.Toast(this, blockedReason);
+                _pendingConfig = null;
+                return;
+            }
+
             VpnStarter.Start(this, _pendingConfig);
             SetConnectionStatus("Подключаюсь…");
             ScheduleHeaderRefresh();

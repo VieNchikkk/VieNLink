@@ -861,6 +861,12 @@ internal sealed class AppSettings
     /// <summary>Блокировать QUIC (UDP/443) в TUN-обходе, чтобы браузер перешёл на TCP.</summary>
     public bool TunBypassBlockQuic { get; set; } = true;
 
+    /// <summary>
+    /// Резать TLS ClientHello для всех сайтов, а не только для встроенного списка
+    /// (YouTube/Telegram/Discord/X/Instagram/Facebook).
+    /// </summary>
+    public bool TunBypassAllHosts { get; set; }
+
     /// <summary>Запускать TUN-обход при старте приложения (нужны права администратора).</summary>
     public bool TunBypassAutoStart { get; set; }
 

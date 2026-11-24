@@ -37,7 +37,24 @@ internal sealed class AndroidSettings
     public DateTime LastMtProtoTestUtc { get; set; }
 
     /// <summary>Стратегия TUN-обхода, выбранная пользователем (имя <see cref="StreamFragmentMode"/>).</summary>
-    public string TunBypassStrategy { get; set; } = "RecordSplit";
+    public string TunBypassStrategy { get; set; } = "Oob";
+
+    /// <summary>
+    /// Отдельная стратегия для видео-CDN (googlevideo/ytimg/ggpht). Пусто — как основная.
+    /// </summary>
+    public string TunBypassVideoStrategy { get; set; } = string.Empty;
+
+    /// <summary>Пресет стратегии для Wi-Fi (страницы и видео-CDN).</summary>
+    public string TunBypassStrategyWifi { get; set; } = "Oob";
+
+    /// <summary>Пресет стратегии для мобильной сети.</summary>
+    public string TunBypassStrategyMobile { get; set; } = "Oob";
+
+    /// <summary>Пресет видео-стратегии для Wi-Fi.</summary>
+    public string TunBypassVideoStrategyWifi { get; set; } = "Oob";
+
+    /// <summary>Пресет видео-стратегии для мобильной сети.</summary>
+    public string TunBypassVideoStrategyMobile { get; set; } = "Oob";
 
     /// <summary>
     /// Последний режим запуска: true — TUN-обход, false — прокси-сервер. Нужен, чтобы

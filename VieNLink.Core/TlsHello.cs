@@ -1,5 +1,7 @@
 namespace VieNLink;
 
+using System.Text;
+
 /// <summary>
 /// Разбор TLS ClientHello и список целевых доменов. Живёт в ядре, потому что нужен
 /// обоим движкам: WinDivert-десинку в Windows и SOCKS5-форвардеру в TUN-обходе
@@ -13,6 +15,7 @@ internal static class TlsHello
     internal static readonly string[] TargetDomains =
     {
         "youtube.com", "youtu.be", "youtube-nocookie.com", "googlevideo.com", "ytimg.com", "ggpht.com",
+        "youtubei.googleapis.com", "youtube.googleapis.com", "gstatic.com", "googleusercontent.com",
         "t.me", "telegram.org", "telegram.me",
         "discord.com", "discordapp.com", "discord.gg",
         "x.com", "twitter.com", "twimg.com",
@@ -36,8 +39,68 @@ internal static class TlsHello
         TargetDomains.Any(domain => host.Equals(domain, StringComparison.OrdinalIgnoreCase) ||
                                     host.EndsWith("." + domain, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>Видео-CDN: для него может понадобиться отдельная стратегия, другой маршрут и TTL.</summary>
+    internal static readonly string[] VideoDomains =
+    {
+        "googlevideo.com", "ytimg.com", "ggpht.com", "youtube-nocookie.com",
+    };
+
+    internal static bool IsVideoHost(string host) =>
+        VideoDomains.Any(domain => host.Equals(domain, StringComparison.OrdinalIgnoreCase) ||
+                                   host.EndsWith("." + domain, StringComparison.OrdinalIgnoreCase));
+
     internal static bool IsTargetPayload(string payload) =>
         TargetDomains.Any(domain => payload.Contains(domain, StringComparison.OrdinalIgnoreCase));
+
+    private static readonly string[] BenignHosts =
+    {
+        "www.google.com", "www.google.com.",
+        "www.google.ru", "www.google.ru.",
+        "google.com", "google.com.",
+        "google.ru", "google.ru.",
+        "mail.ru", "mail.ru.",
+        "vk.com", "vk.com.",
+        "ya.ru", "ya.ru.",
+        "x.com", "x.com.",
+        "a.co", "a.co.",
+    };
+
+    /// <summary>Домен той же длины, что и настоящий SNI: DPI проверит его вместо цели.</summary>
+    internal static string BenignHost(int length)
+    {
+        const string seed = "www.google.com";
+        if (length <= 0)
+        {
+            return string.Empty;
+        }
+
+        var exact = BenignHosts.FirstOrDefault(host => host.Length == length);
+        if (exact is not null)
+        {
+            return exact;
+        }
+
+        if (length <= seed.Length)
+        {
+            var candidate = seed[..length];
+            return candidate.EndsWith('.') ? new string('a', length) : candidate;
+        }
+
+        var builder = new StringBuilder(seed);
+        while (builder.Length < length)
+        {
+            if (builder.Length + 2 <= length)
+            {
+                builder.Append(".a");
+            }
+            else
+            {
+                builder.Append('a');
+            }
+        }
+
+        return builder.ToString(0, length);
+    }
 
     /// <summary>
     /// Находит в полезной нагрузке TCP-сегмента полное имя хоста, оканчивающееся на

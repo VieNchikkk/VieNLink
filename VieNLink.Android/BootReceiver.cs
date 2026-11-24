@@ -36,7 +36,7 @@ public sealed class BootReceiver : BroadcastReceiver
             }
 
             AppLog.Write("android", "Автозапуск: поднимаю туннель после загрузки");
-            VpnStarter.StartAuto(context);
+            VpnStarter.StartPreferred(context);
         }
         catch (Exception exception)
         {

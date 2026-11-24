@@ -901,6 +901,13 @@ public sealed class RejectedActivity : BaseActivity
             return;
         }
 
+        if (!VpnStarter.CanStartServer(out var blockedReason))
+        {
+            Ui.Toast(this, blockedReason);
+            _pendingConfig = null;
+            return;
+        }
+
         _connectedNode = _pendingNode;
         _downBytes = 0;
         _upBytes = 0;

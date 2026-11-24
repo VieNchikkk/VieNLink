@@ -2,7 +2,10 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
+using System.Net.Security;
 using System.Net.Sockets;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json.Nodes;
 
@@ -163,6 +166,9 @@ internal static class Program
                 break;
             case "forwarder":
                 await RunForwarderTestAsync();
+                break;
+            case "forwardertls":
+                await RunForwarderTlsAsync();
                 break;
             case "forwarder-e2e":
                 await RunForwarderE2EAsync();
@@ -334,6 +340,28 @@ internal static class Program
         var streamMulti = TlsFragmentForwarder.BuildStreamPieces(tlsPayload, StreamFragmentMode.MultiSplit);
         Check(streamMulti.Count >= 2 && streamMulti.Sum(piece => piece.Length) == tlsPayload.Length,
             "форвардер: мультиразрез без потерь");
+        var streamStagger = TlsFragmentForwarder.BuildStreamPieces(tlsPayload, StreamFragmentMode.SplitStagger);
+        Check(streamStagger.Count == 4 && streamStagger.Sum(piece => piece.Length) == tlsPayload.Length,
+            "форвардер: ступенчатый разрез на 4 куска без потерь");
+        var streamSniEnd = TlsFragmentForwarder.BuildStreamPieces(tlsPayload, StreamFragmentMode.SplitSniEnd);
+        var sniEndPoint = Math.Min(sniRelative + hello.SniLength, tlsPayload.Length - 1);
+        Check(streamSniEnd.Count == 2 && streamSniEnd[0].Length == sniEndPoint,
+            "форвардер: разрез после домена");
+        var streamSplitBand = TlsFragmentForwarder.BuildStreamPieces(tlsPayload, StreamFragmentMode.SplitSniBand);
+        Check(streamSplitBand.Count == 4 &&
+              streamSplitBand.Sum(piece => piece.Length) == tlsPayload.Length,
+            "форвардер: разрез полосы SNI — четыре куска");
+        var streamDisorder = TlsFragmentForwarder.BuildStreamPieces(tlsPayload, StreamFragmentMode.DisorderSni);
+        Check(streamDisorder.Count == 2 && streamDisorder.Sum(piece => piece.Length) == tlsPayload.Length,
+            "форвардер: перестановка — два куска без потерь");
+        var streamMultiDisorder = TlsFragmentForwarder.BuildStreamPieces(tlsPayload, StreamFragmentMode.MultiDisorder);
+        Check(streamMultiDisorder.Count == 4 &&
+              streamMultiDisorder.Sum(piece => piece.Length) == tlsPayload.Length,
+            "форвардер: мультиперестановка — четыре куска без потерь");
+        Check(TlsFragmentForwarder.Strategies.All(strategy => strategy.Description.Length > 0) &&
+              TlsFragmentForwarder.Strategies.Any(strategy => strategy.DelayMs > 0) &&
+              TlsFragmentForwarder.Strategies.Any(strategy => strategy.Ttl > 0),
+            "форвардер: стратегии описаны, есть пауза и TTL");
 
         var quicPacket = BuildQuicPacket(1200);        var template = new byte[1200];
         template[0] = 0xC0;
@@ -697,6 +725,12 @@ internal static class Program
             StreamFragmentMode.SplitRecord,
             StreamFragmentMode.Split1,
             StreamFragmentMode.MultiSplit,
+            StreamFragmentMode.SplitSniEnd,
+            StreamFragmentMode.SplitStagger,
+            StreamFragmentMode.SplitSniBand,
+            StreamFragmentMode.SplitSlow,
+            StreamFragmentMode.DisorderSni,
+            StreamFragmentMode.MultiDisorder,
         };
         foreach (var mode in modes)
         {
@@ -1641,85 +1675,229 @@ internal static class Program
         var tlsPayload = packet.AsSpan(hello.PayloadOffset, hello.PayloadLength).ToArray();
         var sniRelative = hello.SniOffset - hello.PayloadOffset;
 
-        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        var destination = new TcpListener(IPAddress.Loopback, 0);
-        destination.Start();
-        var destinationPort = ((IPEndPoint)destination.LocalEndpoint).Port;
+        var modes = TlsFragmentForwarder.Strategies
+            .Select(strategy => strategy.Mode)
+            .Append(StreamFragmentMode.None)
+            .Distinct()
+            .ToArray();
 
-        var firstRead = -1;
-        var serverTask = Task.Run(async () =>
+        var greetingChecked = false;
+        foreach (var mode in modes)
         {
-            using var server = await destination.AcceptTcpClientAsync(timeout.Token);
-            var stream = server.GetStream();
-            var buffer = new byte[65536];
-            var total = 0;
-            while (total < tlsPayload.Length)
+            var label = mode.ToString();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var destination = new TcpListener(IPAddress.Loopback, 0);
+            destination.Start();
+            var destinationPort = ((IPEndPoint)destination.LocalEndpoint).Port;
+
+            var firstRead = -1;
+            var serverTask = Task.Run(async () =>
             {
-                var read = await stream.ReadAsync(buffer.AsMemory(total), timeout.Token);
-                if (read == 0)
+                using var server = await destination.AcceptTcpClientAsync(timeout.Token);
+                var stream = server.GetStream();
+                var buffer = new byte[65536];
+                var total = 0;
+                while (total < buffer.Length)
                 {
-                    break;
+                    int read;
+                    try
+                    {
+                        // 300 мс тишины — запрос закончился (OOB-байт сервер не читает).
+                        read = await stream.ReadAsync(buffer.AsMemory(total), timeout.Token)
+                            .AsTask().WaitAsync(TimeSpan.FromMilliseconds(300));
+                    }
+                    catch (TimeoutException)
+                    {
+                        break;
+                    }
+
+                    if (read == 0)
+                    {
+                        break;
+                    }
+
+                    if (firstRead < 0)
+                    {
+                        firstRead = read;
+                    }
+
+                    total += read;
                 }
 
-                if (firstRead < 0)
+                await stream.WriteAsync("ok"u8.ToArray(), timeout.Token);
+                return buffer.AsSpan(0, total).ToArray();
+            }, timeout.Token);
+
+            var forwarder = new TlsFragmentForwarder();
+            try
+            {
+                await forwarder.StartAsync(mode);
+                using var client = new TcpClient();
+                await client.ConnectAsync(IPAddress.Loopback, forwarder.Port, timeout.Token);
+                client.NoDelay = true;
+                var stream = client.GetStream();
+
+                await stream.WriteAsync(new byte[] { 5, 1, 0 }, timeout.Token);
+                var greeting = new byte[2];
+                await stream.ReadExactlyAsync(greeting, timeout.Token);
+                if (!greetingChecked)
                 {
-                    firstRead = read;
+                    Check(greeting[0] == 5 && greeting[1] == 0, "SOCKS5: приветствие без пароля");
+                    greetingChecked = true;
                 }
 
-                total += read;
+                var request = new byte[10];
+                request[0] = 5;
+                request[1] = 1;
+                request[3] = 1;
+                request[4] = 127;
+                request[7] = 1;
+                request[8] = (byte)(destinationPort >> 8);
+                request[9] = (byte)destinationPort;
+                await stream.WriteAsync(request, timeout.Token);
+                var reply = new byte[10];
+                await stream.ReadExactlyAsync(reply, timeout.Token);
+                Check(reply[0] == 5 && reply[1] == 0, $"{label}: SOCKS5-соединение установлено");
+
+                await stream.WriteAsync(tlsPayload, timeout.Token);
+                var response = new byte[2];
+                await stream.ReadExactlyAsync(response, timeout.Token);
+                Check(response[0] == (byte)'o' && response[1] == (byte)'k',
+                    $"{label}: ответ сервера дошёл");
+
+                var received = await serverTask.WaitAsync(TimeSpan.FromSeconds(5));
+                var rewritesStream = mode is StreamFragmentMode.Oob
+                    or StreamFragmentMode.RecordSplit or StreamFragmentMode.RecordSplitStart
+                    or StreamFragmentMode.RecordSplitEnd or StreamFragmentMode.RecordSplitHalf;
+                if (!rewritesStream)
+                {
+                    Check(received.AsSpan().SequenceEqual(tlsPayload),
+                        $"{label}: TLS-поток передан без потерь");
+                }
+                else
+                {
+                    // RecordSplit добавляет заголовки записей, OOB-байт сервер не читает —
+                    // целостность таких стратегий проверяет forwardertls (настоящий TLS).
+                    Check(received.Length > 0, $"{label}: сервер получил данные");
+                }
+
+                if (mode == StreamFragmentMode.SplitSni)
+                {
+                    Check(firstRead > 0 && firstRead < tlsPayload.Length,
+                        $"{label}: ClientHello разрезан (первый read {firstRead} из {tlsPayload.Length})");
+                    Check(firstRead <= sniRelative + 1,
+                        $"{label}: первый кусок заканчивается на SNI (read {firstRead}, SNI+1 {sniRelative + 1})");
+                }
             }
-
-            await stream.WriteAsync("ok"u8.ToArray(), timeout.Token);
-            return buffer.AsSpan(0, total).ToArray();
-        }, timeout.Token);
-
-        var forwarder = new TlsFragmentForwarder();
-        try
-        {
-            await forwarder.StartAsync(StreamFragmentMode.SplitSni);
-            using var client = new TcpClient();
-            await client.ConnectAsync(IPAddress.Loopback, forwarder.Port, timeout.Token);
-            client.NoDelay = true;
-            var stream = client.GetStream();
-
-            await stream.WriteAsync(new byte[] { 5, 1, 0 }, timeout.Token);
-            var greeting = new byte[2];
-            await stream.ReadExactlyAsync(greeting, timeout.Token);
-            Check(greeting[0] == 5 && greeting[1] == 0, "SOCKS5: приветствие без пароля");
-
-            var request = new byte[10];
-            request[0] = 5;
-            request[1] = 1;
-            request[3] = 1;
-            request[4] = 127;
-            request[7] = 1;
-            request[8] = (byte)(destinationPort >> 8);
-            request[9] = (byte)destinationPort;
-            await stream.WriteAsync(request, timeout.Token);
-            var reply = new byte[10];
-            await stream.ReadExactlyAsync(reply, timeout.Token);
-            Check(reply[0] == 5 && reply[1] == 0, "SOCKS5: соединение установлено");
-
-            await stream.WriteAsync(tlsPayload, timeout.Token);
-            var response = new byte[2];
-            await stream.ReadExactlyAsync(response, timeout.Token);
-            Check(response[0] == (byte)'o' && response[1] == (byte)'k', "форвардер: ответ сервера дошёл");
-
-            var received = await serverTask.WaitAsync(TimeSpan.FromSeconds(5));
-            Check(received.AsSpan().SequenceEqual(tlsPayload), "форвардер: TLS-поток передан без потерь");
-            Check(firstRead > 0 && firstRead < tlsPayload.Length,
-                $"форвардер: ClientHello разрезан (первый read {firstRead} из {tlsPayload.Length})");
-            Check(firstRead <= sniRelative + 1,
-                $"форвардер: первый кусок заканчивается на SNI (read {firstRead}, SNI+1 {sniRelative + 1})");
+            catch (Exception exception)
+            {
+                Check(false, $"{label}: {exception.Message}");
+            }
+            finally
+            {
+                await forwarder.StopAsync();
+                destination.Stop();
+            }
         }
-        catch (Exception exception)
+    }
+
+    /// <summary>
+    /// Настоящее TLS-рукопожатие через SOCKS5-форвардер для каждой стратегии: сервер
+    /// самопроверенный, но ClientHello и записи проходят через тот же код, что и на телефоне.
+    /// Ловит стратегии, которые ломают поток (перестановка без raw-сокетов так работать не может).
+    /// </summary>
+    private static async Task RunForwarderTlsAsync()
+    {
+        Console.WriteLine("Стратегии форвардера: TLS-рукопожатие через каждую:");
+
+        using var rsa = RSA.Create(2048);
+        var request = new CertificateRequest(
+            "CN=www.youtube.com", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        var names = new SubjectAlternativeNameBuilder();
+        names.AddDnsName("www.youtube.com");
+        request.CertificateExtensions.Add(names.Build());
+        request.CertificateExtensions.Add(new X509EnhancedKeyUsageExtension(
+            new OidCollection { new("1.3.6.1.5.5.7.3.1") }, critical: false));
+        using var ephemeral = request.CreateSelfSigned(
+            DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(1));
+        using var certificate = X509CertificateLoader.LoadPkcs12(
+            ephemeral.Export(X509ContentType.Pfx), null, X509KeyStorageFlags.Exportable);
+
+        foreach (var strategy in TlsFragmentForwarder.Strategies)
         {
-            Check(false, "форвардер — " + exception.Message);
-        }
-        finally
-        {
-            await forwarder.StopAsync();
-            destination.Stop();
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+            var serverTask = Task.Run(async () =>
+            {
+                using var server = await listener.AcceptTcpClientAsync(timeout.Token);
+                using var ssl = new SslStream(server.GetStream(), leaveInnerStreamOpen: false);
+                await ssl.AuthenticateAsServerAsync(new SslServerAuthenticationOptions
+                {
+                    ServerCertificate = certificate,
+                }, timeout.Token).ConfigureAwait(false);
+                var buffer = new byte[4];
+                await ssl.ReadExactlyAsync(buffer, timeout.Token).ConfigureAwait(false);
+                await ssl.WriteAsync(buffer, timeout.Token).ConfigureAwait(false);
+            }, timeout.Token);
+
+            var forwarder = new TlsFragmentForwarder();
+            try
+            {
+                await forwarder.StartAsync(strategy.Mode);
+                using var client = new TcpClient();
+                await client.ConnectAsync(IPAddress.Loopback, forwarder.Port, timeout.Token);
+                client.NoDelay = true;
+                var stream = client.GetStream();
+
+                await stream.WriteAsync(new byte[] { 5, 1, 0 }, timeout.Token);
+                var greeting = new byte[2];
+                await stream.ReadExactlyAsync(greeting, timeout.Token);
+
+                var requestBytes = new byte[10]
+                {
+                    5, 1, 0, 1, 127, 0, 0, 1, (byte)(port >> 8), (byte)port,
+                };
+                await stream.WriteAsync(requestBytes, timeout.Token);
+                var reply = new byte[10];
+                await stream.ReadExactlyAsync(reply, timeout.Token);
+                if (reply[0] != 5 || reply[1] != 0)
+                {
+                    Check(false, $"{strategy.Mode}: SOCKS5 отказал");
+                    continue;
+                }
+
+                using var ssl = new SslStream(stream, leaveInnerStreamOpen: false, (_, _, _, _) => true);
+                await ssl.AuthenticateAsClientAsync(new SslClientAuthenticationOptions
+                {
+                    TargetHost = "www.youtube.com",
+                }, timeout.Token).ConfigureAwait(false);
+                await ssl.WriteAsync(new byte[] { 1, 2, 3, 4 }, timeout.Token).ConfigureAwait(false);
+                var response = new byte[4];
+                await ssl.ReadExactlyAsync(response, timeout.Token).ConfigureAwait(false);
+                Check(response[0] == 1 && response[3] == 4,
+                    $"{strategy.Mode}: TLS-рукопожатие и обмен данными");
+                await serverTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                Check(false, $"{strategy.Mode}: {Describe(exception)}");
+            }
+            finally
+            {
+                await forwarder.StopAsync();
+                listener.Stop();
+                try
+                {
+                    await serverTask.WaitAsync(TimeSpan.FromSeconds(2));
+                }
+                catch (Exception)
+                {
+                    // Рукопожатие не состоялось — это уже отмечено выше.
+                }
+            }
         }
     }
 
