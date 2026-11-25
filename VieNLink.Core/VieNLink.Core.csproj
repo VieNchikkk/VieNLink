@@ -18,4 +18,11 @@
     <InternalsVisibleTo Include="VieNLink.Browser" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Шаблон фейкового QUIC Initial (zapret): безобидный SNI www.google.com. -->
+    <EmbeddedResource Include="Assets\quic_initial_www_google_com.bin" />
+    <!-- Зашитая база параметров обхода по операторам: пополняется из экспорта приложения. -->
+    <EmbeddedResource Include="Assets\provider-presets.json" />
+  </ItemGroup>
+
 </Project>

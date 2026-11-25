@@ -91,14 +91,12 @@ public sealed partial class MainActivity
         tun.AddView(tunHint);
 
         var tunActions = Ui.Row(this);
-        var open = Ui.Pill(this, P, "Открыть TUN-обход", UiButtonKind.Accent,
+        // Одна понятная кнопка: открывает экран TUN, где видно текущую стратегию,
+        // данные обхода и кнопки «Включить TUN-обход» / «Выключить обход».
+        var open = Ui.Pill(this, P, "Настроить и включить", UiButtonKind.Accent,
             () => Open(typeof(BypassActivity)), Resource.Drawable.ic_tunnel);
-        var quick = Ui.Pill(this, P, "Включить", UiButtonKind.Primary,
-            StartLastBypass, Resource.Drawable.ic_power);
-        var tunLayout = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f);
-        tunActions.AddView(open, tunLayout);
-        tunActions.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 8), 1));
-        tunActions.AddView(quick, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        tunActions.AddView(open, new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
         var actionsLayout = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
         actionsLayout.TopMargin = Ui.Dp(this, 10);
@@ -107,31 +105,6 @@ public sealed partial class MainActivity
 
         Ui.AddSpacer(page, this, 12);
         return page;
-    }
-
-    private void StartLastBypass()
-    {
-        if (!VpnStarter.CanStartBypass(out var blockedReason))
-        {
-            Ui.Toast(this, blockedReason);
-            return;
-        }
-
-        var name = NetworkPresets.GetPage(this);
-        var mode = Enum.TryParse<StreamFragmentMode>(name, out var parsed)
-            ? parsed
-            : StreamFragmentMode.Oob;
-
-        var request = VpnStarter.PrepareRequest(this);
-        if (request is not null)
-        {
-            _pendingBypass = mode;
-            StartActivityForResult(request, VpnRequestCode);
-            return;
-        }
-
-        VpnStarter.StartBypass(this, mode);
-        Ui.Toast(this, "Запускаю TUN-обход…");
     }
 
     // --------------------------------------------------------------- инструменты

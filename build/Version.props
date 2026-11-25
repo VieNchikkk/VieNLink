@@ -13,8 +13,8 @@
     При смене версии обязательно обновите VieNLinkVersionCode: он должен только расти.
   -->
   <PropertyGroup>
-    <VieNLinkVersion>1.3.52</VieNLinkVersion>
-    <VieNLinkVersionCode>10352</VieNLinkVersionCode>
+    <VieNLinkVersion>1.3.53</VieNLinkVersion>
+    <VieNLinkVersionCode>10353</VieNLinkVersionCode>
     <VieNLinkIsBeta>true</VieNLinkIsBeta>
   </PropertyGroup>
 </Project>

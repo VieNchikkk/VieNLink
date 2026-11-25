@@ -140,7 +140,7 @@ public sealed class TunnelService : VpnService
     private static Timer? _healthTimer;
     private static int _healthFailures;
     private CancellationTokenSource? _autoTuneCts;
-    private DateTime _lastAutoTuneUtc;
+    private static DateTime _lastAutoTuneUtc;
 
     /// <summary>Служба поднимает TUN-обход: проверка серверов в отдельном процессе недоступна.</summary>
     public static bool IsBypassMode { get; private set; }
@@ -240,7 +240,7 @@ public sealed class TunnelService : VpnService
             {
                 // Был включён TUN-обход — возвращаем его с сохранённой стратегией,
                 // а не поднимаем прокси-сервер, которого в этом режиме не было.
-                var mode = Enum.TryParse<StreamFragmentMode>(NetworkPresets.GetPage(this), out var parsed)
+                var mode = Enum.TryParse<StreamFragmentMode>(NetworkPresets.ResolvePage(this), out var parsed)
                     ? parsed
                     : StreamFragmentMode.Oob;
                 AppLog.Write("android", "Служба перезапущена системой: восстанавливаю TUN-обход");
@@ -286,6 +286,7 @@ public sealed class TunnelService : VpnService
         AndroidSettingsStore.Save();
         var strategy = TlsFragmentForwarder.Strategies.FirstOrDefault(item => item.Mode == mode)
                        ?? TlsFragmentForwarder.Strategies[0];
+        AppLog.Write("tun-bypass", $"Сеть: {NetworkPresets.Describe(this)}");
 
         _ = Task.Run(async () =>
         {
@@ -303,7 +304,7 @@ public sealed class TunnelService : VpnService
                     port,
                     CoreRuntime.ApiPort,
                     CoreRuntime.ApiSecret,
-                    settings.TunBypassBlockQuic,
+                    NetworkPresets.GetBlockQuic(this),
                     processName: null,
                     onlyProcess: null,
                     // На Android системный резолвер ядру недоступен. 1.1.1.1 у российских
@@ -1355,26 +1356,52 @@ public sealed class TunnelService : VpnService
                 return;
             }
 
-            var pageOk = await StrategyAutotune.CheckPageAsync(port, cancellationToken)
+            var probe = await StrategyAutotune.CheckPageAsync(port, cancellationToken)
                 .ConfigureAwait(false);
-            if (pageOk)
+            if (probe.Strong)
             {
-                AppLog.Write("tun-bypass", "Автоподбор: страница открылась, стратегия рабочая");
+                AppLog.Write("tun-bypass", $"Автоподбор: страница и превью открылись ({probe.Score}/3), " +
+                                           "стратегия рабочая");
+                // Подтверждаем параметры этой сети: они попадут в базу по операторам.
+                ProviderPresetStore.RecordSuccess(
+                    NetworkPresets.Key(this),
+                    ForwarderHost.Mode.ToString(),
+                    NetworkPresets.GetVideo(this),
+                    NetworkPresets.GetBlockQuic(this));
                 return;
             }
 
             _lastAutoTuneUtc = DateTime.UtcNow;
-            AppLog.Write("tun-bypass", "Автоподбор: страница не открылась, ищу стратегию");
+            AppLog.Write("tun-bypass",
+                $"Автоподбор: через обход пришло {probe.Score}/3 ({probe.Describe}), " +
+                $"ищу первую рабочую; " + NetworkPresets.Describe(this));
             _nodeLabel = "Автоподбор стратегии…";
             RefreshNotification();
 
-            IProgress<string> progress = new Progress<string>(
-                line => AppLog.Write("tun-bypass", "автоподбор: " + line));
+            IProgress<AutotuneStep> progress = new Progress<AutotuneStep>(
+                step => AppLog.Write("tun-bypass", "автоподбор: " + step.Text));
 
+            var preferredPage = Enum.TryParse<StreamFragmentMode>(
+                NetworkPresets.GetPage(this), out var pageMode)
+                ? pageMode
+                : (StreamFragmentMode?)null;
+            var preferredVideo = Enum.TryParse<StreamFragmentMode>(
+                NetworkPresets.GetVideo(this), out var videoMode)
+                ? videoMode
+                : preferredPage;
             var page = await StrategyAutotune.RunAsync(
-                AutotuneScope.Page, progress, cancellationToken).ConfigureAwait(false);
+                AutotuneScope.Page, progress, cancellationToken, preferredPage).ConfigureAwait(false);
             var video = await StrategyAutotune.RunAsync(
-                AutotuneScope.Video, progress, cancellationToken).ConfigureAwait(false);
+                AutotuneScope.Video, progress, cancellationToken, preferredVideo).ConfigureAwait(false);
+
+            // QUIC проверяем один раз на подбор: от TCP-стратегии он не зависит.
+            var quicOk = await StrategyAutotune.ProbeQuicAsync(port, cancellationToken).ConfigureAwait(false);
+            var blockQuic = !quicOk;
+            var quicChanged = blockQuic != NetworkPresets.GetBlockQuic(this);
+            NetworkPresets.SetBlockQuic(this, blockQuic);
+            AppLog.Write("tun-bypass", quicOk
+                ? "Автоподбор: QUIC проходит — оставляю через релей"
+                : "Автоподбор: QUIC не проходит — блокирую, видео пойдёт по TCP");
 
             var pageStrategy = page.Strategy;
             if (pageStrategy is null)
@@ -1385,15 +1412,50 @@ public sealed class TunnelService : VpnService
                 return;
             }
 
-            var videoStrategy = video.Strategy ?? pageStrategy;
+            // Видео-пресет меняем только по настоящим байтам потока. Иначе не найденная
+            // видео-стратегия молча подменялась страничной — и «видео работает» было ложью.
+            if (video.Strategy is not null)
+            {
+                NetworkPresets.SetVideo(this, video.Strategy.Mode.ToString());
+            }
+
             NetworkPresets.SetPage(this, pageStrategy.Mode.ToString());
-            NetworkPresets.SetVideo(this, videoStrategy.Mode.ToString());
+
+            if (page.Strong)
+            {
+                ProviderPresetStore.RecordSuccess(
+                    NetworkPresets.Key(this),
+                    pageStrategy.Mode.ToString(),
+                    video.Strategy?.Mode.ToString() ?? NetworkPresets.GetVideo(this),
+                    NetworkPresets.GetBlockQuic(this),
+                    transport: video.Strategy is not null ? "tcp" : string.Empty,
+                    videoKbps: video.SpeedKbps);
+            }
 
             AppLog.Write("tun-bypass",
-                $"Автоподбор: страница {pageStrategy.Name} ({page.Score}/{page.Total}), " +
-                $"видео {videoStrategy.Name} ({video.Score}/{video.Total})");
+                $"Автоподбор: страница {pageStrategy.Name} ({page.Score}/{page.Total}, " +
+                $"{(page.Strong ? "страница и превью" : "только страница")}" +
+                $"{(page.SpeedKbps > 0 ? $", {page.SpeedKbps} КБ/с" : string.Empty)}), " +
+                $"видео {(video.Strategy is null ? "не найдено" : video.AudioOnly
+                    ? $"не идёт, звук {video.Strategy.Name} ({video.SpeedKbps} КБ/с)"
+                    : $"{video.Strategy.Name} ({video.Score}/{video.Total}" +
+                      (video.SpeedKbps > 0 ? $", {video.SpeedKbps} КБ/с" : string.Empty) + ")")}");
             _nodeLabel = "Автоподбор: " + pageStrategy.Name;
             RefreshNotification();
+
+            // Не применяем заведомо слабый результат: если стратегия не лучше текущей и не
+            // подтвердила превью, перезапуск только собьёт туннель и зациклит health-check.
+            if (!page.Strong && page.Score <= probe.Score && !quicChanged)
+            {
+                AppLog.Write("tun-bypass", "Автоподбор: лучше текущей нет, перезапуск не нужен");
+                return;
+            }
+
+            if (pageStrategy.Mode == ForwarderHost.Mode && !quicChanged)
+            {
+                AppLog.Write("tun-bypass", "Автоподбор: стратегия не изменилась, перезапуск не нужен");
+                return;
+            }
 
             // Применяем подобранное: перезапускаем обход с новой стратегией.
             StopTunnel();

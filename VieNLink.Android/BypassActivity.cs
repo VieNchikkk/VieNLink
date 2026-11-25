@@ -31,14 +31,24 @@ public sealed class BypassActivity : BaseActivity
     private LinearLayout? _list;
     private TextView? _status;
     private TextView? _forwarder;
+    private TextView? _strategyHeader;
+    private TextView? _stats;
+    private CheckBox? _quicCheck;
+    private string? _lastPageResult;
+    private string? _lastVideoResult;
+    private string? _lastQuicResult;
     private Button? _start;
     private Button? _stop;
-    private Button? _autotuneButton;
+    private Button? _autotuneQuick;
+    private Button? _autotuneBest;
     private TextView? _autotuneStatus;
+    private TextView? _autotunePhase;
+    private ProgressBar? _autotuneProgress;
     private CancellationTokenSource? _autotuneCts;
     private Spinner? _videoSpinner;
     private bool _videoSpinnerReady;
     private int _selected;
+    private string _lastNetworkKey = string.Empty;
     private Handler? _handler;
     private Action? _tick;
 
@@ -47,14 +57,24 @@ public sealed class BypassActivity : BaseActivity
         base.OnCreate(savedInstanceState);
         BuildUi();
 
-        var saved = NetworkPresets.GetPage(this);
-        if (string.IsNullOrWhiteSpace(saved))
-        {
-            saved = AndroidSettingsStore.Current.TunBypassStrategy;
-        }
+        var saved = NetworkPresets.ResolvePage(this);
 
         _selected = Math.Max(0, _strategies.FindIndex(strategy =>
             strategy.Mode.ToString().Equals(saved, StringComparison.OrdinalIgnoreCase)));
+
+        // Если обход уже работает, показываем выбранной реально запущенную стратегию,
+        // а не только сохранённый пресет (они могут разойтись после смены сети).
+        if (ForwarderHost.IsRunning)
+        {
+            var running = _strategies.FindIndex(strategy => strategy.Mode == ForwarderHost.Mode);
+            if (running >= 0)
+            {
+                _selected = running;
+            }
+        }
+
+        AppLog.Write("tun-bypass", "Экран TUN: " + NetworkPresets.Describe(this));
+        _lastNetworkKey = NetworkPresets.Key(this);
 
         if (Intent?.GetBooleanExtra("start", false) == true)
         {
@@ -91,9 +111,18 @@ public sealed class BypassActivity : BaseActivity
         state.AddView(_forwarder);
         page.AddView(state);
 
+        // Все данные, которые участвуют в выборе: сеть, источники пресетов, база оператора,
+        // счётчики форвардера и итог последнего подбора — чтобы не лазить в журнал.
+        var statsCard = Ui.Card(P, this);
+        statsCard.AddView(Ui.Text(this, "Данные обхода", 14.5f, P.TextStrong, bold: true));
+        _stats = Ui.Hint(this, "…", P);
+        _stats.SetPadding(0, Ui.Dp(this, 4), 0, 0);
+        statsCard.AddView(_stats);
+        Ui.Add(page, statsCard, 10);
+
         var actions = Ui.Row(this);
-        _start = MakePrimary("Включить обход", StartBypass);
-        _stop = MakeSecondary("Выключить", () => VpnStarter.Stop(this));
+        _start = MakePrimary("Включить TUN-обход", StartBypass);
+        _stop = MakeSecondary("Выключить обход", () => VpnStarter.Stop(this));
         actions.AddView(_start, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         actions.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 8), 1));
         actions.AddView(_stop, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
@@ -101,25 +130,64 @@ public sealed class BypassActivity : BaseActivity
 
         var autotune = Ui.Card(P, this);
         var autotuneTop = Ui.Row(this);
-        autotuneTop.AddView(Ui.Text(this, "Автоподбор стратегии", 14.5f, P.TextStrong, bold: true),
+        autotuneTop.AddView(Ui.Text(this, "Подбор стратегии", 14.5f, P.TextStrong, bold: true),
             new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         autotuneTop.AddView(Ui.Badge(this, P, "5–10 МИН", P.Accent));
         autotune.AddView(autotuneTop);
+
+        // Показатели хода: какой этап (страница/видео), какая стратегия по счёту и что вышло.
+        _autotunePhase = Ui.Text(this, string.Empty, 14f, P.TextStrong, bold: true);
+        _autotunePhase.Visibility = ViewStates.Gone;
+        _autotunePhase.SetPadding(0, Ui.Dp(this, 6), 0, 0);
+        autotune.AddView(_autotunePhase);
+
+        _autotuneProgress = new ProgressBar(this, null, Android.Resource.Attribute.ProgressBarStyleHorizontal)
+        {
+            Indeterminate = false,
+            Max = 1,
+            Progress = 0,
+            Visibility = ViewStates.Gone,
+        };
+        _autotuneProgress.ProgressTintList = Android.Content.Res.ColorStateList.ValueOf(P.Accent);
+        _autotuneProgress.ProgressBackgroundTintList = Android.Content.Res.ColorStateList.ValueOf(P.Inner);
+        var progressLayout = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, Ui.Dp(this, 8));
+        progressLayout.TopMargin = Ui.Dp(this, 6);
+        progressLayout.BottomMargin = Ui.Dp(this, 6);
+        autotune.AddView(_autotuneProgress, progressLayout);
+
         _autotuneStatus = Ui.Hint(this,
-            "Одна кнопка: сначала перебирает все стратегии для страницы (youtube.com, youtubei, " +
-            "ytimg) и сохраняет рабочую, затем — для видео (googlevideo, ggpht) и тоже сохраняет. " +
-            "Затем обе применяются вместе. Обход должен быть выключен; результат — для текущей сети.", P);
+            "«Первая рабочая» — быстрый перебор: останавливается на первой стратегии, где открылись " +
+            "страница и превью. «Подобрать лучшую» — проверяет все и выбирает по числу доменов и " +
+            "скорости (КБ/с), затем так же ищет лучшую для видео по реальному потоку. Результат " +
+            "сохраняется для текущей сети и обход включается сразу. Подбор можно остановить кнопкой. " +
+            "Если видео идёт, а проба пишет «0 байт» — видео тянется по QUIC, TCP-стратегия ему не нужна.", P);
         _autotuneStatus.SetPadding(0, Ui.Dp(this, 4), 0, Ui.Dp(this, 8));
         autotune.AddView(_autotuneStatus);
-        _autotuneButton = MakeSecondary("Подобрать всё", RunAutotune);
-        autotune.AddView(_autotuneButton);
+
+        var autotuneActions = Ui.Row(this);
+        _autotuneQuick = MakeSecondary("Первая рабочая", () => RunAutotune(AutotuneMode.Quick));
+        _autotuneBest = MakeSecondary("Подобрать лучшую", () => RunAutotune(AutotuneMode.Best));
+        autotuneActions.AddView(_autotuneQuick,
+            new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        autotuneActions.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 8), 1));
+        autotuneActions.AddView(_autotuneBest,
+            new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        autotune.AddView(autotuneActions);
+
+        var sharePresets = MakeSecondary("Поделиться подборками под операторов", ShareProviderPresets);
+        var shareLayout = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+        shareLayout.TopMargin = Ui.Dp(this, 8);
+        autotune.AddView(sharePresets, shareLayout);
         Ui.Add(page, autotune, 12);
 
         var videoCard = Ui.Card(P, this);
         videoCard.AddView(Ui.Text(this, "Стратегия для видео (googlevideo)", 14.5f, P.TextStrong, bold: true));
         videoCard.AddView(Ui.Hint(this,
             "Для приложения YouTube обычно работает та же OOB, что и для страниц. " +
-            "Если видео тормозит — подберите отдельную стратегию для googlevideo/ytimg.", P));
+            "Если видео тормозит — подберите отдельную стратегию для googlevideo/ytimg; " +
+            "если видео идёт по QUIC, эта стратегия на него не влияет.", P));
         _videoSpinner = new Spinner(this);
         var videoItems = new List<string> { "Как для страниц" };
         videoItems.AddRange(_strategies.Select(strategy => strategy.Name));
@@ -139,9 +207,11 @@ public sealed class BypassActivity : BaseActivity
             }
 
             var position = (int)args.Position;
-            NetworkPresets.SetVideo(this, position <= 0
-                ? string.Empty
-                : _strategies[position - 1].Mode.ToString());
+            var mode = position <= 0 ? string.Empty : _strategies[position - 1].Mode.ToString();
+            NetworkPresets.SetVideo(this, mode);
+            AppLog.Write("tun-bypass",
+                $"Видео-стратегия для «{NetworkPresets.Label(this)}»: " +
+                (string.IsNullOrEmpty(mode) ? "как для страниц" : mode));
         };
         _videoSpinnerReady = true;
         videoCard.AddView(_videoSpinner);
@@ -150,18 +220,24 @@ public sealed class BypassActivity : BaseActivity
         var quic = new CheckBox(this)
         {
             Text = "Блокировать QUIC (UDP/443), чтобы браузер шёл по TCP",
-            Checked = SettingsStore.Current.TunBypassBlockQuic,
+            Checked = NetworkPresets.GetBlockQuic(this),
         };
+        _quicCheck = quic;
         quic.SetTextColor(P.TextSoft());
         Ui.StyleSystemText(quic);
         quic.CheckedChange += (_, args) =>
         {
-            SettingsStore.Current.TunBypassBlockQuic = args.IsChecked;
-            SettingsStore.Save();
+            NetworkPresets.SetBlockQuic(this, args.IsChecked);
+            AppLog.Write("tun-bypass",
+                $"QUIC на «{NetworkPresets.Label(this)}»: " +
+                (args.IsChecked ? "блокировать (HTTP-соединения пойдут по TCP)" : "через релей с фейком"));
         };
         page.AddView(quic);
         var quicHint = Ui.Hint(this,
-            "QUIC обходит TCP-фрагментацию. Блокировка заставляет Chrome и YouTube перейти на TCP.", P);
+            "QUIC обходит TCP-фрагментацию. Галочка стоит — UDP/443 блокируется и Chrome с YouTube " +
+            "переходят на TCP. Галочка снята — QUIC идёт через форвардер: перед настоящим Initial " +
+            "уходит фейковый с безобидным SNI (www.google.com). Если с фейком видео стало хуже — " +
+            "верните галочку: на некоторых операторах QUIC напрямую работает лучше.", P);
         quicHint.SetPadding(Ui.Dp(this, 28), 0, 0, Ui.Dp(this, 8));
         page.AddView(quicHint);
 
@@ -184,24 +260,10 @@ public sealed class BypassActivity : BaseActivity
         allHostsHint.SetPadding(Ui.Dp(this, 28), 0, 0, Ui.Dp(this, 8));
         page.AddView(allHostsHint);
 
-        page.AddView(Ui.Section(this, "Стратегия фрагментации · " + NetworkPresets.Label(this), P));
+        _strategyHeader = Ui.Section(this, "Стратегия фрагментации · " + NetworkPresets.Label(this), P);
+        page.AddView(_strategyHeader);
         _list = Ui.Column(this);
         page.AddView(_list);
-
-        var dev = Ui.Card(P, this);
-        var devTop = Ui.Row(this);
-        devTop.AddView(Ui.Text(this, "Автоподбор стратегии", 14.5f, P.TextStrong, bold: true),
-            new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        devTop.AddView(Ui.Badge(this, P, "В РАЗРАБОТКЕ", P.Warning));
-        dev.AddView(devTop);
-        dev.AddView(Ui.Hint(this,
-            "В Windows автоподбор перезапускает TUN и проверяет сайты через curl.exe. На Android " +
-            "сам процесс приложения исключён из TUN (иначе запросы ядра ушли бы в него же), поэтому " +
-            "проверить результат изнутри нельзя. В разработке: отдельный процесс проверки, как :probe " +
-            "для серверов. Пока выберите стратегию вручную: начните с рекомендуемой «Разрез TLS-записей», " +
-            "затем пробуйте «Разрез полосы SNI» и «Медленный разрез SNI». Если провайдер режет сайты " +
-            "вне встроенного списка — включите «Резать все сайты».", P));
-        Ui.Add(page, dev, 14);
 
         var profile = BypassProfileStore.Ranked("tun").FirstOrDefault();
         if (profile is not null)
@@ -260,6 +322,12 @@ public sealed class BypassActivity : BaseActivity
             {
                 _selected = selectedIndex;
                 NetworkPresets.SetPage(this, strategy.Mode.ToString());
+                // Ручной выбор: попадает в базу по операторам и не перезаписывается автоподбором.
+                ProviderPresetStore.RecordChoice(
+                    NetworkPresets.Key(this),
+                    strategy.Mode.ToString(),
+                    NetworkPresets.GetVideo(this),
+                    NetworkPresets.GetBlockQuic(this));
                 RenderStrategies();
             };
 
@@ -328,8 +396,9 @@ public sealed class BypassActivity : BaseActivity
         }
 
         var strategy = _strategies[_selected];
-        AndroidSettingsStore.Current.TunBypassStrategy = strategy.Mode.ToString();
-        AndroidSettingsStore.Save();
+        NetworkPresets.SetPage(this, strategy.Mode.ToString());
+        AppLog.Write("tun-bypass",
+            $"Старт TUN-обхода: «{strategy.Name}»; {NetworkPresets.Describe(this)}");
 
         var request = VpnStarter.PrepareRequest(this);
         if (request is not null)
@@ -351,10 +420,13 @@ public sealed class BypassActivity : BaseActivity
             StrategyIndex = _selected,
             Name = strategy.Name,
             Quality = 30,
-            BlockQuic = SettingsStore.Current.TunBypassBlockQuic,
+            BlockQuic = NetworkPresets.GetBlockQuic(this),
             Uses = 1,
         });
 
+        // Ручной выбор запоминается по клику на карточку стратегии (RecordChoice),
+        // а простое «Включить» с готовым пресетом ручным выбором не считается:
+        // иначе подтверждённый базой оператора пресет нельзя было бы обновить автоподбором.
         Ui.Toast(this, "Запускаю TUN-обход: " + strategy.Name);
     }
 
@@ -381,99 +453,289 @@ public sealed class BypassActivity : BaseActivity
         }
     }
 
-    private async void RunAutotune()
+    private async void RunAutotune(AutotuneMode mode)
     {
+        // Пока идёт перебор, кнопка, которой его запустили, работает как «Остановить подбор».
+        if (_autotuneCts is not null)
+        {
+            _autotuneCts.Cancel();
+            if (_autotuneStatus is not null)
+            {
+                _autotuneStatus.Text = "Останавливаю подбор…";
+            }
+
+            return;
+        }
+
         if (TunnelService.State == TunnelState.Running || ForwarderHost.IsRunning)
         {
             Ui.Toast(this, "Сначала выключите обход");
             return;
         }
 
-        if (_autotuneCts is not null)
+        var cts = new CancellationTokenSource();
+        _autotuneCts = cts;
+        SetAutotuneRunning(true, mode);
+        AutotuneResult? page = null;
+        AutotuneResult? video = null;
+        var cancelled = false;
+        var modeLabel = mode == AutotuneMode.Best ? "«Подобрать лучшую»" : "«Первая рабочая»";
+        AppLog.Write("tun-bypass",
+            $"Подбор стратегии ({modeLabel}): " + NetworkPresets.Describe(this));
+
+        if (_autotunePhase is not null)
         {
-            _autotuneCts.Cancel();
-            return;
+            _autotunePhase.Visibility = ViewStates.Visible;
+            _autotunePhase.Text = "Подбираю стратегию…";
         }
 
-        _autotuneCts = new CancellationTokenSource();
-        SetAutotuneEnabled(false);
-
-        IProgress<string> progress = new Progress<string>(line =>
+        if (_autotuneProgress is not null)
         {
+            _autotuneProgress.Visibility = ViewStates.Visible;
+            _autotuneProgress.Max = 1;
+            _autotuneProgress.Progress = 0;
+        }
+
+        if (_autotuneStatus is not null)
+        {
+            _autotuneStatus.Text = "Готовлюсь…";
+        }
+
+        IProgress<AutotuneStep> progress = new Progress<AutotuneStep>(step =>
+        {
+            AppLog.Write("tun-bypass", "автоподбор: " + step.Text);
+            if (_autotunePhase is not null)
+            {
+                _autotunePhase.Text = step.Scope == AutotuneScope.Video
+                    ? "Шаг 2 из 2 · видео (googlevideo)"
+                    : "Шаг 1 из 2 · страница YouTube";
+            }
+
+            if (_autotuneProgress is not null)
+            {
+                _autotuneProgress.Max = Math.Max(step.Total, 1);
+                _autotuneProgress.Progress = Math.Clamp(step.Index, 0, step.Total);
+            }
+
             if (_autotuneStatus is not null)
             {
-                _autotuneStatus.Text = line;
+                _autotuneStatus.Text = step.Text;
             }
         });
 
         try
         {
-            progress.Report("Страница: перебираю стратегии…");
-            var page = await StrategyAutotune.RunAsync(AutotuneScope.Page, progress, _autotuneCts.Token);
-            if (page.Strategy is not null)
+            // Известный пресет (включая зашитую базу оператора) проверяем первым.
+            var preferredPage = Enum.TryParse<StreamFragmentMode>(
+                NetworkPresets.GetPage(this), out var pageMode)
+                ? pageMode
+                : (StreamFragmentMode?)null;
+            var preferredVideo = Enum.TryParse<StreamFragmentMode>(
+                NetworkPresets.GetVideo(this), out var videoMode)
+                ? videoMode
+                : preferredPage;
+            page = await StrategyAutotune.RunAsync(
+                AutotuneScope.Page, progress, cts.Token, preferredPage, mode);
+            video = await StrategyAutotune.RunAsync(
+                AutotuneScope.Video, progress, cts.Token, preferredVideo, mode);
+
+            // QUIC не зависит от TCP-стратегии: проверяем один раз и выставляем автоматически.
+            var quicForwarder = new TlsFragmentForwarder();
+            bool quicOk;
+            try
             {
-                var index = _strategies.IndexOf(page.Strategy);
-                if (index >= 0)
-                {
-                    _selected = index;
-                    NetworkPresets.SetPage(this, page.Strategy.Mode.ToString());
-                    RenderStrategies();
-                }
+                await quicForwarder.StartAsync(StreamFragmentMode.None);
+                quicOk = await StrategyAutotune.ProbeQuicAsync(quicForwarder.Port, cts.Token);
+            }
+            finally
+            {
+                await quicForwarder.StopAsync();
             }
 
-            progress.Report("Видео: перебираю стратегии…");
-            var video = await StrategyAutotune.RunAsync(AutotuneScope.Video, progress, _autotuneCts.Token);
-            var videoStrategy = video.Strategy ?? page.Strategy;
-            if (videoStrategy is not null)
+            NetworkPresets.SetBlockQuic(this, !quicOk);
+            if (_quicCheck is not null)
             {
-                NetworkPresets.SetVideo(this, videoStrategy.Mode.ToString());
-                if (_videoSpinner is not null)
-                {
-                    var index = _strategies.FindIndex(item => item.Mode == videoStrategy.Mode);
-                    _videoSpinner.SetSelection(index >= 0 ? index + 1 : 0, false);
-                }
+                _quicCheck.Checked = !quicOk;
             }
 
-            if (page.Strategy is not null || videoStrategy is not null)
+            _lastQuicResult = quicOk
+                ? "проходит (оставляю через релей)"
+                : "не проходит (блокирую — видео пойдёт по TCP)";
+            AppLog.Write("tun-bypass", quicOk
+                ? "QUIC: проходит через релей — оставляю включённым (видео может идти по QUIC)"
+                : "QUIC: не проходит — блокирую, видео пойдёт по TCP");
+            if (_autotuneStatus is not null)
             {
-                Ui.Toast(this,
-                    $"{NetworkPresets.Label(this)}: страница {page.Strategy?.Name ?? "—"} " +
-                    $"({page.Score}/{page.Total}), видео {videoStrategy?.Name ?? "—"} " +
-                    $"({video.Score}/{video.Total})");
-
-                // Сразу применяем: обе стратегии сохранены, включаем обход.
-                if (page.Strategy is not null)
-                {
-                    StartBypass();
-                }
-            }
-            else
-            {
-                Ui.Toast(this, "Ни одна стратегия не открыла домены YouTube");
+                _autotuneStatus.Text = quicOk
+                    ? "QUIC проходит — оставляю через релей."
+                    : "QUIC не проходит — блокирую, видео пойдёт по TCP.";
             }
         }
         catch (System.OperationCanceledException)
         {
+            cancelled = true;
+            AppLog.Write("tun-bypass", "Подбор стратегии: остановлен");
         }
         catch (Exception exception)
         {
+            AppLog.Write("tun-bypass", "Подбор стратегии не удался", exception);
+            if (_autotuneStatus is not null)
+            {
+                _autotuneStatus.Text = "Подбор не удался: " + exception.Message;
+            }
+
             Ui.Toast(this, "Подбор не удался: " + exception.Message);
         }
         finally
         {
-            _autotuneCts.Dispose();
-            _autotuneCts = null;
-            SetAutotuneEnabled(true);
+            if (ReferenceEquals(_autotuneCts, cts))
+            {
+                _autotuneCts = null;
+            }
+
+            cts.Dispose();
+            SetAutotuneRunning(false);
+        }
+
+        if (cancelled)
+        {
+            _lastPageResult = modeLabel + ": остановлен";
+            _lastVideoResult = null;
+            if (_autotunePhase is not null)
+            {
+                _autotunePhase.Text = "Подбор остановлен";
+            }
+
+            if (_autotuneStatus is not null)
+            {
+                _autotuneStatus.Text = "Подбор остановлен.";
+            }
+
+            return;
+        }
+
+        // Применяем после снятия состояния подбора: запуск обхода отменяет активный подбор.
+        if (page?.Strategy is not null)
+        {
+            var index = _strategies.IndexOf(page.Strategy);
+            if (index >= 0)
+            {
+                _selected = index;
+                NetworkPresets.SetPage(this, page.Strategy.Mode.ToString());
+                RenderStrategies();
+            }
+        }
+
+        // Видео-пресет меняем только если проба реально скачала поток. Иначе оставляем
+        // прежний: подменять его страничной стратегией — значит врать «видео работает».
+        if (video?.Strategy is not null)
+        {
+            NetworkPresets.SetVideo(this, video.Strategy.Mode.ToString());
+            if (_videoSpinner is not null)
+            {
+                var index = _strategies.FindIndex(item => item.Mode == video.Strategy.Mode);
+                _videoSpinner.SetSelection(index >= 0 ? index + 1 : 0, false);
+            }
+        }
+
+        var summary = page?.Strategy is null
+            ? "Ни одна стратегия не открыла страницу YouTube."
+            : $"{NetworkPresets.Label(this)}: " +
+              $"{(mode == AutotuneMode.Best ? "лучшая" : "первая рабочая")} {page.Strategy.Name} " +
+              $"({page.Score}/{page.Total}" +
+              (page.Strong ? ")" : ", превью не прошло)") +
+              (page.SpeedKbps > 0 ? $", {page.SpeedKbps} КБ/с" : string.Empty) +
+              (video?.Strategy is not null
+                  ? video.AudioOnly
+                      ? $", видео не идёт — звук {video.Strategy.Name} ({video.SpeedKbps} КБ/с)"
+                      : $", видео {video.Strategy.Name} ({video.Score}/{video.Total}" +
+                        (video.SpeedKbps > 0 ? $", {video.SpeedKbps} КБ/с)" : ")")
+                  : ", видео не проверено (0 байт)");
+
+        _lastPageResult = page?.Strategy is null
+            ? $"{modeLabel}: ничего не найдено"
+            : $"{modeLabel}: {page.Strategy.Name} — {page.Score} из {page.Total}" +
+              (page.Strong ? " (страница и превью)" : " (только страница)") +
+              (page.SpeedKbps > 0 ? $", {page.SpeedKbps} КБ/с" : string.Empty);
+        _lastVideoResult = video?.Strategy is null
+            ? "не проверено — медиасервер не отдал байты"
+            : video.AudioOnly
+                ? $"только звук — {video.Strategy.Name}, {video.SpeedKbps} КБ/с"
+                : $"{video.Strategy.Name} — {video.Score} из {video.Total}, {video.SpeedKbps} КБ/с";
+        if (_autotunePhase is not null)
+        {
+            _autotunePhase.Text = "Готово";
+        }
+
+        if (_autotuneStatus is not null)
+        {
+            _autotuneStatus.Text = summary;
+        }
+
+        Ui.Toast(this, summary);
+        AppLog.Write("tun-bypass", "Подбор стратегии: " + summary);
+
+        // Автоматически включаем только подтверждённую страницу (с превью).
+        if (page?.Strategy is not null && page.Strong)
+        {
+            ProviderPresetStore.RecordSuccess(
+                NetworkPresets.Key(this),
+                page.Strategy.Mode.ToString(),
+                video?.Strategy?.Mode.ToString() ?? NetworkPresets.GetVideo(this),
+                NetworkPresets.GetBlockQuic(this),
+                transport: video?.Strategy is not null ? "tcp" : string.Empty,
+                videoKbps: video?.SpeedKbps ?? 0);
+            StartBypass();
         }
     }
 
-    private void SetAutotuneEnabled(bool enabled)
+    /// <summary>
+    /// Отдаёт собранную базу параметров по операторам текстом: разработчик забирает её
+    /// и вшивает в следующую сборку. Wi-Fi SSID не экспортируются (личные данные).
+    /// </summary>
+    private void ShareProviderPresets()
     {
-        if (_autotuneButton is not null)
+        try
         {
-            _autotuneButton.Enabled = enabled;
-            _autotuneButton.Alpha = enabled ? 1f : 0.5f;
+            var json = ProviderPresetStore.ExportJson();
+            AppLog.Write("presets", "Экспорт базы параметров обходов: " + json.ReplaceLineEndings(" "));
+            var intent = new Intent(Intent.ActionSend).SetType("text/plain");
+            intent.PutExtra(Intent.ExtraSubject, "VieNLink: параметры обхода по операторам");
+            intent.PutExtra(Intent.ExtraText, json);
+            StartActivity(Intent.CreateChooser(intent, "Поделиться подборками"));
         }
+        catch (Exception exception)
+        {
+            AppLog.Write("presets", "Не удалось поделиться подборками", exception);
+            Ui.Toast(this, "Не удалось поделиться: " + exception.Message);
+        }
+    }
+
+    private void SetAutotuneRunning(bool running, AutotuneMode mode = AutotuneMode.Quick)
+    {
+        if (_autotuneQuick is null || _autotuneBest is null)
+        {
+            return;
+        }
+
+        if (running)
+        {
+            var cancel = mode == AutotuneMode.Best ? _autotuneBest : _autotuneQuick;
+            var other = mode == AutotuneMode.Best ? _autotuneQuick : _autotuneBest;
+            cancel.Text = "Остановить подбор";
+            cancel.Enabled = true;
+            cancel.Alpha = 1f;
+            other.Enabled = false;
+            other.Alpha = 0.5f;
+            return;
+        }
+
+        _autotuneQuick.Text = "Первая рабочая";
+        _autotuneQuick.Enabled = true;
+        _autotuneQuick.Alpha = 1f;
+        _autotuneBest.Text = "Подобрать лучшую";
+        _autotuneBest.Enabled = true;
+        _autotuneBest.Alpha = 1f;
     }
 
     protected override void OnDestroy()
@@ -494,16 +756,127 @@ public sealed class BypassActivity : BaseActivity
         _status.Text = bypass ? "TUN-обход (бета) работает" : running ? "Подключён прокси-сервер" : "VPN не подключён";
         _status.SetTextColor(bypass || running ? P.Positive : P.TextStrong);
 
+        if (_strategyHeader is not null)
+        {
+            // Сеть могла смениться (Wi-Fi ↔ LTE): заголовок показывает, чей пресет загружен.
+            _strategyHeader.Text = "Стратегия фрагментации · " + NetworkPresets.Label(this);
+        }
+
+        // Смена сети: подхватываем сохранённый пресет уже этой сети (или реально запущенную
+        // стратегию), чтобы экран не показывал выбор прошлого оператора.
+        var snapshot = NetworkPresets.Snapshot(this);
+        RefreshStats(snapshot);
+        if (!string.Equals(snapshot.Key, _lastNetworkKey, StringComparison.Ordinal))
+        {
+            _lastNetworkKey = snapshot.Key;
+            var target = ForwarderHost.IsRunning
+                ? _strategies.FindIndex(strategy => strategy.Mode == ForwarderHost.Mode)
+                : _strategies.FindIndex(strategy => strategy.Mode.ToString()
+                    .Equals(snapshot.Page, StringComparison.OrdinalIgnoreCase));
+            if (target >= 0 && target != _selected)
+            {
+                _selected = target;
+                RenderStrategies();
+            }
+
+            AppLog.Write("tun-bypass", "Сеть: " + snapshot.Describe);
+        }
+
         if (_forwarder is not null)
         {
             _forwarder.Text = ForwarderHost.IsRunning
                 ? $"Форвардер 127.0.0.1:{ForwarderHost.Port} · {ForwarderHost.Mode} · " +
-                  $"соединений {ForwarderHost.AcceptedConnections}, разрезано {ForwarderHost.FragmentedConnections}"
+                  $"соединений {ForwarderHost.AcceptedConnections}, разрезано {ForwarderHost.FragmentedConnections}" +
+                  (ForwarderHost.UdpAssociations > 0
+                      ? $", QUIC-фейков {ForwarderHost.FakeQuicPackets}"
+                      : string.Empty)
                 : "Форвардер не запущен";
         }
 
         UpdateButtons();
     }
+
+    /// <summary>Все данные, участвующие в выборе обхода, — простыми словами на экране.</summary>
+    private void RefreshStats(NetworkSnapshot snapshot)
+    {
+        if (_stats is null)
+        {
+            return;
+        }
+
+        var lines = new List<string>
+        {
+            $"Сеть: {snapshot.Label}",
+            $"Сети устройства: {HumanizeNetworks(snapshot.Details)}",
+            $"Страница YouTube: {Value(snapshot.Page)} — {Humanize(snapshot.PageSource)}",
+            $"Видео: {(string.IsNullOrWhiteSpace(snapshot.Video) ? "как для страниц" : snapshot.Video)} — {Humanize(snapshot.VideoSource)}",
+            $"QUIC: {(snapshot.BlockQuic ? "заблокирован (YouTube идёт по TCP)" : "разрешён (через релей с фейком)")} — {Humanize(snapshot.BlockQuicSource)}",
+            $"Какие сайты резать: {(SettingsStore.Current.TunBypassAllHosts ? "все" : "только YouTube / Telegram / Discord")}",
+            "Чем проверяется: страница www.youtube.com + превью i.ytimg.com + API youtubei; " +
+            "видео — подписанный поток rr*.googlevideo.com (≥64 КБ), звук — отдельно; " +
+            "QUIC — настоящий Initial на www.google.com",
+            $"QUIC-проба: {_lastQuicResult ?? "ещё не проверялась"}",
+        };
+
+        var preset = ProviderPresetStore.Find(snapshot.Key);
+        lines.Add(preset is null
+            ? "Сохранённые подборки: записи для этой сети нет"
+            : $"Сохранённые подборки: {Value(preset.Page)}, " +
+              (string.Equals(preset.Source, "manual", StringComparison.Ordinal)
+                  ? "выбрано вручную"
+                  : "подтверждено подбором") +
+              $", подтверждений {preset.Successes}" +
+              (string.Equals(preset.VideoTransport, "tcp", StringComparison.Ordinal)
+                  ? ", поток по TCP"
+                  : string.Empty) +
+              (preset.LastSuccessUtc == default
+                  ? string.Empty
+                  : $", последний успех {preset.LastSuccessUtc.ToLocalTime():dd.MM HH:mm}"));
+
+        lines.Add(ForwarderHost.IsRunning
+            ? $"Форвардер: работает на порту {ForwarderHost.Port}, режим {ForwarderHost.Mode} · " +
+              $"соединений {ForwarderHost.AcceptedConnections}, разрезано {ForwarderHost.FragmentedConnections}, " +
+              $"QUIC-сессий {ForwarderHost.UdpAssociations}, фейков {ForwarderHost.FakeQuicPackets}"
+            : "Форвардер: не запущен");
+
+        var videoKb = ForwarderHost.VideoBytes / 1024;
+        lines.Add(videoKb > 0
+            ? $"Видео шло: по TCP через обход — {videoKb} КБ за {ForwarderHost.VideoConnections} соединений"
+            : ForwarderHost.UdpAssociations > 0
+                ? $"Видео шло: по QUIC через релей (TCP-потока от медиасервера нет), сессий {ForwarderHost.UdpAssociations}"
+                : "Видео шло: пока не наблюдалось");
+
+        lines.Add("Последний подбор: " + (_lastPageResult ?? "ещё не запускался"));
+        if (_lastVideoResult is not null)
+        {
+            lines.Add("Видео: " + _lastVideoResult);
+        }
+
+        _stats.Text = string.Join("\n", lines);
+    }
+
+    private static string Value(string value) => string.IsNullOrWhiteSpace(value) ? "не задано" : value;
+
+    /// <summary>Названия источников — простыми словами, без технических ключей.</summary>
+    private static string Humanize(string source) => source switch
+    {
+        "локальный пресет сети" => "сохранено для этой сети",
+        "база операторов (зашитая)" => "из базы операторов (вшита в сборку)",
+        "база операторов (на устройстве)" => "из базы операторов (собрана на телефоне)",
+        "пресет типа сети" => "сохранено для всех сетей этого типа",
+        "общая стратегия" => "последняя использованная",
+        "общая настройка" => "общая настройка",
+        "по умолчанию (Oob)" => "по умолчанию",
+        _ => source,
+    };
+
+    private static string HumanizeNetworks(string details) => details
+        .Replace("CELLULAR", "мобильная", StringComparison.Ordinal)
+        .Replace("WIFI", "Wi-Fi", StringComparison.Ordinal)
+        .Replace("ETHERNET", "Ethernet", StringComparison.Ordinal)
+        .Replace(" VALIDATED", " — интернет есть", StringComparison.Ordinal)
+        .Replace("(не проверена)", "— интернет не проверен", StringComparison.Ordinal)
+        .Replace("VPN (пропущен)", "VPN не считается", StringComparison.Ordinal);
 
     private void UpdateButtons()
     {

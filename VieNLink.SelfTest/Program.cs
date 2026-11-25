@@ -167,6 +167,15 @@ internal static class Program
             case "forwarder":
                 await RunForwarderTestAsync();
                 break;
+            case "forwarderudp":
+                await RunForwarderUdpAsync();
+                break;
+            case "forwarderudpvia":
+                await RunForwarderUdpViaSingBoxAsync();
+                break;
+            case "providerpresets":
+                RunProviderPresetsTest();
+                break;
             case "forwardertls":
                 await RunForwarderTlsAsync();
                 break;
@@ -1797,6 +1806,364 @@ internal static class Program
             {
                 await forwarder.StopAsync();
                 destination.Stop();
+            }
+        }
+    }
+
+    /// <summary>
+    /// UDP ASSOCIATE в форвардере: QUIC-датаграммы проходят через релей, а перед настоящим
+    /// Initial к этому назначению уходит серия фейковых Initial с безобидным SNI (TTL 8).
+    /// Проверяется без администратора: назначение — локальный UDP-эхо-сервер.
+    /// </summary>
+    private static async Task RunForwarderUdpAsync()
+    {
+        Console.WriteLine("UDP-релей форвардера (QUIC-фейк):");
+        Check(QuicFake.IsAvailable && QuicFake.Template.Length == 1200,
+            "QUIC-фейк: шаблон Initial в сборке (1200 байт)");
+        Check(QuicFake.IsInitial(QuicFake.Template.Span), "QUIC-фейк: шаблон — длинный заголовок Initial");
+        Check(!QuicFake.IsInitial(new byte[64]), "QUIC-фейк: короткая датаграмма — не Initial");
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        // Эхо-сервер: считает размеры и первые байты, отвечает «ok» только на настоящий Initial.
+        using var echo = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        echo.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        var echoPort = ((IPEndPoint)echo.LocalEndPoint!).Port;
+        var sizes = new System.Collections.Concurrent.ConcurrentBag<int>();
+        var echoTask = Task.Run(async () =>
+        {
+            var buffer = new byte[65535];
+            var from = new IPEndPoint(IPAddress.Any, 0);
+            try
+            {
+                while (!timeout.IsCancellationRequested)
+                {
+                    var result = await echo.ReceiveFromAsync(buffer, SocketFlags.None, from, timeout.Token);
+                    sizes.Add(result.ReceivedBytes);
+                    if (result.ReceivedBytes == 1300)
+                    {
+                        await echo.SendToAsync("ok"u8.ToArray(), SocketFlags.None, result.RemoteEndPoint,
+                            timeout.Token);
+                    }
+                }
+            }
+            catch (Exception exception) when (exception is OperationCanceledException or SocketException
+                                                  or ObjectDisposedException)
+            {
+            }
+        }, timeout.Token);
+
+        var forwarder = new TlsFragmentForwarder();
+        Socket? client = null;
+        try
+        {
+            await forwarder.StartAsync(StreamFragmentMode.None);
+            client = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            client.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+
+            using var control = new TcpClient();
+            await control.ConnectAsync(IPAddress.Loopback, forwarder.Port, timeout.Token);
+            var stream = control.GetStream();
+            await stream.WriteAsync(new byte[] { 5, 1, 0 }, timeout.Token);
+            var greeting = new byte[2];
+            await stream.ReadExactlyAsync(greeting, timeout.Token);
+
+            // UDP ASSOCIATE: адрес клиента нулевой — релей узнает его из датаграммы.
+            await stream.WriteAsync(new byte[] { 5, 3, 0, 1, 0, 0, 0, 0, 0, 0 }, timeout.Token);
+            var reply = new byte[10];
+            await stream.ReadExactlyAsync(reply, timeout.Token);
+            Check(reply[0] == 5 && reply[1] == 0, "SOCKS5: UDP ASSOCIATE принят");
+            var relay = new IPEndPoint(new IPAddress(reply.AsSpan(4, 4)), (reply[8] << 8) | reply[9]);
+            Check(relay.Address.Equals(IPAddress.Loopback) && relay.Port > 0,
+                "SOCKS5: релей вернул адрес 127.0.0.1:" + relay.Port);
+
+            var initial = new byte[1300];
+            initial[0] = 0xC3;
+            initial[1] = 0x00;
+            initial[2] = 0x00;
+            initial[3] = 0x00;
+            initial[4] = 0x01;
+
+            var request = BuildUdpDatagram(IPAddress.Loopback, echoPort, initial);
+            await client.SendToAsync(request, SocketFlags.None, relay, timeout.Token);
+
+            var incoming = new byte[65535];
+            var fromRelay = new IPEndPoint(IPAddress.Any, 0);
+            var answer = await client.ReceiveFromAsync(incoming, SocketFlags.None, fromRelay, timeout.Token);
+            Check(answer.ReceivedBytes >= 10, "UDP-релей: ответ вернулся клиенту");
+            var payloadOffset = incoming[3] == 1 ? 10 : 22;
+            var answerPort = incoming[3] == 1
+                ? (incoming[8] << 8) | incoming[9]
+                : (incoming[20] << 8) | incoming[21];
+            Check(answerPort == echoPort && incoming[3] == 1, "UDP-релей: в ответе адрес эхо-сервера");
+            Check(incoming.AsSpan(payloadOffset, answer.ReceivedBytes - payloadOffset).SequenceEqual("ok"u8),
+                "UDP-релей: полезная нагрузка ответа без потерь");
+
+            await WaitForAsync(() => sizes.Contains(1300), timeout.Token);
+            Check(sizes.Contains(1300), "UDP-релей: эхо-сервер получил настоящий Initial (1300 байт)");
+            Check(forwarder.UdpAssociations == 1, "UDP-релей: ассоциация учтена");
+
+            await WaitForAsync(() => forwarder.FakeQuicPackets >= QuicFake.Repeats, timeout.Token);
+            Check(forwarder.FakeQuicPackets == QuicFake.Repeats,
+                $"QUIC-фейк: отправлено {forwarder.FakeQuicPackets} копий перед настоящим");
+            Check(sizes.Count(size => size == QuicFake.Template.Length) > 0,
+                "QUIC-фейк: эхо-сервер видит поддельный Initial (1200 байт)");
+
+            // Повторная датаграмма к тому же назначению фейк не дублирует (окно 10 с),
+            // а короткая датаграмма Initial не считается вовсе.
+            var seen = forwarder.FakeQuicPackets;
+            await client.SendToAsync(BuildUdpDatagram(IPAddress.Loopback, echoPort, initial), SocketFlags.None,
+                relay, timeout.Token);
+            await Task.Delay(200, timeout.Token);
+            Check(forwarder.FakeQuicPackets == seen, "QUIC-фейк: повторное назначение не заливается фейками");
+
+            var shortPayload = new byte[64];
+            await client.SendToAsync(BuildUdpDatagram(IPAddress.Loopback, echoPort, shortPayload),
+                SocketFlags.None, relay, timeout.Token);
+            await Task.Delay(200, timeout.Token);
+            Check(forwarder.FakeQuicPackets == seen, "QUIC-фейк: короткая датаграмма пропускается как есть");
+        }
+        catch (Exception exception)
+        {
+            Check(false, "UDP-релей: " + exception.Message);
+        }
+        finally
+        {
+            client?.Dispose();
+            await forwarder.StopAsync();
+            echo.Dispose();
+            try
+            {
+                await echoTask;
+            }
+            catch (Exception exception) when (exception is OperationCanceledException or SocketException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// База параметров обхода по операторам: подтверждение, ручной выбор, приоритеты
+    /// и экспорт без личных данных (Wi-Fi SSID не попадают).
+    /// </summary>
+    private static void RunProviderPresetsTest()
+    {
+        Console.WriteLine("База параметров обхода по операторам:");
+        var path = Path.Combine(Path.GetTempPath(), "vienlink-provider-presets-test.json");
+        TryDelete(path);
+        TryDelete(path + ".bak");
+        var previous = ProviderPresetStore.PathOverride;
+        ProviderPresetStore.PathOverride = path;
+        try
+        {
+            const string key = "cell:25001:МТС";
+            Check(ProviderPresetStore.Find(key) is null, "база пуста");
+
+            ProviderPresetStore.RecordSuccess(key, "Oob", string.Empty, blockQuic: false);
+            var preset = ProviderPresetStore.Find(key, out var shipped);
+            Check(preset is not null && preset.Page == "Oob" && !shipped && preset.Successes == 1,
+                "подтверждение сохранено на устройстве");
+            Check(preset is not null && !preset.BlockQuic, "QUIC: режим релея запомнен");
+
+            ProviderPresetStore.RecordSuccess(key, "RecordSplit", "Oob", blockQuic: true);
+            preset = ProviderPresetStore.Find(key);
+            Check(preset is not null && preset.Page == "RecordSplit" && preset.BlockQuic &&
+                  preset.Successes == 2, "автоподбор обновил параметры (2 подтверждения)");
+
+            ProviderPresetStore.RecordChoice(key, "Oob", string.Empty, blockQuic: false);
+            preset = ProviderPresetStore.Find(key);
+            Check(preset is not null && preset.Source == "manual" && preset.Successes == 2,
+                "ручной выбор не считается подтверждением");
+
+            ProviderPresetStore.RecordSuccess(key, "Split1", string.Empty, blockQuic: false);
+            preset = ProviderPresetStore.Find(key);
+            Check(preset is not null && preset.Page == "Oob" && preset.Successes == 3,
+                "автоподбор не перезаписывает ручной выбор");
+
+            ProviderPresetStore.RecordChoice("wifi:Lena11", "Oob", string.Empty, blockQuic: false);
+            var export = ProviderPresetStore.ExportJson();
+            Check(export.Contains(key, StringComparison.Ordinal) &&
+                  !export.Contains("wifi:", StringComparison.OrdinalIgnoreCase),
+                "экспорт: только операторы, без SSID");
+
+            var shippedFile = ProviderPresetStore.LoadShipped();
+            Check(shippedFile.Version >= 1 && shippedFile.Presets is not null,
+                "зашитая база читается из сборки");
+        }
+        finally
+        {
+            ProviderPresetStore.PathOverride = previous;
+            TryDelete(path);
+            TryDelete(path + ".bak");
+        }
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 50 && !condition(); attempt++)
+        {
+            await Task.Delay(100, cancellationToken);
+        }
+    }
+
+    /// <summary>Датаграмма в формате SOCKS5 UDP (RSV, FRAG 0, IPv4-адрес назначения).</summary>
+    private static byte[] BuildUdpDatagram(IPAddress address, int port, byte[] payload)
+    {
+        var length = 10 + payload.Length;
+        var datagram = new byte[length];
+        datagram[3] = 1;
+        address.GetAddressBytes().CopyTo(datagram, 4);
+        datagram[8] = (byte)(port >> 8);
+        datagram[9] = (byte)port;
+        payload.CopyTo(datagram, 10);
+        return datagram;
+    }
+
+    /// <summary>
+    /// Сквозная проверка UDP-релея: sing-box (socks inbound → socks outbound) отправляет QUIC
+    /// в форвардер, форвардер релеит датаграмму и шлёт фейковый Initial. Без TUN и без админа.
+    /// </summary>
+    private static async Task RunForwarderUdpViaSingBoxAsync()
+    {
+        Console.WriteLine("Сквозная проверка UDP: sing-box → форвардер → эхо:");
+        if (!SingBoxCore.IsInstalled)
+        {
+            Console.WriteLine("  пропуск: sing-box.exe не установлен");
+            return;
+        }
+
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        using var echo = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        echo.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        var echoPort = ((IPEndPoint)echo.LocalEndPoint!).Port;
+        var echoTask = Task.Run(async () =>
+        {
+            var buffer = new byte[65535];
+            try
+            {
+                while (!timeout.IsCancellationRequested)
+                {
+                    var result = await echo.ReceiveFromAsync(
+                        buffer, SocketFlags.None, new IPEndPoint(IPAddress.Any, 0), timeout.Token);
+                    if (result.ReceivedBytes == 1300)
+                    {
+                        await echo.SendToAsync("ok"u8.ToArray(), SocketFlags.None, result.RemoteEndPoint,
+                            timeout.Token);
+                    }
+                }
+            }
+            catch (Exception exception) when (exception is OperationCanceledException or SocketException
+                                                  or ObjectDisposedException)
+            {
+            }
+        }, timeout.Token);
+
+        var forwarder = new TlsFragmentForwarder();
+        var socksPort = FindFreePort(21960);
+        var configPath = Path.Combine(AppPaths.RuntimeDirectory, "forwarder-udp-test.json");
+        var runner = new SingBoxRunner();
+        Socket? client = null;
+        try
+        {
+            await forwarder.StartAsync(StreamFragmentMode.None);
+            var config = new JsonObject
+            {
+                ["log"] = new JsonObject { ["level"] = "warn", ["timestamp"] = true },
+                ["inbounds"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["type"] = "socks",
+                        ["tag"] = "in",
+                        ["listen"] = "127.0.0.1",
+                        ["listen_port"] = socksPort,
+                    },
+                },
+                ["outbounds"] = new JsonArray
+                {
+                    new JsonObject
+                    {
+                        ["type"] = "socks",
+                        ["tag"] = "fragment",
+                        ["server"] = "127.0.0.1",
+                        ["server_port"] = forwarder.Port,
+                    },
+                    new JsonObject { ["type"] = "direct", ["tag"] = "direct" },
+                },
+                ["route"] = new JsonObject { ["final"] = "fragment" },
+            };
+            SingBoxConfigBuilder.WriteToFile(configPath, config.ToJsonString());
+            await SingBoxRunner.CheckConfigAsync(configPath, timeout.Token);
+            await runner.StartAsync(configPath, socksPort, TimeSpan.FromSeconds(20), timeout.Token);
+
+            // Клиент sing-box: SOCKS5 UDP ASSOCIATE, затем датаграмма-Initial на эхо-сервер.
+            client = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            client.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+            using var control = new TcpClient();
+            await control.ConnectAsync(IPAddress.Loopback, socksPort, timeout.Token);
+            var stream = control.GetStream();
+            await stream.WriteAsync(new byte[] { 5, 1, 0 }, timeout.Token);
+            var greeting = new byte[2];
+            await stream.ReadExactlyAsync(greeting, timeout.Token);
+            await stream.WriteAsync(new byte[] { 5, 3, 0, 1, 0, 0, 0, 0, 0, 0 }, timeout.Token);
+            var reply = new byte[10];
+            await stream.ReadExactlyAsync(reply, timeout.Token);
+            Check(reply[0] == 5 && reply[1] == 0, "sing-box: UDP ASSOCIATE принят");
+            var relay = new IPEndPoint(new IPAddress(reply.AsSpan(4, 4)), (reply[8] << 8) | reply[9]);
+
+            var initial = new byte[1300];
+            initial[0] = 0xC3;
+            initial[4] = 0x01;
+            await client.SendToAsync(BuildUdpDatagram(IPAddress.Loopback, echoPort, initial), SocketFlags.None,
+                relay, timeout.Token);
+
+            var incoming = new byte[65535];
+            var answer = await client.ReceiveFromAsync(
+                incoming, SocketFlags.None, new IPEndPoint(IPAddress.Any, 0), timeout.Token);
+            Check(answer.ReceivedBytes >= 12, "sing-box → форвардер: ответ вернулся клиенту");
+            var payloadOffset = incoming[3] == 1 ? 10 : 22;
+            Check(incoming.AsSpan(payloadOffset, answer.ReceivedBytes - payloadOffset).SequenceEqual("ok"u8),
+                "sing-box → форвардер: полезная нагрузка через всю цепочку без потерь");
+            Check(forwarder.UdpAssociations >= 1, "sing-box → форвардер: ассоциация открыта");
+            await WaitForAsync(() => forwarder.FakeQuicPackets >= QuicFake.Repeats, timeout.Token);
+            Check(forwarder.FakeQuicPackets >= QuicFake.Repeats,
+                $"sing-box → форвардер: отправлен QUIC-фейк ({forwarder.FakeQuicPackets} копий)");
+        }
+        catch (Exception exception)
+        {
+            Check(false, "sing-box → форвардер: " + exception.Message);
+        }
+        finally
+        {
+            client?.Dispose();
+            await runner.StopAsync();
+            await forwarder.StopAsync();
+            echo.Dispose();
+            try
+            {
+                await echoTask;
+            }
+            catch (Exception exception) when (exception is OperationCanceledException or SocketException)
+            {
+            }
+
+            try
+            {
+                File.Delete(configPath);
+            }
+            catch (IOException)
+            {
             }
         }
     }

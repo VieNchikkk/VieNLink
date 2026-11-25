@@ -115,6 +115,17 @@ CoreLog, TrayState, ProductFeatures, BypassProfiles, Layout); сервисы `Si
   (`DesyncService`), TUN-обход без узла (`TunBypassService` → SOCKS5 `TlsFragmentForwarder`).
   Все взаимоисключающие с прокси-узлом и друг с другом; требуют админа. В TUN-обходе обязательно
   правило `process_name: VieNLink.exe → direct` (иначе петля), DNS/`resolve` — `ipv4_only`.
+  Форвардер TUN-обхода (`TlsFragmentForwarder`) принимает и UDP (SOCKS5 `UDP ASSOCIATE`):
+  когда галочка «Блокировать QUIC» снята, UDP/443 идёт в форвардер, и перед настоящим
+  QUIC Initial он шлёт 11 копий фейкового Initial (шаблон zapret в `VieNLink.Core/Assets`,
+  безобидный `www.google.com`, TTL 8). Байты не правятся, root не нужен; при блокировке
+  по IP/сигнатуре фейк не помогает. С галочкой — прежний `reject` UDP/443.
+  Пресеты Android — по конкретной сети (`wifi:<SSID>` / `cell:<MCCMNC>:<оператор>`), затем
+  по типу сети, затем общая стратегия; при поднятом VPN VPN-сеть пропускается, иначе
+  определяется неверно. Подтверждённые параметры по операторам копятся в
+  `provider-presets.json` (локально) и экспортируются кнопкой «Поделиться подборками» —
+  их зашивают в `VieNLink.Core/Assets/provider-presets.json` как стартовые для новых
+  установок. SSID Wi-Fi в экспорт и зашитую базу не попадают.
   Удачные конфиги копятся в `bypass-profiles.json` и применяются первыми.
   Автоподбор проверяет видео по нескольким хостам googlevideo (до 2) и требует ≥64 КБ
   потока; если curl/HttpClient получают 0 (YouTube подписывает поток в JS, n-sig/PO-токен),
@@ -203,7 +214,8 @@ CoreLog, TrayState, ProductFeatures, BypassProfiles, Layout); сервисы `Si
 - В TUN-обходе (C#-форвардер) работают только разрезы в естественном порядке, TLS-записи и OOB.
   Перестановка кусков и fake требуют правки уже отправленных байтов (raw-пакеты): ядро присваивает
   seq в порядке `send`, и сервер собирает «хвост + начало». `DisorderSni`/TTL-стратегии удалены.
-  Для fake/QUIC-фейка нужен native ciadpi (MIT) или root. На практике YouTube (страницы и видео,
+  Для TCP-fake нужен native ciadpi (MIT) или root; QUIC-фейк работает без root через UDP-релей
+  форвардера (это отдельная датаграмма, байты настоящей не правятся). На практике YouTube (страницы и видео,
   Wi-Fi и LTE) открывается стратегией **OOB**; проверять видео в приложении YouTube
   (`media_session`), а не в Chrome mobile web — он даёт ложные таймауты/сбросы.
 - Локальный GGC YouTube у некоторых провайдеров блокируется по IP: видео без прокси-сервера
@@ -232,6 +244,9 @@ dotnet run --project VieNLink.SelfTest -- checkconfigs  # все вариант�
 dotnet run --project VieNLink.SelfTest -- cache|sources
 dotnet run --project VieNLink.SelfTest -- statuslogic
 dotnet run --project VieNLink.SelfTest -- hiddenprobe 5 # скрытая проверка рабочих серверов
+dotnet run --project VieNLink.SelfTest -- forwarderudp # UDP-релей форвардера и QUIC-фейк
+dotnet run --project VieNLink.SelfTest -- forwarderudpvia # то же через sing-box (socks → форвардер)
+dotnet run --project VieNLink.SelfTest -- providerpresets # база параметров обхода по операторам
 dotnet run --project VieNLink.SelfTest -- videoprobe   # проба видео автоподбора (нужен админ)
 dotnet run --project VieNLink.SelfTest -- liveness 60 <url>
 dotnet run --project VieNLink.SelfTest -- mtprotocheck 40

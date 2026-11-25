@@ -49,6 +49,17 @@ internal static class TlsHello
         VideoDomains.Any(domain => host.Equals(domain, StringComparison.OrdinalIgnoreCase) ||
                                    host.EndsWith("." + domain, StringComparison.OrdinalIgnoreCase));
 
+    /// <summary>
+    /// Поток видео/звука с медиасервера (rr*.googlevideo.com). Превью ytimg/ggpht — тоже
+    /// «видео-хост» для фрагментации, но это картинки; redirector/manifest — служебные
+    /// адреса (редирект/манифест), а не поток: подтверждать ими видео нельзя.
+    /// </summary>
+    internal static bool IsStreamHost(string host) =>
+        (host.Equals("googlevideo.com", StringComparison.OrdinalIgnoreCase) ||
+         host.EndsWith(".googlevideo.com", StringComparison.OrdinalIgnoreCase)) &&
+        !host.StartsWith("redirector", StringComparison.OrdinalIgnoreCase) &&
+        !host.StartsWith("manifest", StringComparison.OrdinalIgnoreCase);
+
     internal static bool IsTargetPayload(string payload) =>
         TargetDomains.Any(domain => payload.Contains(domain, StringComparison.OrdinalIgnoreCase));
 

@@ -37,7 +37,7 @@ internal static class VpnStarter
     {
         if (AndroidSettingsStore.Current.LastRunWasBypass)
         {
-            var mode = Enum.TryParse<StreamFragmentMode>(NetworkPresets.GetPage(context), out var parsed)
+            var mode = Enum.TryParse<StreamFragmentMode>(NetworkPresets.ResolvePage(context), out var parsed)
                 ? parsed
                 : StreamFragmentMode.Oob;
             StartBypass(context, mode);
@@ -55,6 +55,10 @@ internal static class VpnStarter
 
     private static void StartForeground(Context context, Intent intent)
     {
+        // Любой запуск (обход или сервер) отменяет идущий подбор стратегии: иначе автоподбор
+        // продолжал бы крутить свои форвардеры поверх уже поднятого туннеля.
+        StrategyAutotune.CancelActive();
+
         // Начиная с Android 8 службу с уведомлением запускают через StartForegroundService.
         if (Build.VERSION.SdkInt >= BuildVersionCodes.O)
         {

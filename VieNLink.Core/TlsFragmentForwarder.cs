@@ -62,6 +62,9 @@ internal enum StreamFragmentMode
     /// <summary>То же с TTL 2 — если DPI стоит у самого провайдера.</summary>
     FakeSni2,
 
+    /// <summary>То же с TTL 1 — для видео-CDN GGC, который в 1–3 хопах от абонента.</summary>
+    FakeSni1,
+
     /// <summary>Фейк SNI с TTL 3.</summary>
     FakeSni3,
 
@@ -110,6 +113,8 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
             "То же с TTL 4 — если DPI ближе к абоненту.", 0, 4),
         new("Фейк SNI (TTL 2)", StreamFragmentMode.FakeSni2,
             "То же с TTL 2 — если DPI стоит у самого провайдера.", 0, 2),
+        new("Фейк SNI (TTL 1)", StreamFragmentMode.FakeSni1,
+            "То же с TTL 1 — для видео-CDN GGC (1–3 хопа): фейк умирает до узла, DPI видит безобидный SNI.", 0, 1),
         new("Фейк SNI (TTL 3)", StreamFragmentMode.FakeSni3,
             "То же с TTL 3 — перебор между «у провайдера» и «дальше».", 0, 3),
         new("Фейк SNI (TTL 5)", StreamFragmentMode.FakeSni5,
@@ -180,9 +185,28 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
     private bool _fragmentAllHosts;
     private long _acceptedConnections;
     private long _fragmentedConnections;
+    private long _udpAssociations;
+    private long _fakeQuicPackets;
+    private long _videoBytes;
+    private long _videoConnections;
+
+    /// <summary>
+    /// Чтобы не заливать один и тот же QUIC-сервер фейками: ключ — локальный порт
+    /// и адрес назначения, окно 10 секунд (как в Windows-движке).
+    /// </summary>
+    private readonly ConcurrentDictionary<string, DateTime> _quicSeen = new();
 
     /// <summary>TTL, который возвращается сокету после «оборванного» сегмента.</summary>
     private const int DefaultTtl = 64;
+
+    /// <summary>
+    /// Сколько байт от медиасервера считаем настоящим потоком (подтверждение стратегии).
+    /// 4 КБ — это страница-редирект, а не видео.
+    /// </summary>
+    private const int StreamConfirmBytes = 24 * 1024;
+
+    private const byte SocksConnect = 1;
+    private const byte SocksUdpAssociate = 3;
 
     public int Port { get; private set; }
 
@@ -191,6 +215,30 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
     public long AcceptedConnections => Interlocked.Read(ref _acceptedConnections);
 
     public long FragmentedConnections => Interlocked.Read(ref _fragmentedConnections);
+
+    /// <summary>Сколько UDP-ассоциаций (QUIC) открыл sing-box.</summary>
+    public long UdpAssociations => Interlocked.Read(ref _udpAssociations);
+
+    /// <summary>Сколько фейковых QUIC Initial отправлено.</summary>
+    public long FakeQuicPackets => Interlocked.Read(ref _fakeQuicPackets);
+
+    /// <summary>Сколько байт пришло от видео-хостов (googlevideo/ytimg/ggpht).</summary>
+    public long VideoBytes => Interlocked.Read(ref _videoBytes);
+
+    /// <summary>Сколько видео-соединений реально отдали данные.</summary>
+    public long VideoConnections => Interlocked.Read(ref _videoConnections);
+
+    /// <summary>
+    /// Уведомление о реальном видео-потоке (хост, байты). По нему подтверждаем стратегию
+    /// в базе операторов: это доказательство, что видео действительно идёт.
+    /// </summary>
+    internal static Action<string, long>? VideoObserved { get; set; }
+
+    /// <summary>
+    /// Подменять QUIC Initial (фейк с безобидным SNI перед настоящим). Выключается
+    /// в self-test и при диагностике: тогда UDP-релей работает как обычный SOCKS5.
+    /// </summary>
+    public bool QuicFakeEnabled { get; set; } = true;
 
     /// <param name="fragmentAllHosts">
     /// Резать любой TLS ClientHello, а не только домены из <see cref="TlsHello.TargetDomains"/>.
@@ -274,7 +322,14 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
                 try
                 {
                 var clientStream = client.GetStream();
-                var (host, port) = await ReadSocks5Async(clientStream, connection.Token).ConfigureAwait(false);
+                var (host, port, command) = await ReadSocks5Async(clientStream, connection.Token)
+                    .ConfigureAwait(false);
+                if (command == SocksUdpAssociate)
+                {
+                    await UdpRelayAsync(clientStream, connection.Token).ConfigureAwait(false);
+                    return;
+                }
+
                 Trace?.Invoke($"→ {host}:{port}");
 
                 using var target = new TcpClient(AddressFamily.InterNetwork);
@@ -324,9 +379,43 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
 
                 if (sniHost is not null && TlsHello.IsVideoHost(sniHost))
                 {
-                    // Замер потока видео-CDN: видно, проходит ли троттлинг.
+                    var bytes = Interlocked.Read(ref downloadBytes);
+                    var stream = TlsHello.IsStreamHost(sniHost);
+
+                    // Превью и служебные адреса видео не подтверждают: поток — это медиасервер
+                    // (rr*), отдавший заметный кусок, а не 4-килобайтная страница-редирект.
+                    var realStream = stream && bytes >= StreamConfirmBytes;
+                    if (stream)
+                    {
+                        Interlocked.Add(ref _videoBytes, bytes);
+                        if (realStream)
+                        {
+                            Interlocked.Increment(ref _videoConnections);
+                        }
+                    }
+
+                    // Замер потока видео-CDN: видно, проходит ли троттлинг. 0 байт при успешном
+                    // TCP-подключении — SNI-блок (DPI режет по имени rr*-узла), а не блок по IP.
+                    var label = stream ? "видео" : sniHost.Contains("ytimg", StringComparison.OrdinalIgnoreCase) ||
+                                          sniHost.Contains("ggpht", StringComparison.OrdinalIgnoreCase)
+                        ? "превью"
+                        : "медиа-редирект";
                     AppLog.Write("tun-bypass",
-                        $"видео {sniHost}: {Interlocked.Read(ref downloadBytes)} байт получено");
+                        bytes == 0
+                            ? $"{label} {sniHost}: 0 байт — TCP-подключение прошло, вероятен SNI-блок"
+                            : $"{label} {sniHost}: {bytes} байт получено");
+
+                    if (realStream)
+                    {
+                        try
+                        {
+                            VideoObserved?.Invoke(sniHost, bytes);
+                        }
+                        catch (Exception exception)
+                        {
+                            AppLog.Write("tun-bypass", "Обработчик видео-потока упал", exception);
+                        }
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -733,7 +822,7 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
 
     private static bool IsFakeSni(StreamFragmentMode mode) =>
         mode is StreamFragmentMode.FakeSni or StreamFragmentMode.FakeSniMd5
-            or StreamFragmentMode.FakeSni2 or StreamFragmentMode.FakeSni3
+            or StreamFragmentMode.FakeSni1 or StreamFragmentMode.FakeSni2 or StreamFragmentMode.FakeSni3
             or StreamFragmentMode.FakeSni4 or StreamFragmentMode.FakeSni5
             or StreamFragmentMode.FakeSni6 or StreamFragmentMode.FakeSni7;
 
@@ -885,7 +974,8 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
         }
     }
 
-    private static async Task<(string Host, int Port)> ReadSocks5Async(NetworkStream stream, CancellationToken cancellationToken)
+    private static async Task<(string Host, int Port, byte Command)> ReadSocks5Async(
+        NetworkStream stream, CancellationToken cancellationToken)
     {
         var greeting = new byte[2];
         await stream.ReadExactlyAsync(greeting, cancellationToken).ConfigureAwait(false);
@@ -900,9 +990,9 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
 
         var request = new byte[4];
         await stream.ReadExactlyAsync(request, cancellationToken).ConfigureAwait(false);
-        if (request[0] != 5 || request[1] != 1)
+        if (request[0] != 5 || (request[1] != SocksConnect && request[1] != SocksUdpAssociate))
         {
-            throw new InvalidOperationException("SOCKS5: поддерживается только CONNECT");
+            throw new InvalidOperationException("SOCKS5: поддерживаются только CONNECT и UDP ASSOCIATE");
         }
 
         string host;
@@ -938,12 +1028,356 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
         var portBytes = new byte[2];
         await stream.ReadExactlyAsync(portBytes, cancellationToken).ConfigureAwait(false);
         var port = (portBytes[0] << 8) | portBytes[1];
-        if (port is <= 0 or > 65535)
+        // У UDP ASSOCIATE в запросе обычно 0.0.0.0:0 — адрес клиента релей узнаёт из датаграммы.
+        if (request[1] != SocksUdpAssociate && port is <= 0 or > 65535)
         {
             throw new InvalidOperationException("SOCKS5: неверный порт " + port);
         }
 
-        return (host, port);
+        return (host, port, request[1]);
+    }
+
+    /// <summary>
+    /// UDP ASSOCIATE: sing-box присылает QUIC (UDP/443) сюда. Релей открывает свой UDP-сокет,
+    /// шлёт перед настоящим Initial фейковый (безобидный SNI, малый TTL) и возвращает ответы
+    /// клиенту в формате SOCKS5 UDP. Без фейка QUIC-блок по SNI не обойти: TLS-фрагментация
+    /// работает только по TCP.
+    /// </summary>
+    private async Task UdpRelayAsync(NetworkStream control, CancellationToken cancellationToken)
+    {
+        using var association = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        using var local = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        using var upstream = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        local.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+        upstream.Bind(new IPEndPoint(IPAddress.Any, 0));
+
+        var relay = (IPEndPoint)local.LocalEndPoint!;
+        var reply = new byte[10];
+        reply[0] = 5;
+        reply[1] = 0;
+        reply[2] = 0;
+        reply[3] = 1;
+        relay.Address.GetAddressBytes().CopyTo(reply, 4);
+        reply[8] = (byte)(relay.Port >> 8);
+        reply[9] = (byte)relay.Port;
+        await control.WriteAsync(reply, cancellationToken).ConfigureAwait(false);
+
+        var associationIndex = Interlocked.Increment(ref _udpAssociations);
+        Trace?.Invoke($"UDP ASSOCIATE → 127.0.0.1:{relay.Port}");
+        if (associationIndex <= 20)
+        {
+            // Первые ассоциации — в журнал; дальше их может быть много, хватит счётчика в UI.
+            AppLog.Write("tun-bypass", $"QUIC: UDP-ассоциация №{associationIndex}, релей 127.0.0.1:{relay.Port}" +
+                                       (QuicFakeEnabled && QuicFake.IsAvailable ? string.Empty : ", фейк выключен"));
+        }
+
+        // Адрес клиента узнаём из первой датаграммы (в запросе sing-box обычно 0.0.0.0:0).
+        var clientEndPoint = new IPEndPoint(IPAddress.Loopback, 0);
+        var clientToUpstream = ClientToUpstreamAsync(local, upstream, clientEndPoint, association);
+        var upstreamToClient = UpstreamToClientAsync(local, upstream, clientEndPoint, association);
+        var controlWatch = WaitForCloseAsync(control, association);
+        await Task.WhenAny(clientToUpstream, upstreamToClient, controlWatch).ConfigureAwait(false);
+        association.Cancel();
+        try
+        {
+            await Task.WhenAll(clientToUpstream, upstreamToClient, controlWatch).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is OperationCanceledException or IOException
+                                              or ObjectDisposedException or SocketException)
+        {
+        }
+    }
+
+    private async Task ClientToUpstreamAsync(
+        Socket local,
+        Socket upstream,
+        IPEndPoint clientEndPoint,
+        CancellationTokenSource association)
+    {
+        var cancellationToken = association.Token;
+        var buffer = new byte[65535];
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            SocketReceiveFromResult received;
+            try
+            {
+                received = await local.ReceiveFromAsync(buffer, SocketFlags.None, clientEndPoint, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is OperationCanceledException or SocketException
+                                                  or ObjectDisposedException)
+            {
+                break;
+            }
+
+            if (received.ReceivedBytes <= 0)
+            {
+                continue;
+            }
+
+            // Адрес клиента для ответов: ReceiveFromAsync не обязан обновлять переданный
+            // IPEndPoint, поэтому копируем из результата явно.
+            if (received.RemoteEndPoint is IPEndPoint sender)
+            {
+                clientEndPoint.Address = sender.Address;
+                clientEndPoint.Port = sender.Port;
+            }
+
+            if (!TryParseUdpHeader(buffer.AsSpan(0, received.ReceivedBytes), out var host, out var port,
+                    out var offset))
+            {
+                continue;
+            }
+
+            IPEndPoint? destination;
+            try
+            {
+                destination = await ResolveAsync(host, port, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
+            if (destination is null || destination.AddressFamily != AddressFamily.InterNetwork)
+            {
+                continue;
+            }
+
+            var payload = buffer.AsMemory(offset, received.ReceivedBytes - offset);
+            try
+            {
+                await SendUdpAsync(upstream, destination, payload, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is SocketException or OperationCanceledException
+                                                  or ObjectDisposedException)
+            {
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+        }
+    }
+
+    private async Task UpstreamToClientAsync(
+        Socket local,
+        Socket upstream,
+        IPEndPoint clientEndPoint,
+        CancellationTokenSource association)
+    {
+        var cancellationToken = association.Token;
+        var buffer = new byte[65535];
+        var header = new byte[22];
+        while (!cancellationToken.IsCancellationRequested)
+        {
+            SocketReceiveFromResult received;
+            try
+            {
+                received = await upstream.ReceiveFromAsync(
+                    buffer, SocketFlags.None, new IPEndPoint(IPAddress.Any, 0), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is OperationCanceledException or SocketException
+                                                  or ObjectDisposedException)
+            {
+                break;
+            }
+
+            if (received.ReceivedBytes <= 0 || clientEndPoint.Port == 0)
+            {
+                continue;
+            }
+
+            var headerLength = BuildUdpHeader((IPEndPoint)received.RemoteEndPoint, header);
+            var packet = new byte[headerLength + received.ReceivedBytes];
+            header.AsSpan(0, headerLength).CopyTo(packet);
+            buffer.AsSpan(0, received.ReceivedBytes).CopyTo(packet.AsSpan(headerLength));
+            try
+            {
+                await local.SendToAsync(packet, SocketFlags.None, clientEndPoint, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is SocketException or OperationCanceledException
+                                                  or ObjectDisposedException)
+            {
+                break;
+            }
+        }
+    }
+
+    private static async Task WaitForCloseAsync(NetworkStream control, CancellationTokenSource association)
+    {
+        var buffer = new byte[256];
+        try
+        {
+            while (await control.ReadAsync(buffer, association.Token).ConfigureAwait(false) > 0)
+            {
+                // После UDP ASSOCIATE управляющий канал данных не несёт: ждём закрытия.
+            }
+        }
+        catch (Exception exception) when (exception is OperationCanceledException or IOException
+                                              or ObjectDisposedException or SocketException)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Отправляет датаграмму вверх. Перед первым QUIC Initial к этому назначению — серия
+    /// фейковых Initial с безобидным SNI и малым TTL.
+    /// </summary>
+    private async Task SendUdpAsync(
+        Socket upstream,
+        IPEndPoint destination,
+        ReadOnlyMemory<byte> payload,
+        CancellationToken cancellationToken)
+    {
+        if (QuicFakeEnabled && QuicFake.IsAvailable && QuicFake.IsInitial(payload.Span))
+        {
+            SendQuicFake(upstream, destination);
+        }
+
+        await upstream.SendToAsync(payload, SocketFlags.None, destination, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private void SendQuicFake(Socket upstream, IPEndPoint destination)
+    {
+        var key = $"{upstream.LocalEndPoint}-{destination}";
+        var now = DateTime.UtcNow;
+        if (_quicSeen.TryGetValue(key, out var last) && now - last < TimeSpan.FromSeconds(10))
+        {
+            return;
+        }
+
+        if (_quicSeen.Count > 512)
+        {
+            _quicSeen.Clear();
+        }
+
+        _quicSeen[key] = now;
+        var template = QuicFake.Template.Span;
+        var ttlSet = TrySetTtl(upstream, QuicFake.Ttl);
+        var sent = 0;
+        try
+        {
+            for (var index = 0; index < QuicFake.Repeats; index++)
+            {
+                try
+                {
+                    upstream.SendTo(template, SocketFlags.None, destination);
+                    sent++;
+                }
+                catch (SocketException)
+                {
+                    break;
+                }
+            }
+        }
+        finally
+        {
+            if (ttlSet)
+            {
+                TrySetTtl(upstream, DefaultTtl);
+            }
+        }
+
+        Interlocked.Add(ref _fakeQuicPackets, sent);
+        Trace?.Invoke($"QUIC: фейк Initial ×{sent} (TTL {QuicFake.Ttl}) → {destination}");
+    }
+
+    private static bool TryParseUdpHeader(
+        ReadOnlySpan<byte> datagram, out string host, out int port, out int offset)
+    {
+        host = string.Empty;
+        port = 0;
+        offset = 0;
+        if (datagram.Length < 10 || datagram[0] != 0 || datagram[1] != 0)
+        {
+            return false;
+        }
+
+        if (datagram[2] != 0)
+        {
+            return false; // FRAG != 0: сборку фрагментов SOCKS5 не поддерживаем
+        }
+
+        switch (datagram[3])
+        {
+            case 1:
+                host = new IPAddress(datagram.Slice(4, 4)).ToString();
+                port = (datagram[8] << 8) | datagram[9];
+                offset = 10;
+                break;
+            case 3:
+            {
+                var length = datagram[4];
+                if (length == 0 || datagram.Length < 5 + length + 2)
+                {
+                    return false;
+                }
+
+                host = Encoding.ASCII.GetString(datagram.Slice(5, length));
+                port = (datagram[5 + length] << 8) | datagram[6 + length];
+                offset = 7 + length;
+                break;
+            }
+            case 4:
+                if (datagram.Length < 22)
+                {
+                    return false;
+                }
+
+                host = new IPAddress(datagram.Slice(4, 16)).ToString();
+                port = (datagram[20] << 8) | datagram[21];
+                offset = 22;
+                break;
+            default:
+                return false;
+        }
+
+        return port is > 0 and <= 65535 && offset < datagram.Length;
+    }
+
+    private static int BuildUdpHeader(IPEndPoint remote, Span<byte> header)
+    {
+        header[0] = 0;
+        header[1] = 0;
+        header[2] = 0;
+        var address = remote.Address.GetAddressBytes();
+        if (remote.AddressFamily == AddressFamily.InterNetwork)
+        {
+            header[3] = 1;
+            address.CopyTo(header[4..]);
+            header[8] = (byte)(remote.Port >> 8);
+            header[9] = (byte)remote.Port;
+            return 10;
+        }
+
+        header[3] = 4;
+        address.CopyTo(header[4..]);
+        header[20] = (byte)(remote.Port >> 8);
+        header[21] = (byte)remote.Port;
+        return 22;
+    }
+
+    private static async Task<IPEndPoint?> ResolveAsync(string host, int port, CancellationToken cancellationToken)
+    {
+        if (IPAddress.TryParse(host, out var address))
+        {
+            return new IPEndPoint(address, port);
+        }
+
+        try
+        {
+            var addresses = await Dns.GetHostAddressesAsync(host, AddressFamily.InterNetwork, cancellationToken)
+                .ConfigureAwait(false);
+            return addresses.Length > 0 ? new IPEndPoint(addresses[0], port) : null;
+        }
+        catch (Exception exception) when (exception is SocketException or OperationCanceledException)
+        {
+            return null;
+        }
     }
 
     public async Task StopAsync()

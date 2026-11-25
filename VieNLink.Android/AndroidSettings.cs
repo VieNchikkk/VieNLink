@@ -57,6 +57,12 @@ internal sealed class AndroidSettings
     public string TunBypassVideoStrategyMobile { get; set; } = "Oob";
 
     /// <summary>
+    /// Стратегии обхода по конкретной сети: ключ — «wifi:&lt;SSID&gt;» или
+    /// «cell:&lt;MCCMNC&gt;:&lt;оператор&gt;». Заполняется при первом запуске обхода в этой сети.
+    /// </summary>
+    public Dictionary<string, BypassPreset> BypassPresets { get; set; } = new();
+
+    /// <summary>
     /// Последний режим запуска: true — TUN-обход, false — прокси-сервер. Нужен, чтобы
     /// после перезапуска службы системой (START_STICKY без intent) восстановить
     /// именно тот режим, а не поднять прямой TUN без прокси.
@@ -68,6 +74,19 @@ internal sealed class AndroidSettings
 
     /// <summary>Автоматически проверять серверы в фоне (в дополнение к :probe в процессе).</summary>
     public bool AutoProbe { get; set; } = true;
+}
+
+/// <summary>Стратегии TUN-обхода, сохранённые для одной сети (Wi-Fi или оператора).</summary>
+internal sealed class BypassPreset
+{
+    /// <summary>Стратегия страниц (имя <see cref="StreamFragmentMode"/>).</summary>
+    public string Page { get; set; } = string.Empty;
+
+    /// <summary>Стратегия видео-CDN; пусто — как для страниц.</summary>
+    public string Video { get; set; } = string.Empty;
+
+    /// <summary>Блокировать ли QUIC на этой сети; null — не задано, берём из базы/общих настроек.</summary>
+    public bool? BlockQuic { get; set; }
 }
 
 internal static class AndroidSettingsStore

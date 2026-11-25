@@ -56,6 +56,12 @@ internal static class AppPaths
     /// <summary>Удачные конфиги обходов, отсортированные по качеству подключения.</summary>
     public static string BypassProfilesPath { get; } = Path.Combine(DataDirectory, "bypass-profiles.json");
 
+    /// <summary>
+    /// Подтверждённые параметры обхода по сетям/операторам: собираются на устройстве,
+    /// экспортируются и зашиваются в сборку как стартовые для других пользователей.
+    /// </summary>
+    public static string ProviderPresetsPath { get; } = Path.Combine(DataDirectory, "provider-presets.json");
+
     /// <summary>Кэш дат публикации GitHub-источников: чтобы после перезапуска не жечь квоту API заново.</summary>
     public static string FreshnessPath { get; } = Path.Combine(DataDirectory, "freshness.json");
 

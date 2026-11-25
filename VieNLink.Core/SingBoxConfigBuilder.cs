@@ -299,6 +299,18 @@ internal static class SingBoxConfigBuilder
                 ["action"] = "reject",
             });
         }
+        else
+        {
+            // QUIC идёт через форвардер: он шлёт перед настоящим Initial фейковый
+            // с безобидным SNI и малым TTL (TLS-фрагментация работает только по TCP).
+            rules.Add(new JsonObject
+            {
+                ["network"] = "udp",
+                ["port"] = 443,
+                ["action"] = "route",
+                ["outbound"] = "fragment",
+            });
+        }
 
         rules.Add(new JsonObject
         {
