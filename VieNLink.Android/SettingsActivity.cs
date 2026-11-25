@@ -176,24 +176,26 @@ public sealed class SettingsActivity : BaseActivity
         // -------------------------------------------------------------- данные и VPN
         page.AddView(Ui.Section(this, "Данные и VPN", P));
 
-        // Согласие на отправку подборок показываем только когда приёмник уже поднят:
-        // галочка без работающего приёма обещала бы то, чего нет.
-        if (ProviderPresetShare.IsConfigured)
-        {
-            AddAutomationToggle(page, "Помогать другим: отправлять подобранные параметры",
-                "Уходят только оператор и стратегии обхода — без имени Wi-Fi, адресов и данных " +
-                "об устройстве. Так новые установки сразу работают на вашем операторе.",
-                android.ShareProviderPresets,
-                value =>
+        // Согласие на отправку подборок — всегда на виду: по просьбе владельца галочка
+        // спрашивается сразу. Пока адрес приёмника не пришёл в базе, записи только копятся
+        // на устройстве и никуда не уходят.
+        AddAutomationToggle(page, "Помогать другим: отправлять подобранные параметры",
+            ProviderPresetShare.IsConfigured
+                ? "Уходят только оператор и стратегии обхода — без имени Wi-Fi, адресов и данных " +
+                  "об устройстве. Так новые установки сразу работают на вашем операторе."
+                : "Уходят только оператор и стратегии обхода — без имени Wi-Fi, адресов и данных " +
+                  "об устройстве. Приёмник пока не подключён: записи копятся на устройстве " +
+                  "и уйдут сами, как только он появится в обновляемой базе.",
+            android.ShareProviderPresets,
+            value =>
+            {
+                android.ShareProviderPresets = value;
+                ProviderPresetShare.Enabled = value;
+                if (value && ProviderPresetShare.IsConfigured)
                 {
-                    android.ShareProviderPresets = value;
-                    ProviderPresetShare.Enabled = value;
-                    if (value)
-                    {
-                        _ = Task.Run(() => ProviderPresetShare.FlushAsync(CancellationToken.None));
-                    }
-                });
-        }
+                    _ = Task.Run(() => ProviderPresetShare.FlushAsync(CancellationToken.None));
+                }
+            });
 
         var clear = Ui.Pill(this, P, "Очистить кэш серверов", UiButtonKind.Danger, ConfirmClearNodes,
             Resource.Drawable.ic_delete);

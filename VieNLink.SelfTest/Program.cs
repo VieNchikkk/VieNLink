@@ -2125,18 +2125,35 @@ internal static class Program
             Check(!ProviderPresetStore.TryParseRemote("{ \"version\": 1, \"presets\": [", out _, out _),
                 "битый файл обновляемой базы отклоняется");
 
-            // Отправка подборок: приёмник отложен, поэтому данные не уходят и не копятся.
-            ProviderPresetShare.Enabled = true;
-            Check(!ProviderPresetShare.IsConfigured, "отправка подборок пока не настроена");
+            // Отправка подборок: без согласия не копится, с согласием копится и ждёт приёмник.
+            ProviderPresetShare.Enabled = false;
             ProviderPresetShare.Enqueue(new ProviderPreset { Key = "cell:25002:Мегафон", Page = "Oob" });
-            Check(ProviderPresetShare.QueueCount == 0,
-                "без приёмника очередь пуста (ничего не отправляется и не копится)");
+            Check(ProviderPresetShare.QueueCount == 0, "без согласия подборки в очередь не попадают");
+
+            ProviderPresetShare.Enabled = true;
+            Check(!ProviderPresetShare.IsConfigured, "адрес приёмника пока не задан");
+            ProviderPresetShare.Enqueue(new ProviderPreset { Key = "cell:25002:Мегафон", Page = "Oob" });
+            Check(ProviderPresetShare.QueueCount == 1, "с согласием запись копится и ждёт приёмник");
+
+            File.WriteAllText(ProviderPresetStore.RemotePath, """
+                { "version": 1, "uploadUrl": "https://example.invalid/presets", "presets": [] }
+                """);
+            ProviderPresetStore.PathOverride = path; // сбросить кэш базы
+            Check(ProviderPresetShare.IsConfigured &&
+                  ProviderPresetShare.Endpoint == "https://example.invalid/presets",
+                "адрес приёмника берётся из обновляемой базы");
+
+            Check(ProviderPresetStore.TryParseRemote("""
+                { "version": 1, "uploadUrl": "ftp://bad", "presets": [] }
+                """, out var noUrl, out _) && noUrl.UploadUrl.Length == 0,
+                "адрес приёмника принимается только http(s)");
             ProviderPresetShare.Enabled = false;
         }
         finally
         {
             TryDelete(ProviderPresetStore.RemotePath);
             TryDelete(ProviderPresetStore.SyncPath);
+            TryDelete(Path.ChangeExtension(path, ".outbox.json"));
             ProviderPresetStore.PathOverride = previous;
             TryDelete(path);
             TryDelete(path + ".bak");

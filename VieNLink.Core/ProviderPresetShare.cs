@@ -37,19 +37,20 @@ internal sealed class SharedPreset
 }
 
 /// <summary>
-/// Отправка подтверждённых параметров обхода разработчику. Работает только при двух
-/// условиях: пользователь поставил галочку согласия (<see cref="Enabled"/>) и поднят
-/// приёмник (<see cref="Endpoint"/>). Пока приёмник отложен, очередь пустая и в сеть
-/// ничего не уходит. Неудачные отправки ждут в очереди до следующего обслуживания.
+/// Отправка подтверждённых параметров обхода разработчику. Два условия: пользователь
+/// поставил галочку согласия (<see cref="Enabled"/>) и известен адрес приёмника
+/// (<see cref="Endpoint"/>, приходит из обновляемой базы). Согласие дано, адреса ещё нет —
+/// записи копятся в очереди на устройстве; как только адрес появился, они уходят сами.
+/// Неудачные отправки тоже ждут в очереди до следующего обслуживания.
 /// </summary>
 internal static class ProviderPresetShare
 {
     /// <summary>
-    /// Адрес приёмника (Cloudflare Worker / Yandex Cloud Function). Пусто — приём отложен:
-    /// галочка в настройках не показывается, отправка не включается. Когда приёмник
-    /// поднят, достаточно вписать URL сюда — остальной путь уже готов.
+    /// Адрес приёмника берётся из обновляемой базы (`uploadUrl`): когда приёмник поднимется,
+    /// URL доедет до установок вместе с базой, без новой версии приложения. Пусто — отправка
+    /// выключена, данные копятся только на устройстве и никуда не уходят.
     /// </summary>
-    public const string Endpoint = "";
+    public static string Endpoint => ProviderPresetStore.UploadUrl;
 
     /// <summary>Сколько записей держим в очереди: старые вытесняются новыми.</summary>
     private const int MaxQueue = 100;
@@ -91,7 +92,7 @@ internal static class ProviderPresetShare
     /// </summary>
     public static void Enqueue(ProviderPreset preset)
     {
-        if (!Enabled || !IsConfigured ||
+        if (!Enabled ||
             string.IsNullOrWhiteSpace(preset.Key) ||
             !preset.Key.StartsWith("cell:", StringComparison.OrdinalIgnoreCase))
         {
@@ -218,7 +219,9 @@ internal static class ProviderPresetShare
         RecordedUtc = preset.LastSuccessUtc == default ? DateTime.UtcNow : preset.LastSuccessUtc,
     };
 
-    private static string QueuePath => AppPaths.ProviderPresetsOutboxPath;
+    private static string QueuePath => ProviderPresetStore.PathOverride is { } overridden
+        ? Path.ChangeExtension(overridden, ".outbox.json")
+        : AppPaths.ProviderPresetsOutboxPath;
 
     private static List<SharedPreset> LoadQueue()
     {

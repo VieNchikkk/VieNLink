@@ -49,6 +49,13 @@ internal sealed class ProviderPresetFile
 
     public DateTime UpdatedUtc { get; set; }
 
+    /// <summary>
+    /// Адрес приёмника подборок (Cloudflare Worker / Yandex Cloud Function). Живёт в базе,
+    /// а не в коде: когда приёмник поднят, URL доезжает до установок вместе с базой —
+    /// новая версия приложения для этого не нужна. Пусто — отправка выключена.
+    /// </summary>
+    public string UploadUrl { get; set; } = string.Empty;
+
     public List<ProviderPreset> Presets { get; set; } = new();
 }
 
@@ -250,9 +257,29 @@ internal static class ProviderPresetStore
         return changed;
     }
 
-    /// <summary>Состояние последней проверки обновляемой базы (для экрана и самопроверки).</summary>
-    internal static ProviderPresetSync SyncStatus()
+    /// <summary>
+    /// Адрес приёмника подборок: сначала из обновляемой базы, затем из зашитой.
+    /// Пусто — приёмник ещё не поднят, отправка остаётся выключенной.
+    /// </summary>
+    public static string UploadUrl
     {
+        get
+        {
+            lock (Gate)
+            {
+                var remote = LoadRemote().UploadUrl;
+                if (!string.IsNullOrWhiteSpace(remote))
+                {
+                    return remote.Trim();
+                }
+
+                return (LoadShipped().UploadUrl ?? string.Empty).Trim();
+            }
+        }
+    }
+
+    /// <summary>Состояние последней проверки обновляемой базы (для экрана и самопроверки).</summary>
+    internal static ProviderPresetSync SyncStatus()    {
         try
         {
             return JsonFileStore.Read<ProviderPresetSync>(SyncPath) ?? new ProviderPresetSync();
@@ -317,14 +344,23 @@ internal static class ProviderPresetStore
 
         file.Version = Math.Max(1, parsed.Version);
         file.UpdatedUtc = parsed.UpdatedUtc;
+        file.UploadUrl = IsHttpUrl(parsed.UploadUrl) ? parsed.UploadUrl.Trim() : string.Empty;
         return true;
     }
+
+    /// <summary>Адрес приёмника принимаем только http(s): иначе в базу можно вписать что угодно.</summary>
+    private static bool IsHttpUrl(string? value) =>
+        !string.IsNullOrWhiteSpace(value) &&
+        Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) &&
+        (uri.Scheme == Uri.UriSchemeHttps || uri.Scheme == Uri.UriSchemeHttp);
 
     private static bool IsKnownStrategy(string value) =>
         !string.IsNullOrWhiteSpace(value) &&
         Enum.GetNames<StreamFragmentMode>().Contains(value, StringComparer.OrdinalIgnoreCase);
 
     private static bool SameContent(ProviderPresetFile left, ProviderPresetFile right) =>
+        string.Equals(left.UploadUrl ?? string.Empty, right.UploadUrl ?? string.Empty,
+            StringComparison.Ordinal) &&
         left.Presets.Count == right.Presets.Count &&
         left.Presets.Zip(right.Presets).All(pair =>
             pair.First.Key.Equals(pair.Second.Key, StringComparison.OrdinalIgnoreCase) &&
