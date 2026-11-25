@@ -1,6 +1,7 @@
 using Android.App;
 using Android.Content;
 using Android.Graphics;
+using Android.OS;
 using Android.Views;
 using Android.Widget;
 
@@ -15,6 +16,38 @@ public sealed partial class MainActivity
     private View BuildConnectionPage()
     {
         var page = ColumnPage();
+
+        // Обход — сразу под шапкой: главное действие без сервера, не нужно искать вкладку.
+        var bypass = VpnStarter.IsBypassRunning;
+        var serverRunning = VpnStarter.IsServerRunning;
+        var tunCard = Ui.Card(P, this);
+        var tunTop = Ui.Row(this);
+        tunTop.AddView(Ui.Text(this, "Обход блокировок без сервера", 15f, P.TextStrong, bold: true),
+            new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
+        tunTop.AddView(Ui.Badge(this, P, bypass ? "РАБОТАЕТ" : "ВЫКЛЮЧЕН",
+            bypass ? P.Positive : P.Muted));
+        tunCard.AddView(tunTop);
+        tunCard.AddView(Ui.Hint(this,
+            "Без прокси-сервера. Настройка и подробности — на вкладке «Обход».", P));
+        var tunButtons = Ui.Row(this);
+        var startBypass = Ui.Pill(this, P, "Использовать обход", UiButtonKind.Accent,
+            StartBypassFromMain, Resource.Drawable.ic_power);
+        var stopBypass = Ui.Pill(this, P, "Выключить обход", UiButtonKind.Secondary,
+            StopBypassFromMain);
+        startBypass.Enabled = !bypass && !serverRunning;
+        startBypass.Alpha = startBypass.Enabled ? 1f : 0.5f;
+        stopBypass.Enabled = bypass;
+        stopBypass.Alpha = stopBypass.Enabled ? 1f : 0.5f;
+        tunButtons.AddView(startBypass, new LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WrapContent, 1f));
+        tunButtons.AddView(new Space(this), new LinearLayout.LayoutParams(Ui.Dp(this, 8), 1));
+        tunButtons.AddView(stopBypass, new LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WrapContent, 1f));
+        var tunButtonsLayout = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+        tunButtonsLayout.TopMargin = Ui.Dp(this, 10);
+        tunCard.AddView(tunButtons, tunButtonsLayout);
+        Ui.Add(page, tunCard, 12);
 
         // Кнопки сервисов перенесены в шапку: здесь остаётся пояснение и MTProto.
         var explanation = Ui.Banner(P, this, P.Accent, "Быстрое подключение",
@@ -55,6 +88,39 @@ public sealed partial class MainActivity
     }
 
     // ------------------------------------------------------------------- обход
+
+    private void StartBypassFromMain()
+    {
+        if (!VpnStarter.CanStartBypass(out var reason))
+        {
+            Ui.Toast(this, reason);
+            return;
+        }
+
+        var name = NetworkPresets.ResolvePage(this);
+        var mode = Enum.TryParse<StreamFragmentMode>(name, out var parsed)
+            ? parsed
+            : StreamFragmentMode.Oob;
+
+        var request = VpnStarter.PrepareRequest(this);
+        if (request is not null)
+        {
+            _pendingBypass = mode;
+            StartActivityForResult(request, VpnRequestCode);
+            return;
+        }
+
+        VpnStarter.StartBypass(this, mode);
+        Ui.Toast(this, "Запускаю TUN-обход…");
+        new Handler(Looper.MainLooper!).PostDelayed(() => SelectTab(0), 900);
+    }
+
+    private void StopBypassFromMain()
+    {
+        VpnStarter.Stop(this);
+        Ui.Toast(this, "Выключаю TUN-обход…");
+        new Handler(Looper.MainLooper!).PostDelayed(() => SelectTab(0), 900);
+    }
 
     private View BuildBypassPage()
     {

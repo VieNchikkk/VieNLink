@@ -38,7 +38,8 @@ internal sealed record AutotuneResult(
     bool Strong = false,
     int SpeedKbps = 0,
     bool AudioOnly = false,
-    bool Aborted = false)
+    bool Aborted = false,
+    bool SniOnly = false)
 {
     public bool HasAny => Strategy is not null;
 }
@@ -238,11 +239,12 @@ internal static class StrategyAutotune
         var bestSpeed = 0;
         var bestVideo = false;
         var bestAudioOnly = false;
+        var bestSni = false;
+        var sniPassed = 0;
         var bestDetails = "ничего не прошло";
         var passed = 0;
         var dropped = 0;
         var aborted = false;
-        var mediaMissing = false;
         var strategies = OrderedStrategies(preferred);
         var total = strategies.Count;
         var index = 0;
@@ -275,10 +277,16 @@ internal static class StrategyAutotune
                 var probeWatch = Stopwatch.StartNew();
                 if (scope == AutotuneScope.Video)
                 {
-                    var video = await ProbeMediaAsync(port, MediaKind.Video, cancellationToken)
+                    // Подписанной ссылки может не быть: тогда проверяем SNI-путь к медиасерверу,
+                    // чтобы результат был у каждой из всех 26 стратегий.
+                    var video = _mediaUrlsMissing
+                        ? default
+                        : await ProbeMediaAsync(port, MediaKind.Video, cancellationToken)
+                            .ConfigureAwait(false);
+                    var sniOk = video.Ok || await ProbeVideoSniAsync(port, cancellationToken)
                         .ConfigureAwait(false);
-                    // Если видео не идёт — проверяем звук: он отдельным потоком и может проходить.
-                    var audio = video.Ok || _mediaUrlsMissing
+                    // Звук проверяем только если SNI проходит, но потока нет.
+                    var audio = video.Ok || !sniOk
                         ? default
                         : await ProbeMediaAsync(port, MediaKind.Audio, cancellationToken)
                             .ConfigureAwait(false);
@@ -290,7 +298,9 @@ internal static class StrategyAutotune
                         ? $"видео {video.Bytes / 1024} КБ"
                         : audioOnly
                             ? $"только звук {audio.Bytes / 1024} КБ"
-                            : "0 байт";
+                            : sniOk
+                                ? "SNI проходит, потока нет"
+                                : "нет ответа";
                     progress.Report(new AutotuneStep(scope, index, total,
                         $"{phase} · «{strategy.Name}»: {score}/{totalProbes} — {details}" +
                         (speed > 0 ? $" · {speed} КБ/с" : string.Empty)));
@@ -300,32 +310,28 @@ internal static class StrategyAutotune
                         passed++;
                     }
 
-                    // Видео важнее звука: если видео нет ни у кого, берём самый быстрый звук.
-                    var better = videoOk
-                        ? !bestVideo || speed > bestSpeed
-                        : audioOnly && !bestVideo && (!bestAudioOnly || speed > bestSpeed);
-                    if (better)
+                    if (!videoOk && !audioOnly && sniOk)
+                    {
+                        sniPassed++;
+                    }
+
+                    // Приоритет: поток видео → звук → хотя бы SNI-путь к медиасерверу.
+                    if (StrategyRanking.IsBetterVideo(
+                            videoOk, audioOnly, sniOk, speed,
+                            bestVideo, bestAudioOnly, bestSni, bestSpeed))
                     {
                         bestScore = videoOk ? 1 : 0;
                         best = strategy;
                         bestSpeed = speed;
                         bestVideo = videoOk;
                         bestAudioOnly = audioOnly;
+                        bestSni = !videoOk && !audioOnly && sniOk;
                         bestDetails = details;
                     }
 
                     // Быстрый режим: годится и видео, и (если видео нет) работающий звук.
                     if ((videoOk || audioOnly) && mode == AutotuneMode.Quick)
                     {
-                        break;
-                    }
-
-                    // Ссылок нет — перебирать 26 стратегий бессмысленно, все упрутся в то же.
-                    if (_mediaUrlsMissing && !videoOk)
-                    {
-                        mediaMissing = true;
-                        progress.Report(new AutotuneStep(scope, index, total,
-                            $"{phase}: страница не отдала ссылки на поток — перебор остановлен"));
                         break;
                     }
 
@@ -350,11 +356,9 @@ internal static class StrategyAutotune
                     }
 
                     // Лучшая — больше доменов, затем «страница + превью», затем скорость.
-                    var better = probe.Score > bestScore ||
-                                 (probe.Score == bestScore &&
-                                  ((probe.Strong && !bestStrong) ||
-                                   (probe.Strong == bestStrong && probe.SpeedKbps > bestSpeed)));
-                    if (better)
+                    if (StrategyRanking.IsBetterPage(
+                            probe.Score, probe.Strong, probe.SpeedKbps,
+                            bestScore, bestStrong, bestSpeed))
                     {
                         bestScore = probe.Score;
                         best = strategy;
@@ -380,13 +384,21 @@ internal static class StrategyAutotune
                     }
                 }
 
-                // Три мгновенных провала подряд — обычно пропала сеть, а не «стратегия плохая».
+                // Три мгновенных провала подряд — но окончательно решает проверка сети:
+                // если сеть жива (или в этом прогоне уже что-то открылось), продолжаем.
                 if (dropped >= 3)
                 {
-                    aborted = true;
-                    progress.Report(new AutotuneStep(scope, index, total,
-                        $"{phase}: сеть перестала отвечать — подбор остановлен"));
-                    break;
+                    if (best is not null || await IsNetworkReachableAsync(cancellationToken).ConfigureAwait(false))
+                    {
+                        dropped = 0;
+                    }
+                    else
+                    {
+                        aborted = true;
+                        progress.Report(new AutotuneStep(scope, index, total,
+                            $"{phase}: сеть перестала отвечать — подбор остановлен"));
+                        break;
+                    }
                 }
             }
             catch (OperationCanceledException)
@@ -404,21 +416,21 @@ internal static class StrategyAutotune
             }
         }
 
-        var result = bestScore > 0 || bestAudioOnly ? best : null;
+        var result = bestScore > 0 || bestAudioOnly || bestSni ? best : null;
         var prefix = mode == AutotuneMode.Quick ? "первая рабочая" : "лучшая";
         var final = result is null
             ? aborted
                 ? $"{phase}: подбор прерван — сеть перестала отвечать"
-                : scope == AutotuneScope.Video && mediaMissing
-                    ? $"{phase}: не проверялось — страница не отдала ссылки на поток"
-                    : $"{phase}: ни одна из {total} стратегий не прошла проверку"
+                : $"{phase}: ни одна из {total} стратегий не прошла проверку"
             : $"{phase}: {prefix} «{result.Name}» — {Math.Max(bestScore, 0)}/{totalProbes} ({bestDetails})" +
               (bestSpeed > 0 ? $" · {bestSpeed} КБ/с" : string.Empty) +
-              (mode == AutotuneMode.Best ? $", прошли {passed} из {total}" : string.Empty) +
+              (mode == AutotuneMode.Best
+                  ? $", {(scope == AutotuneScope.Video ? $"SNI проходит у {sniPassed} из {total}" : $"прошли {passed} из {total}")}"
+                  : string.Empty) +
               (aborted ? " (подбор прерван: сеть пропала)" : string.Empty);
         progress.Report(new AutotuneStep(scope, total, total, final));
         return new AutotuneResult(scope, result, Math.Max(bestScore, 0), totalProbes, bestStrong,
-            bestSpeed, bestAudioOnly, aborted);
+            bestSpeed, bestAudioOnly, aborted, bestSni);
     }
 
     private static async Task<PageProbe> ProbePageAsync(int port, CancellationToken cancellationToken)
@@ -741,6 +753,41 @@ internal static class StrategyAutotune
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Проверяет SNI-путь к медиасерверу без подписанной ссылки: запрос к
+    /// redirector.googlevideo.com. Любой HTTP-ответ (200/3xx/403) значит, что TLS-рукопожатие
+    /// с rr*-хостом прошло и DPI не режет домен; таймаут/0 байт — блок. Это даёт результат
+    /// для каждой стратегии даже когда YouTube не отдал ссылку на поток.
+    /// </summary>
+    private static async Task<bool> ProbeVideoSniAsync(int port, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var handler = new SocketsHttpHandler
+            {
+                Proxy = new WebProxy($"socks5://127.0.0.1:{port}"),
+                UseProxy = true,
+                ConnectTimeout = TimeSpan.FromSeconds(3),
+                PooledConnectionLifetime = TimeSpan.Zero,
+                // Не идём по редиректу на медиасервер: нам нужен ответ самого домена.
+                AllowAutoRedirect = false,
+            };
+            using var client = new HttpClient(handler)
+            {
+                Timeout = TimeSpan.FromSeconds(5),
+            };
+            using var response = await client.GetAsync(
+                VideoProbeUrl, HttpCompletionOption.ResponseHeadersRead, cancellationToken)
+                .ConfigureAwait(false);
+            return (int)response.StatusCode < 500;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException
+                                              or IOException or InvalidOperationException)
+        {
+            return false;
+        }
     }
 
     private static void LogMedia(string line)

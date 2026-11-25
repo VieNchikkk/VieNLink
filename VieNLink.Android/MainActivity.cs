@@ -2422,6 +2422,7 @@ public sealed partial class MainActivity : BaseActivity
             VpnStarter.StartBypass(this, _pendingBypass.Value);
             SetConnectionStatus("Запускаю TUN-обход…");
             ScheduleHeaderRefresh();
+            new Handler(Looper.MainLooper!).PostDelayed(() => SelectTab(0), 900);
             _pendingBypass = null;
             _pendingConfig = null;
             return;

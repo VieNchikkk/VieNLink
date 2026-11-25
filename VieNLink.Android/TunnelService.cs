@@ -288,6 +288,19 @@ public sealed class TunnelService : VpnService
                        ?? TlsFragmentForwarder.Strategies[0];
         AppLog.Write("tun-bypass", $"Сеть: {NetworkPresets.Describe(this)}");
 
+        // «Сначала с QUIC, потом без»: если реальный QUIC молчит, настройка уже переключена
+        // на блокировку — просто перезапускаем обход, чтобы она применилась.
+        ForwarderHost.RestartRequested = () =>
+        {
+            AppLog.Write("tun-bypass", "QUIC не отвечает — перезапускаю обход без QUIC");
+            StopTunnel();
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
+                StartBypass(mode);
+            });
+        };
+
         _ = Task.Run(async () =>
         {
             try
@@ -1391,35 +1404,36 @@ public sealed class TunnelService : VpnService
                 : preferredPage;
             var page = await StrategyAutotune.RunAsync(
                 AutotuneScope.Page, progress, cancellationToken, preferredPage).ConfigureAwait(false);
-            var video = await StrategyAutotune.RunAsync(
-                AutotuneScope.Video, progress, cancellationToken, preferredVideo).ConfigureAwait(false);
-
-            // QUIC проверяем один раз на подбор: от TCP-стратегии он не зависит.
-            var quicOk = await StrategyAutotune.ProbeQuicAsync(port, cancellationToken).ConfigureAwait(false);
-            var networkUp = quicOk || await StrategyAutotune.IsNetworkReachableAsync(cancellationToken)
-                .ConfigureAwait(false);
-            var quicChanged = false;
-            if (!quicOk && !networkUp)
-            {
-                AppLog.Write("tun-bypass", "Автоподбор: QUIC не проверен — сеть недоступна, настройку не меняю");
-            }
-            else
-            {
-                var blockQuic = !quicOk;
-                quicChanged = blockQuic != NetworkPresets.GetBlockQuic(this);
-                NetworkPresets.SetBlockQuic(this, blockQuic);
-                AppLog.Write("tun-bypass", quicOk
-                    ? "Автоподбор: QUIC проходит — оставляю через релей"
-                    : "Автоподбор: QUIC не проходит — блокирую, видео пойдёт по TCP");
-            }
-
-            var pageStrategy = page.Strategy;
             if (page.Aborted)
             {
                 AppLog.Write("tun-bypass", "Автоподбор прерван: сеть перестала отвечать");
                 return;
             }
 
+            var video = await StrategyAutotune.RunAsync(
+                AutotuneScope.Video, progress, cancellationToken, preferredVideo).ConfigureAwait(false);
+
+            // QUIC проверяем один раз на подбор: от TCP-стратегии он не зависит.
+            var quicOk = await StrategyAutotune.ProbeQuicAsync(port, cancellationToken).ConfigureAwait(false);
+            var quicChanged = false;
+            if (quicOk)
+            {
+                if (NetworkPresets.GetBlockQuic(this))
+                {
+                    NetworkPresets.SetBlockQuic(this, false);
+                    quicChanged = true;
+                }
+
+                AppLog.Write("tun-bypass", "Автоподбор: QUIC-проба прошла — оставляю через релей");
+            }
+            else
+            {
+                // По синтетической пробе не блокируем: решение примет реальный QUIC-трафик.
+                AppLog.Write("tun-bypass",
+                    "Автоподбор: QUIC-проба не прошла — настройку не меняю (решит реальный трафик)");
+            }
+
+            var pageStrategy = page.Strategy;
             if (pageStrategy is null)
             {
                 AppLog.Write("tun-bypass", "Автоподбор: рабочая стратегия не найдена");
@@ -1444,8 +1458,12 @@ public sealed class TunnelService : VpnService
                     pageStrategy.Mode.ToString(),
                     video.Strategy?.Mode.ToString() ?? NetworkPresets.GetVideo(this),
                     NetworkPresets.GetBlockQuic(this),
-                    transport: video.Strategy is not null ? "tcp" : string.Empty,
-                    videoKbps: video.SpeedKbps);
+                    transport: video.Strategy is not null && !video.SniOnly && !video.AudioOnly
+                        ? "tcp"
+                        : string.Empty,
+                    videoKbps: video.Strategy is not null && !video.SniOnly && !video.AudioOnly
+                        ? video.SpeedKbps
+                        : 0);
             }
 
             AppLog.Write("tun-bypass",
@@ -1454,8 +1472,10 @@ public sealed class TunnelService : VpnService
                 $"{(page.SpeedKbps > 0 ? $", {page.SpeedKbps} КБ/с" : string.Empty)}), " +
                 $"видео {(video.Strategy is null ? "не найдено" : video.AudioOnly
                     ? $"не идёт, звук {video.Strategy.Name} ({video.SpeedKbps} КБ/с)"
-                    : $"{video.Strategy.Name} ({video.Score}/{video.Total}" +
-                      (video.SpeedKbps > 0 ? $", {video.SpeedKbps} КБ/с" : string.Empty) + ")")}");
+                    : video.SniOnly
+                        ? $"медиасервер отвечает ({video.Strategy.Name}), поток не проверялся"
+                        : $"{video.Strategy.Name} ({video.Score}/{video.Total}" +
+                          (video.SpeedKbps > 0 ? $", {video.SpeedKbps} КБ/с" : string.Empty) + ")")}");
             _nodeLabel = "Автоподбор: " + pageStrategy.Name;
             RefreshNotification();
 
@@ -1494,6 +1514,7 @@ public sealed class TunnelService : VpnService
         _autoTuneCts = null;
         _bypassMode = false; IsBypassMode = false;
         ActiveService = null;
+        ForwarderHost.RestartRequested = null;
         StopHealthMonitor();
 
         // Ядро закрываем через CoreRuntime: у процесса один CommandServer.

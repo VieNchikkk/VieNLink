@@ -32,6 +32,12 @@ internal static class ForwarderHost
     /// <summary>Сколько видео-соединений отдали данные.</summary>
     public static long VideoConnections => _forwarder?.VideoConnections ?? 0;
 
+    /// <summary>
+    /// Просьба перезапустить обход после смены режима QUIC (ставит TunnelService).
+    /// Так «сначала с QUIC, потом без» происходит само, без нажатий.
+    /// </summary>
+    public static Action? RestartRequested { get; set; }
+
     /// <summary>Запускает форвардер на свободном порту и возвращает его.</summary>
     public static async Task<int> StartAsync(
         StreamFragmentMode mode,
@@ -46,6 +52,7 @@ internal static class ForwarderHost
             var forwarder = new TlsFragmentForwarder();
             TlsFragmentForwarder.Trace = line => AppLog.Write("tun-bypass", line);
             TlsFragmentForwarder.VideoObserved = OnVideoObserved;
+            TlsFragmentForwarder.QuicTrafficObserved = OnQuicTrafficObserved;
             await forwarder.StartAsync(mode, 0, fragmentAllHosts, videoMode).ConfigureAwait(false);
             _forwarder = forwarder;
             Mode = mode;
@@ -76,6 +83,7 @@ internal static class ForwarderHost
         _forwarder = null;
         TlsFragmentForwarder.Trace = null;
         TlsFragmentForwarder.VideoObserved = null;
+        TlsFragmentForwarder.QuicTrafficObserved = null;
 
         if (forwarder is null)
         {
@@ -93,6 +101,7 @@ internal static class ForwarderHost
     }
 
     private static DateTime _lastVideoPresetUtc;
+    private static DateTime _lastQuicPresetUtc;
 
     /// <summary>
     /// Реальный видео-поток — лучшее доказательство, что стратегия работает: подтверждаем
@@ -123,6 +132,51 @@ internal static class ForwarderHost
         catch (Exception exception)
         {
             AppLog.Write("presets", "Не удалось подтвердить видео-стратегию", exception);
+        }
+    }
+
+    /// <summary>
+    /// Реальный QUIC-трафик: если пакеты уходят, а ответов нет — QUIC режут, блокируем его
+    /// (видео пойдёт по TCP). Если ответы есть — QUIC работает, разрешаем. Синтетическая
+    /// проба ненадёжна (Google может не ответить на чужой Initial), поэтому решает факт.
+    /// </summary>
+    private static void OnQuicTrafficObserved(int uplink, int downlink)
+    {
+        try
+        {
+            var context = Android.App.Application.Context;
+            var blocked = NetworkPresets.GetBlockQuic(context);
+            if (downlink > 0)
+            {
+                if (!blocked || DateTime.UtcNow - _lastQuicPresetUtc < TimeSpan.FromMinutes(5))
+                {
+                    return;
+                }
+
+                _lastQuicPresetUtc = DateTime.UtcNow;
+                NetworkPresets.SetBlockQuic(context, false);
+                AppLog.Write("presets",
+                    $"QUIC реально работает ({uplink} вверх / {downlink} вниз) — разрешаю для " +
+                    $"«{NetworkPresets.Label(context)}»");
+                return;
+            }
+
+            if (uplink < 20 || !blocked ||
+                DateTime.UtcNow - _lastQuicPresetUtc < TimeSpan.FromMinutes(5))
+            {
+                return;
+            }
+
+            _lastQuicPresetUtc = DateTime.UtcNow;
+            NetworkPresets.SetBlockQuic(context, true);
+            AppLog.Write("presets",
+                $"QUIC молчит ({uplink} пакетов вверх, 0 вниз) — блокирую, видео пойдёт по TCP; " +
+                "перезапускаю обход");
+            RestartRequested?.Invoke();
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("presets", "Не удалось применить решение по QUIC", exception);
         }
     }
 }

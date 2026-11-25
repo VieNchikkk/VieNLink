@@ -189,6 +189,14 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
     private long _fakeQuicPackets;
     private long _videoBytes;
     private long _videoConnections;
+    private long _quicUplink;
+    private long _quicDownlink;
+
+    /// <summary>
+    /// Реальный QUIC-трафик через релей (пакеты вверх/вниз). По нему решаем, блокировать ли
+    /// QUIC: синтетическая проба ненадёжна, а реальные ответы сервера — факт.
+    /// </summary>
+    internal static Action<int, int>? QuicTrafficObserved { get; set; }
 
     /// <summary>
     /// Чтобы не заливать один и тот же QUIC-сервер фейками: ключ — локальный порт
@@ -1086,6 +1094,20 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
                                               or ObjectDisposedException or SocketException)
         {
         }
+
+        var uplink = (int)Interlocked.Read(ref _quicUplink);
+        var downlink = (int)Interlocked.Read(ref _quicDownlink);
+        if (uplink > 0 || downlink > 0)
+        {
+            try
+            {
+                QuicTrafficObserved?.Invoke(uplink, downlink);
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write("tun-bypass", "Обработчик QUIC-трафика упал", exception);
+            }
+        }
     }
 
     private async Task ClientToUpstreamAsync(
@@ -1145,6 +1167,7 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
             }
 
             var payload = buffer.AsMemory(offset, received.ReceivedBytes - offset);
+            Interlocked.Increment(ref _quicUplink);
             try
             {
                 await SendUdpAsync(upstream, destination, payload, cancellationToken).ConfigureAwait(false);
@@ -1188,6 +1211,8 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
             {
                 continue;
             }
+
+            Interlocked.Increment(ref _quicDownlink);
 
             var headerLength = BuildUdpHeader((IPEndPoint)received.RemoteEndPoint, header);
             var packet = new byte[headerLength + received.ReceivedBytes];

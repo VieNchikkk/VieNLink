@@ -32,7 +32,12 @@ public sealed class BypassActivity : BaseActivity
     private TextView? _status;
     private TextView? _forwarder;
     private TextView? _strategyHeader;
-    private TextView? _stats;
+    private TextView? _statsNetwork;
+    private TextView? _statsApplied;
+    private TextView? _statsSaved;
+    private TextView? _statsForwarder;
+    private TextView? _statsAutotune;
+    private TextView? _statsChecks;
     private CheckBox? _quicCheck;
     private string? _lastPageResult;
     private string? _lastVideoResult;
@@ -111,13 +116,23 @@ public sealed class BypassActivity : BaseActivity
         state.AddView(_forwarder);
         page.AddView(state);
 
-        // Все данные, которые участвуют в выборе: сеть, источники пресетов, база оператора,
-        // счётчики форвардера и итог последнего подбора — чтобы не лазить в журнал.
+        // Все данные, которые участвуют в выборе, — отдельными блоками, чтобы читалось.
         var statsCard = Ui.Card(P, this);
         statsCard.AddView(Ui.Text(this, "Данные обхода", 14.5f, P.TextStrong, bold: true));
-        _stats = Ui.Hint(this, "…", P);
-        _stats.SetPadding(0, Ui.Dp(this, 4), 0, 0);
-        statsCard.AddView(_stats);
+        _statsNetwork = AddStatsGroup(statsCard, "СЕТЬ");
+        _statsApplied = AddStatsGroup(statsCard, "ЧТО ПРИМЕНЯЕТСЯ");
+        _statsSaved = AddStatsGroup(statsCard, "СОХРАНЁННЫЕ ПОДБОРКИ");
+        _statsForwarder = AddStatsGroup(statsCard, "ФОРВАРДЕР");
+        _statsAutotune = AddStatsGroup(statsCard, "ПОСЛЕДНИЙ ПОДБОР");
+        _statsChecks = AddStatsGroup(statsCard, "ЧЕМ ПРОВЕРЯЕТСЯ");
+        if (_statsChecks is not null)
+        {
+            _statsChecks.Text =
+                "Страница: www.youtube.com · превью i.ytimg.com · API youtubei\n" +
+                "Видео: поток rr*.googlevideo.com (≥64 КБ) или ответ медиасервера\n" +
+                "QUIC: настоящий Initial на www.google.com";
+        }
+
         Ui.Add(page, statsCard, 10);
 
         var actions = Ui.Row(this);
@@ -536,48 +551,60 @@ public sealed class BypassActivity : BaseActivity
                 : preferredPage;
             page = await StrategyAutotune.RunAsync(
                 AutotuneScope.Page, progress, cts.Token, preferredPage, mode);
-            video = await StrategyAutotune.RunAsync(
-                AutotuneScope.Video, progress, cts.Token, preferredVideo, mode);
 
-            // QUIC не зависит от TCP-стратегии: проверяем один раз и выставляем автоматически.
-            var quicForwarder = new TlsFragmentForwarder();
-            bool quicOk;
-            try
+            // Если страница не проверилась из-за обрыва сети — видео и QUIC не трогаем.
+            if (page.Aborted)
             {
-                await quicForwarder.StartAsync(StreamFragmentMode.None);
-                quicOk = await StrategyAutotune.ProbeQuicAsync(quicForwarder.Port, cts.Token);
-            }
-            finally
-            {
-                await quicForwarder.StopAsync();
-            }
-
-            var networkUp = quicOk || await StrategyAutotune.IsNetworkReachableAsync(cts.Token);
-            if (!quicOk && !networkUp)
-            {
-                // Сеть пропала — «QUIC не проходит» ничего не значит, настройку не трогаем.
-                _lastQuicResult = "не проверено — пропала сеть (настройку не меняю)";
-                AppLog.Write("tun-bypass", "QUIC: сеть недоступна — настройку не меняю");
+                video = null;
             }
             else
             {
-                NetworkPresets.SetBlockQuic(this, !quicOk);
-                if (_quicCheck is not null)
+                video = await StrategyAutotune.RunAsync(
+                    AutotuneScope.Video, progress, cts.Token, preferredVideo, mode);
+            }
+
+            if (!page.Aborted)
+            {
+                // QUIC не зависит от TCP-стратегии: проверяем один раз и выставляем автоматически.
+                var quicForwarder = new TlsFragmentForwarder();
+                bool quicOk;
+                try
                 {
-                    _quicCheck.Checked = !quicOk;
+                    await quicForwarder.StartAsync(StreamFragmentMode.None);
+                    quicOk = await StrategyAutotune.ProbeQuicAsync(quicForwarder.Port, cts.Token);
+                }
+                finally
+                {
+                    await quicForwarder.StopAsync();
                 }
 
-                _lastQuicResult = quicOk
-                    ? "проходит (оставляю через релей)"
-                    : "не проходит (блокирую — видео пойдёт по TCP)";
-                AppLog.Write("tun-bypass", quicOk
-                    ? "QUIC: проходит через релей — оставляю включённым (видео может идти по QUIC)"
-                    : "QUIC: не проходит — блокирую, видео пойдёт по TCP");
-            }            if (_autotuneStatus is not null)
-            {
-                _autotuneStatus.Text = quicOk
-                    ? "QUIC проходит — оставляю через релей."
-                    : "QUIC не проходит — блокирую, видео пойдёт по TCP.";
+                if (quicOk)
+                {
+                    NetworkPresets.SetBlockQuic(this, false);
+                    if (_quicCheck is not null)
+                    {
+                        _quicCheck.Checked = false;
+                    }
+
+                    _lastQuicResult = "проходит (оставляю через релей)";
+                    AppLog.Write("tun-bypass", "QUIC: проба прошла — оставляю через релей");
+                    if (_autotuneStatus is not null)
+                    {
+                        _autotuneStatus.Text = "QUIC проходит — оставляю через релей.";
+                    }
+                }
+                else
+                {
+                    // Синтетическая проба ненадёжна (Google может молча отбросить чужой Initial):
+                    // по ней не блокируем — решение примет реальный QUIC-трафик.
+                    _lastQuicResult = "проба не прошла — решит реальный трафик";
+                    AppLog.Write("tun-bypass",
+                        "QUIC: проба не прошла — настройку не меняю (решит реальный трафик)");
+                    if (_autotuneStatus is not null)
+                    {
+                        _autotuneStatus.Text = "QUIC: проба не прошла, решит реальный трафик.";
+                    }
+                }
             }
         }
         catch (System.OperationCanceledException)
@@ -675,8 +702,10 @@ public sealed class BypassActivity : BaseActivity
               (video?.Strategy is not null
                   ? video.AudioOnly
                       ? $", видео не идёт — звук {video.Strategy.Name} ({video.SpeedKbps} КБ/с)"
-                      : $", видео {video.Strategy.Name} ({video.Score}/{video.Total}" +
-                        (video.SpeedKbps > 0 ? $", {video.SpeedKbps} КБ/с)" : ")")
+                      : video.SniOnly
+                          ? $", видео: медиасервер отвечает ({video.Strategy.Name}), поток не проверялся"
+                          : $", видео {video.Strategy.Name} ({video.Score}/{video.Total}" +
+                            (video.SpeedKbps > 0 ? $", {video.SpeedKbps} КБ/с)" : ")")
                   : ", видео не проверено (0 байт)");
 
         _lastPageResult = page?.Strategy is null
@@ -688,7 +717,9 @@ public sealed class BypassActivity : BaseActivity
             ? "не проверено — медиасервер не отдал байты"
             : video.AudioOnly
                 ? $"только звук — {video.Strategy.Name}, {video.SpeedKbps} КБ/с"
-                : $"{video.Strategy.Name} — {video.Score} из {video.Total}, {video.SpeedKbps} КБ/с";
+                : video.SniOnly
+                    ? $"медиасервер отвечает — {video.Strategy.Name}, поток не проверялся"
+                    : $"{video.Strategy.Name} — {video.Score} из {video.Total}, {video.SpeedKbps} КБ/с";
         if (_autotunePhase is not null)
         {
             _autotunePhase.Text = "Готово";
@@ -710,8 +741,12 @@ public sealed class BypassActivity : BaseActivity
                 page.Strategy.Mode.ToString(),
                 video?.Strategy?.Mode.ToString() ?? NetworkPresets.GetVideo(this),
                 NetworkPresets.GetBlockQuic(this),
-                transport: video?.Strategy is not null ? "tcp" : string.Empty,
-                videoKbps: video?.SpeedKbps ?? 0);
+                transport: video?.Strategy is not null && !video.SniOnly && !video.AudioOnly
+                    ? "tcp"
+                    : string.Empty,
+                videoKbps: video?.Strategy is not null && !video.SniOnly && !video.AudioOnly
+                    ? video.SpeedKbps
+                    : 0);
             StartBypass();
         }
     }
@@ -823,63 +858,82 @@ public sealed class BypassActivity : BaseActivity
         UpdateButtons();
     }
 
-    /// <summary>Все данные, участвующие в выборе обхода, — простыми словами на экране.</summary>
+    /// <summary>Блок «Данные обхода»: маленький заголовок и значение под ним.</summary>
+    private TextView AddStatsGroup(LinearLayout card, string title)
+    {
+        var header = Ui.Text(this, title, 10.5f, P.Muted, bold: true);
+        var layout = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent);
+        layout.TopMargin = Ui.Dp(this, 12);
+        card.AddView(header, layout);
+        var value = Ui.Text(this, "—", 13f, P.TextSoft());
+        value.SetPadding(0, Ui.Dp(this, 3), 0, 0);
+        card.AddView(value);
+        return value;
+    }
+
+    /// <summary>Все данные, участвующие в выборе обхода, — отдельными понятными блоками.</summary>
     private void RefreshStats(NetworkSnapshot snapshot)
     {
-        if (_stats is null)
+        if (_statsNetwork is null)
         {
             return;
         }
 
-        var lines = new List<string>
+        _statsNetwork.Text = $"{snapshot.Label}\nСети устройства: {HumanizeNetworks(snapshot.Details)}";
+
+        if (_statsApplied is not null)
         {
-            $"Сеть: {snapshot.Label}",
-            $"Сети устройства: {HumanizeNetworks(snapshot.Details)}",
-            $"Страница YouTube: {Value(snapshot.Page)} — {Humanize(snapshot.PageSource)}",
-            $"Видео: {(string.IsNullOrWhiteSpace(snapshot.Video) ? "как для страниц" : snapshot.Video)} — {Humanize(snapshot.VideoSource)}",
-            $"QUIC: {(snapshot.BlockQuic ? "заблокирован (YouTube идёт по TCP)" : "разрешён (через релей с фейком)")} — {Humanize(snapshot.BlockQuicSource)}",
-            $"Какие сайты резать: {(SettingsStore.Current.TunBypassAllHosts ? "все" : "только YouTube / Telegram / Discord")}",
-            "Чем проверяется: страница www.youtube.com + превью i.ytimg.com + API youtubei; " +
-            "видео — подписанный поток rr*.googlevideo.com (≥64 КБ), звук — отдельно; " +
-            "QUIC — настоящий Initial на www.google.com",
-            $"QUIC-проба: {_lastQuicResult ?? "ещё не проверялась"}",
-        };
-
-        var preset = ProviderPresetStore.Find(snapshot.Key);
-        lines.Add(preset is null
-            ? "Сохранённые подборки: записи для этой сети нет"
-            : $"Сохранённые подборки: {Value(preset.Page)}, " +
-              (string.Equals(preset.Source, "manual", StringComparison.Ordinal)
-                  ? "выбрано вручную"
-                  : "подтверждено подбором") +
-              $", подтверждений {preset.Successes}" +
-              (string.Equals(preset.VideoTransport, "tcp", StringComparison.Ordinal)
-                  ? ", поток по TCP"
-                  : string.Empty) +
-              (preset.LastSuccessUtc == default
-                  ? string.Empty
-                  : $", последний успех {preset.LastSuccessUtc.ToLocalTime():dd.MM HH:mm}"));
-
-        lines.Add(ForwarderHost.IsRunning
-            ? $"Форвардер: работает на порту {ForwarderHost.Port}, режим {ForwarderHost.Mode} · " +
-              $"соединений {ForwarderHost.AcceptedConnections}, разрезано {ForwarderHost.FragmentedConnections}, " +
-              $"QUIC-сессий {ForwarderHost.UdpAssociations}, фейков {ForwarderHost.FakeQuicPackets}"
-            : "Форвардер: не запущен");
-
-        var videoKb = ForwarderHost.VideoBytes / 1024;
-        lines.Add(videoKb > 0
-            ? $"Видео шло: по TCP через обход — {videoKb} КБ за {ForwarderHost.VideoConnections} соединений"
-            : ForwarderHost.UdpAssociations > 0
-                ? $"Видео шло: по QUIC через релей (TCP-потока от медиасервера нет), сессий {ForwarderHost.UdpAssociations}"
-                : "Видео шло: пока не наблюдалось");
-
-        lines.Add("Последний подбор: " + (_lastPageResult ?? "ещё не запускался"));
-        if (_lastVideoResult is not null)
-        {
-            lines.Add("Видео: " + _lastVideoResult);
+            _statsApplied.Text =
+                $"Страница YouTube: {Value(snapshot.Page)} · {Humanize(snapshot.PageSource)}\n" +
+                $"Видео: {(string.IsNullOrWhiteSpace(snapshot.Video) ? "как для страниц" : snapshot.Video)} · " +
+                $"{Humanize(snapshot.VideoSource)}\n" +
+                $"QUIC: {(snapshot.BlockQuic ? "заблокирован (видео по TCP)" : "через релей с фейком")} · " +
+                $"{Humanize(snapshot.BlockQuicSource)}\n" +
+                $"Режутся: {(SettingsStore.Current.TunBypassAllHosts ? "все сайты" : "YouTube / Telegram / Discord")}";
         }
 
-        _stats.Text = string.Join("\n", lines);
+        if (_statsSaved is not null)
+        {
+            var preset = ProviderPresetStore.Find(snapshot.Key);
+            _statsSaved.Text = preset is null
+                ? "Записи для этой сети нет"
+                : $"{Value(preset.Page)} · " +
+                  (string.Equals(preset.Source, "manual", StringComparison.Ordinal)
+                      ? "выбрано вручную"
+                      : "подтверждено подбором") +
+                  $" · подтверждений {preset.Successes}\n" +
+                  (string.Equals(preset.VideoTransport, "tcp", StringComparison.Ordinal)
+                      ? "поток по TCP"
+                      : "поток не подтверждён") +
+                  (preset.LastSuccessUtc == default
+                      ? string.Empty
+                      : $" · последний успех {preset.LastSuccessUtc.ToLocalTime():dd.MM HH:mm}");
+        }
+
+        if (_statsForwarder is not null)
+        {
+            var videoKb = ForwarderHost.VideoBytes / 1024;
+            var videoLine = videoKb > 0
+                ? $"по TCP через обход — {videoKb} КБ за {ForwarderHost.VideoConnections} соединений"
+                : ForwarderHost.UdpAssociations > 0
+                    ? $"по QUIC через релей (TCP-потока нет) — {ForwarderHost.UdpAssociations} сессий"
+                    : "пока не наблюдалось";
+            _statsForwarder.Text = ForwarderHost.IsRunning
+                ? $"Порт {ForwarderHost.Port} · {ForwarderHost.Mode} · " +
+                  $"{ForwarderHost.AcceptedConnections} соединений, разрезано {ForwarderHost.FragmentedConnections}\n" +
+                  $"QUIC: {ForwarderHost.UdpAssociations} сессий, {ForwarderHost.FakeQuicPackets} фейков\n" +
+                  $"Видео: {videoLine}"
+                : "Не запущен";
+        }
+
+        if (_statsAutotune is not null)
+        {
+            _statsAutotune.Text =
+                (_lastPageResult ?? "Ещё не запускался") +
+                (_lastVideoResult is null ? string.Empty : "\nВидео: " + _lastVideoResult) +
+                "\nQUIC-проба: " + (_lastQuicResult ?? "ещё не проверялась");
+        }
     }
 
     private static string Value(string value) => string.IsNullOrWhiteSpace(value) ? "не задано" : value;

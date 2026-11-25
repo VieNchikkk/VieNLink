@@ -176,6 +176,9 @@ internal static class Program
             case "providerpresets":
                 RunProviderPresetsTest();
                 break;
+            case "ranking":
+                RunRankingTest();
+                break;
             case "forwardertls":
                 await RunForwarderTlsAsync();
                 break;
@@ -1940,6 +1943,39 @@ internal static class Program
             {
             }
         }
+    }
+
+    /// <summary>
+    /// Правила выбора лучшей стратегии: те же функции использует автоподбор.
+    /// </summary>
+    private static void RunRankingTest()
+    {
+        Console.WriteLine("Выбор лучшей стратегии (правила):");
+        Check(StrategyRanking.IsBetterPage(3, true, 10, 2, true, 100),
+            "страница: больше доменов важнее скорости");
+        Check(StrategyRanking.IsBetterPage(2, true, 10, 2, false, 900),
+            "страница: превью важнее скорости");
+        Check(StrategyRanking.IsBetterPage(2, true, 200, 2, true, 100),
+            "страница: при равенстве выигрывает быстрее");
+        Check(!StrategyRanking.IsBetterPage(2, true, 50, 2, true, 100),
+            "страница: медленнее не выбирается");
+        Check(!StrategyRanking.IsBetterPage(1, false, 999, 2, false, 1),
+            "страница: меньше доменов не выбирается");
+
+        Check(StrategyRanking.IsBetterVideo(true, false, false, 10, false, true, true, 900),
+            "видео: поток важнее звука и SNI");
+        Check(!StrategyRanking.IsBetterVideo(false, true, false, 900, true, false, false, 10),
+            "видео: звук не заменяет поток");
+        Check(StrategyRanking.IsBetterVideo(false, true, false, 50, false, false, true, 0),
+            "видео: звук важнее SNI");
+        Check(StrategyRanking.IsBetterVideo(true, false, false, 200, true, false, false, 100),
+            "видео: быстрее поток выигрывает");
+        Check(!StrategyRanking.IsBetterVideo(true, false, false, 50, true, false, false, 100),
+            "видео: медленнее не выбирается");
+        Check(StrategyRanking.IsBetterVideo(false, false, true, 0, false, false, false, 0),
+            "видео: SNI-путь берётся, если больше ничего");
+        Check(!StrategyRanking.IsBetterVideo(false, false, false, 0, false, false, true, 0),
+            "видео: пустой результат не заменяет SNI");
     }
 
     /// <summary>
