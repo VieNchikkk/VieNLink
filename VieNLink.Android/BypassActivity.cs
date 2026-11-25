@@ -552,19 +552,28 @@ public sealed class BypassActivity : BaseActivity
                 await quicForwarder.StopAsync();
             }
 
-            NetworkPresets.SetBlockQuic(this, !quicOk);
-            if (_quicCheck is not null)
+            var networkUp = quicOk || await StrategyAutotune.IsNetworkReachableAsync(cts.Token);
+            if (!quicOk && !networkUp)
             {
-                _quicCheck.Checked = !quicOk;
+                // Сеть пропала — «QUIC не проходит» ничего не значит, настройку не трогаем.
+                _lastQuicResult = "не проверено — пропала сеть (настройку не меняю)";
+                AppLog.Write("tun-bypass", "QUIC: сеть недоступна — настройку не меняю");
             }
+            else
+            {
+                NetworkPresets.SetBlockQuic(this, !quicOk);
+                if (_quicCheck is not null)
+                {
+                    _quicCheck.Checked = !quicOk;
+                }
 
-            _lastQuicResult = quicOk
-                ? "проходит (оставляю через релей)"
-                : "не проходит (блокирую — видео пойдёт по TCP)";
-            AppLog.Write("tun-bypass", quicOk
-                ? "QUIC: проходит через релей — оставляю включённым (видео может идти по QUIC)"
-                : "QUIC: не проходит — блокирую, видео пойдёт по TCP");
-            if (_autotuneStatus is not null)
+                _lastQuicResult = quicOk
+                    ? "проходит (оставляю через релей)"
+                    : "не проходит (блокирую — видео пойдёт по TCP)";
+                AppLog.Write("tun-bypass", quicOk
+                    ? "QUIC: проходит через релей — оставляю включённым (видео может идти по QUIC)"
+                    : "QUIC: не проходит — блокирую, видео пойдёт по TCP");
+            }            if (_autotuneStatus is not null)
             {
                 _autotuneStatus.Text = quicOk
                     ? "QUIC проходит — оставляю через релей."
@@ -611,6 +620,24 @@ public sealed class BypassActivity : BaseActivity
                 _autotuneStatus.Text = "Подбор остановлен.";
             }
 
+            return;
+        }
+
+        if (page?.Aborted == true)
+        {
+            _lastPageResult = modeLabel + ": прерван — сеть пропала";
+            _lastVideoResult = null;
+            if (_autotunePhase is not null)
+            {
+                _autotunePhase.Text = "Подбор прерван";
+            }
+
+            if (_autotuneStatus is not null)
+            {
+                _autotuneStatus.Text = "Подбор прерван: сеть перестала отвечать. Проверьте подключение и повторите.";
+            }
+
+            AppLog.Write("tun-bypass", "Подбор стратегии прерван: сеть перестала отвечать");
             return;
         }
 

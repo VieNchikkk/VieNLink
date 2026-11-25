@@ -1396,14 +1396,30 @@ public sealed class TunnelService : VpnService
 
             // QUIC проверяем один раз на подбор: от TCP-стратегии он не зависит.
             var quicOk = await StrategyAutotune.ProbeQuicAsync(port, cancellationToken).ConfigureAwait(false);
-            var blockQuic = !quicOk;
-            var quicChanged = blockQuic != NetworkPresets.GetBlockQuic(this);
-            NetworkPresets.SetBlockQuic(this, blockQuic);
-            AppLog.Write("tun-bypass", quicOk
-                ? "Автоподбор: QUIC проходит — оставляю через релей"
-                : "Автоподбор: QUIC не проходит — блокирую, видео пойдёт по TCP");
+            var networkUp = quicOk || await StrategyAutotune.IsNetworkReachableAsync(cancellationToken)
+                .ConfigureAwait(false);
+            var quicChanged = false;
+            if (!quicOk && !networkUp)
+            {
+                AppLog.Write("tun-bypass", "Автоподбор: QUIC не проверен — сеть недоступна, настройку не меняю");
+            }
+            else
+            {
+                var blockQuic = !quicOk;
+                quicChanged = blockQuic != NetworkPresets.GetBlockQuic(this);
+                NetworkPresets.SetBlockQuic(this, blockQuic);
+                AppLog.Write("tun-bypass", quicOk
+                    ? "Автоподбор: QUIC проходит — оставляю через релей"
+                    : "Автоподбор: QUIC не проходит — блокирую, видео пойдёт по TCP");
+            }
 
             var pageStrategy = page.Strategy;
+            if (page.Aborted)
+            {
+                AppLog.Write("tun-bypass", "Автоподбор прерван: сеть перестала отвечать");
+                return;
+            }
+
             if (pageStrategy is null)
             {
                 AppLog.Write("tun-bypass", "Автоподбор: рабочая стратегия не найдена");

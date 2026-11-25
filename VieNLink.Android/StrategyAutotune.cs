@@ -37,7 +37,8 @@ internal sealed record AutotuneResult(
     int Total,
     bool Strong = false,
     int SpeedKbps = 0,
-    bool AudioOnly = false)
+    bool AudioOnly = false,
+    bool Aborted = false)
 {
     public bool HasAny => Strategy is not null;
 }
@@ -239,6 +240,9 @@ internal static class StrategyAutotune
         var bestAudioOnly = false;
         var bestDetails = "ничего не прошло";
         var passed = 0;
+        var dropped = 0;
+        var aborted = false;
+        var mediaMissing = false;
         var strategies = OrderedStrategies(preferred);
         var total = strategies.Count;
         var index = 0;
@@ -268,6 +272,7 @@ internal static class StrategyAutotune
 
             try
             {
+                var probeWatch = Stopwatch.StartNew();
                 if (scope == AutotuneScope.Video)
                 {
                     var video = await ProbeMediaAsync(port, MediaKind.Video, cancellationToken)
@@ -318,9 +323,19 @@ internal static class StrategyAutotune
                     // Ссылок нет — перебирать 26 стратегий бессмысленно, все упрутся в то же.
                     if (_mediaUrlsMissing && !videoOk)
                     {
+                        mediaMissing = true;
                         progress.Report(new AutotuneStep(scope, index, total,
                             $"{phase}: страница не отдала ссылки на поток — перебор остановлен"));
                         break;
+                    }
+
+                    if (score == 0 && probeWatch.ElapsedMilliseconds < 200)
+                    {
+                        dropped++;
+                    }
+                    else if (score > 0)
+                    {
+                        dropped = 0;
                     }
                 }
                 else
@@ -354,6 +369,24 @@ internal static class StrategyAutotune
                     {
                         break;
                     }
+
+                    if (probe.Score == 0 && probeWatch.ElapsedMilliseconds < 200)
+                    {
+                        dropped++;
+                    }
+                    else if (probe.Score > 0)
+                    {
+                        dropped = 0;
+                    }
+                }
+
+                // Три мгновенных провала подряд — обычно пропала сеть, а не «стратегия плохая».
+                if (dropped >= 3)
+                {
+                    aborted = true;
+                    progress.Report(new AutotuneStep(scope, index, total,
+                        $"{phase}: сеть перестала отвечать — подбор остановлен"));
+                    break;
                 }
             }
             catch (OperationCanceledException)
@@ -374,13 +407,18 @@ internal static class StrategyAutotune
         var result = bestScore > 0 || bestAudioOnly ? best : null;
         var prefix = mode == AutotuneMode.Quick ? "первая рабочая" : "лучшая";
         var final = result is null
-            ? $"{phase}: ни одна из {total} стратегий не прошла проверку"
+            ? aborted
+                ? $"{phase}: подбор прерван — сеть перестала отвечать"
+                : scope == AutotuneScope.Video && mediaMissing
+                    ? $"{phase}: не проверялось — страница не отдала ссылки на поток"
+                    : $"{phase}: ни одна из {total} стратегий не прошла проверку"
             : $"{phase}: {prefix} «{result.Name}» — {Math.Max(bestScore, 0)}/{totalProbes} ({bestDetails})" +
               (bestSpeed > 0 ? $" · {bestSpeed} КБ/с" : string.Empty) +
-              (mode == AutotuneMode.Best ? $", прошли {passed} из {total}" : string.Empty);
+              (mode == AutotuneMode.Best ? $", прошли {passed} из {total}" : string.Empty) +
+              (aborted ? " (подбор прерван: сеть пропала)" : string.Empty);
         progress.Report(new AutotuneStep(scope, total, total, final));
         return new AutotuneResult(scope, result, Math.Max(bestScore, 0), totalProbes, bestStrong,
-            bestSpeed, bestAudioOnly);
+            bestSpeed, bestAudioOnly, aborted);
     }
 
     private static async Task<PageProbe> ProbePageAsync(int port, CancellationToken cancellationToken)
@@ -677,6 +715,32 @@ internal static class StrategyAutotune
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Жива ли сеть вообще: проба QUIC не должна решать «блокируют», если пропал интернет.
+    /// Проверяем TCP-подключение напрямую (приложение вне VPN) к двум разным адресам.
+    /// </summary>
+    public static async Task<bool> IsNetworkReachableAsync(CancellationToken cancellationToken)
+    {
+        foreach (var address in new[] { IPAddress.Parse("1.1.1.1"), IPAddress.Parse("8.8.8.8") })
+        {
+            try
+            {
+                using var tcp = new TcpClient();
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                timeout.CancelAfter(TimeSpan.FromSeconds(3));
+                await tcp.ConnectAsync(address, 443, timeout.Token).ConfigureAwait(false);
+                return true;
+            }
+            catch (Exception exception) when (exception is SocketException or OperationCanceledException
+                                                  or IOException or InvalidOperationException)
+            {
+                // Пробуем следующий адрес.
+            }
+        }
+
+        return false;
     }
 
     private static void LogMedia(string line)
