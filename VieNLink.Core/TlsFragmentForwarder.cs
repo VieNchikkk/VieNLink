@@ -504,8 +504,8 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
         var host = hasHello
             ? Encoding.ASCII.GetString(data.Span.Slice(sniOffset, sniLength))
             : null;
-        if (hasHello && !_fragmentAllHosts && host is not null &&
-            !TlsHello.IsTargetHost(host) && !TlsHello.IsVideoHost(host))
+        var known = host is not null && (TlsHello.IsTargetHost(host) || TlsHello.IsVideoHost(host));
+        if (hasHello && !_fragmentAllHosts && !known)
         {
             await target.WriteAsync(data, cancellationToken).ConfigureAwait(false);
             await target.FlushAsync(cancellationToken).ConfigureAwait(false);
@@ -515,6 +515,13 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
         // Для видео-CDN (googlevideo/ytimg/ggpht) может быть отдельная стратегия:
         // у него другой маршрут и другая дистанция до DPI.
         var plan = PlanFor(host);
+
+        // «Резать все сайты» + фейк: поддельный ClientHello с малым TTL может дойти до
+        // сервера чужого сайта и получить RST. Чужим сайтам — только безопасный разрез.
+        if (_fragmentAllHosts && !known && IsFakeSni(plan.Mode))
+        {
+            plan = new FragmentPlan(StreamFragmentMode.SplitSni, 0, 0, false);
+        }
 
         // Фейк: поддельный ClientHello с безобидным SNI уходит с низким TTL, страницы буфера
         // остаются в очереди ядра и перезаписываются настоящими байтами для повторной доставки.
