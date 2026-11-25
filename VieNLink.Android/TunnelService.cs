@@ -1360,11 +1360,15 @@ public sealed class TunnelService : VpnService
                 .ConfigureAwait(false);
             if (probe.Strong)
             {
-                AppLog.Write("tun-bypass", $"Автоподбор: страница и превью открылись ({probe.Score}/3), " +
-                                           "стратегия рабочая");
+                AppLog.Write("tun-bypass",
+                    $"Автоподбор: страница и превью открылись ({probe.Score}/3), " +
+                    "стратегия рабочая");
+                AndroidSettingsStore.RecordAutotune(
+                    $"Фоновая проверка: страница и превью открылись ({probe.Score}/3), " +
+                    $"стратегия {ForwarderHost.Mode} рабочая", null);
                 // Подтверждаем параметры этой сети: они попадут в базу по операторам.
-                ProviderPresetStore.RecordSuccess(
-                    NetworkPresets.Key(this),
+                NetworkPresets.RememberSuccess(
+                    this,
                     ForwarderHost.Mode.ToString(),
                     NetworkPresets.GetVideo(this),
                     NetworkPresets.GetBlockQuic(this));
@@ -1421,9 +1425,14 @@ public sealed class TunnelService : VpnService
             }
 
             var pageStrategy = page.Strategy;
+            var quicProbeText = quicOk
+                ? "проходит (через релей)"
+                : "проба не прошла — решит реальный трафик";
             if (pageStrategy is null)
             {
                 AppLog.Write("tun-bypass", "Автоподбор: рабочая стратегия не найдена");
+                AndroidSettingsStore.RecordAutotune(
+                    "Фоновый подбор: рабочая стратегия не найдена", quicProbeText);
                 _nodeLabel = "TUN-обход (бета): нет рабочей стратегии";
                 RefreshNotification();
                 return;
@@ -1438,10 +1447,21 @@ public sealed class TunnelService : VpnService
 
             NetworkPresets.SetPage(this, pageStrategy.Mode.ToString());
 
+            // Итог фонового подбора запоминаем: экран TUN покажет его и после перезапуска.
+            AndroidSettingsStore.RecordAutotune(
+                $"Фоновый подбор: {pageStrategy} — {page.Score} из {page.Total}" +
+                (page.Strong ? " (страница и превью)" : " (только страница)") +
+                (video.Strategy is null
+                    ? ", видео не проверено"
+                    : video.AudioOnly
+                        ? $", только звук {video.Strategy}"
+                        : $", видео {video.Strategy}"),
+                quicProbeText);
+
             if (page.Strong)
             {
-                ProviderPresetStore.RecordSuccess(
-                    NetworkPresets.Key(this),
+                NetworkPresets.RememberSuccess(
+                    this,
                     pageStrategy.Mode.ToString(),
                     video.Strategy?.Mode.ToString() ?? NetworkPresets.GetVideo(this),
                     NetworkPresets.GetBlockQuic(this),

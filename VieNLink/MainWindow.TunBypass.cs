@@ -75,12 +75,20 @@ public partial class MainWindow
                        _settings.TunBypassStrategy < TlsFragmentForwarder.Strategies.Count
             ? TlsFragmentForwarder.Strategies[_settings.TunBypassStrategy]
             : null;
+
+        // Стратегия, сохранённая именно для этой сети: её обход пробует первой.
+        var networkKey = NetworkIdentity.Key;
+        var remembered = BypassProfileStore.Ranked("tun", networkKey)
+            .Concat(BypassProfileStore.Ranked("tun-desync", networkKey))
+            .FirstOrDefault(profile => BypassProfileStore.Fits(profile, networkKey));
         TunBypassStatusText.Text = desyncActive
             ? "TUN-обход: включён WinDivert-движок (fake+multidisorder) · адаптер VieNLink-Bypass не используется"
             : $"TUN-обход: {(running ? "запущен" : "выключен")} · адаптер VieNLink-Bypass · " +
               $"QUIC: {(_settings.TunBypassBlockQuic ? "блокируется" : "напрямую")} · " +
               $"права администратора: {(admin ? "есть" : "нет")} · " +
-              $"стратегия: {selected?.Name ?? "не выбрана"}";
+              $"стратегия: {selected?.Name ?? "не выбрана"} · " +
+              $"сеть: {NetworkIdentity.Label}" +
+              (remembered is null ? string.Empty : $" · сохранено: «{remembered.Name}»");
 
         if (TunBypassActiveText is not null)
         {
@@ -279,7 +287,7 @@ public partial class MainWindow
                         ? "Ни одна стратегия не открыла сайты, а TCP до YouTube не устанавливается (IP-блок), " +
                           "хотя Cloudflare открывается. Провайдер блокирует YouTube/t.me по IP, а не по SNI — " +
                           "обход по SNI здесь не поможет; для них нужен прокси-сервер."
-                        : "Ни одна стратегия не открыла сайты. Попробуйте «Обход запрет» (zapret) или подключитесь к серверу.";
+                        : "Ни одна стратегия не открыла сайты. Попробуйте zapret («Обход блокировок → Обход DPI (zapret)») или подключитесь к серверу.";
                     SetStatus("Автоподключение не удалось", ipBlocked
                         ? "YouTube блокируется по IP — нужен сервер"
                         : "TUN-обход не помог — попробуйте zapret или сервер");

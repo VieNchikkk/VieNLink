@@ -29,7 +29,7 @@ internal sealed class TrayIconService : IDisposable
         _blockedIcon = WithStatusDot(_baseIcon, Color.FromArgb(0xD9, 0x3A, 0x3A));
 
         _toggleItem = new ToolStripMenuItem("Подключиться", null, (_, _) => ToggleRequested?.Invoke());
-        _nodesItem = new ToolStripMenuItem("Автовыбор сервера");
+        _nodesItem = new ToolStripMenuItem("Сервер");
         _nodesItem.DropDownItems.Add(new ToolStripMenuItem("Серверы ещё не проверены") { Enabled = false });
 
         var menu = new ContextMenuStrip();
@@ -37,7 +37,7 @@ internal sealed class TrayIconService : IDisposable
         menu.Items.Add(_nodesItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_toggleItem);
-        menu.Items.Add(new ToolStripMenuItem("Виджет обхода DPI", null, (_, _) => WidgetRequested?.Invoke()));
+        menu.Items.Add(new ToolStripMenuItem("Виджет быстрого доступа", null, (_, _) => WidgetRequested?.Invoke()));
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(new ToolStripMenuItem("Выход", null, (_, _) => ExitRequested?.Invoke()));
 

@@ -191,12 +191,22 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
     private long _videoConnections;
     private long _quicUplink;
     private long _quicDownlink;
+    private long _quicUplinkBytes;
+    private long _quicDownlinkBytes;
 
     /// <summary>
     /// Реальный QUIC-трафик через релей (пакеты вверх/вниз). По нему решаем, блокировать ли
     /// QUIC: синтетическая проба ненадёжна, а реальные ответы сервера — факт.
     /// </summary>
     internal static Action<int, int>? QuicTrafficObserved { get; set; }
+
+    /// <summary>
+    /// QUIC-ответы пришли — сообщаем сразу, не дожидаясь закрытия ассоциации: долгая
+    /// QUIC-сессия (видео) может жить часами, и отметка «видео шло» не появлялась бы вовсе.
+    /// </summary>
+    internal static Action? QuicDownlinkSeen { get; set; }
+
+    private DateTime _quicSeenNotifiedUtc;
 
     /// <summary>
     /// Чтобы не заливать один и тот же QUIC-сервер фейками: ключ — локальный порт
@@ -229,6 +239,18 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
 
     /// <summary>Сколько фейковых QUIC Initial отправлено.</summary>
     public long FakeQuicPackets => Interlocked.Read(ref _fakeQuicPackets);
+
+    /// <summary>Сколько QUIC-датаграмм ушло через релей.</summary>
+    public long QuicUplinkPackets => Interlocked.Read(ref _quicUplink);
+
+    /// <summary>Сколько QUIC-ответов (downlink) вернулось через релей.</summary>
+    public long QuicDownlinkPackets => Interlocked.Read(ref _quicDownlink);
+
+    /// <summary>Сколько байт ушло в QUIC-датаграммах.</summary>
+    public long QuicUplinkBytes => Interlocked.Read(ref _quicUplinkBytes);
+
+    /// <summary>Сколько байт пришло в QUIC-ответах — видно, что QUIC реально работает.</summary>
+    public long QuicDownlinkBytes => Interlocked.Read(ref _quicDownlinkBytes);
 
     /// <summary>Сколько байт пришло от видео-хостов (googlevideo/ytimg/ggpht).</summary>
     public long VideoBytes => Interlocked.Read(ref _videoBytes);
@@ -1175,6 +1197,7 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
 
             var payload = buffer.AsMemory(offset, received.ReceivedBytes - offset);
             Interlocked.Increment(ref _quicUplink);
+            Interlocked.Add(ref _quicUplinkBytes, payload.Length);
             try
             {
                 await SendUdpAsync(upstream, destination, payload, cancellationToken).ConfigureAwait(false);
@@ -1220,6 +1243,22 @@ internal sealed class TlsFragmentForwarder : IAsyncDisposable
             }
 
             Interlocked.Increment(ref _quicDownlink);
+
+            // Отмечаем «видео шло по QUIC» по ходу сессии, не дожидаясь её закрытия.
+            var notifyNow = DateTime.UtcNow;
+            if (notifyNow - _quicSeenNotifiedUtc >= TimeSpan.FromSeconds(10))
+            {
+                _quicSeenNotifiedUtc = notifyNow;
+                try
+                {
+                    QuicDownlinkSeen?.Invoke();
+                }
+                catch (Exception exception)
+                {
+                    AppLog.Write("tun-bypass", "Обработчик QUIC-ответов упал", exception);
+                }
+            }
+            Interlocked.Add(ref _quicDownlinkBytes, received.ReceivedBytes);
 
             var headerLength = BuildUdpHeader((IPEndPoint)received.RemoteEndPoint, header);
             var packet = new byte[headerLength + received.ReceivedBytes];

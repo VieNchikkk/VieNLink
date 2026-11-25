@@ -24,6 +24,8 @@ public sealed class LogActivity : BaseActivity
     private TextView? _info;
     private CheckBox? _coreLog;
     private ScrollView? _scroll;
+    private LinearLayout? _categoryRow;
+    private string _category = AppLogCategories.All;
     private bool _loading;
 
     protected override void OnCreate(Bundle? savedInstanceState)
@@ -42,6 +44,13 @@ public sealed class LogActivity : BaseActivity
         _info.SetPadding(0, Ui.Dp(this, 6), 0, 0);
         page.AddView(_info);
 
+        // Категории — фильтр по тегу записи: отдельные файлы не нужны, журнал остаётся один.
+        var categoryScroll = new HorizontalScrollView(this) { HorizontalScrollBarEnabled = false };
+        _categoryRow = Ui.Row(this);
+        categoryScroll.AddView(_categoryRow);
+        Ui.Add(page, categoryScroll, 8);
+        RenderCategories();
+
         var actions = Ui.Row(this);
         var refresh = Ui.Pill(this, P, "Обновить", UiButtonKind.Accent,
             () => _ = LoadAsync(), Resource.Drawable.ic_refresh);
@@ -52,7 +61,7 @@ public sealed class LogActivity : BaseActivity
         actions.AddView(share, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
         Ui.Add(page, actions, 10);
 
-        var clear = Ui.Pill(this, P, "Очистить сегодняшний журнал", UiButtonKind.Ghost, () =>
+        var clear = Ui.Pill(this, P, "Очистить сегодняшний журнал (все категории)", UiButtonKind.Ghost, () =>
         {
             if (LogReader.Clear())
             {
@@ -62,7 +71,7 @@ public sealed class LogActivity : BaseActivity
         }, Resource.Drawable.ic_delete);
         Ui.Add(page, clear, 8);
 
-        _coreLog = new CheckBox(this) { Text = "Лог ядра (stderr)" };
+        _coreLog = new CheckBox(this) { Text = "Лог ядра (stderr, без категорий)" };
         _coreLog.SetTextColor(P.TextSoft());
         Ui.StyleSystemText(_coreLog);
         _coreLog.CheckedChange += async (_, _) => await LoadAsync();
@@ -91,7 +100,10 @@ public sealed class LogActivity : BaseActivity
         scrollLayout.TopMargin = Ui.Dp(this, 10);
         page.AddView(scroll, scrollLayout);
 
-        var hint = Ui.Hint(this, "Хранятся последние 400 строк. Журналы ротируются по 2 МБ и живут 14 дней.", P);
+        var hint = Ui.Hint(this,
+            "Категории фильтруют журнал по тегу записи (Обход · Проверки · MTProto · Обновления), " +
+            "«Ошибки» — строки с исключениями. Хранятся последние 400 строк выбранной категории; " +
+            "журналы и stderr ядра живут не дольше 72 часов.", P);
         Ui.Add(page, hint, 8);
 
         SetPage(page);
@@ -114,7 +126,13 @@ public sealed class LogActivity : BaseActivity
         try
         {
             var core = _coreLog?.Checked == true;
-            var (text, source) = await Task.Run(() => LogReader.Read(core, MaxLines));
+            if (_categoryRow is not null)
+            {
+                _categoryRow.Alpha = core ? 0.45f : 1f;
+            }
+
+            var category = core ? AppLogCategories.All : _category;
+            var (text, source) = await Task.Run(() => LogReader.Read(core, MaxLines, category));
             if (_view is not null)
             {
                 _view.Text = text;
@@ -140,15 +158,45 @@ public sealed class LogActivity : BaseActivity
         }
     }
 
+    /// <summary>Вкладки категорий: выбранная залита акцентом, остальные — обычные плашки.</summary>
+    private void RenderCategories()
+    {
+        if (_categoryRow is null)
+        {
+            return;
+        }
+
+        _categoryRow.RemoveAllViews();
+        foreach (var name in AppLogCategories.Names)
+        {
+            var selected = string.Equals(name, _category, StringComparison.Ordinal);
+            var pill = Ui.Pill(this, P, name,
+                selected ? UiButtonKind.Primary : UiButtonKind.Ghost,
+                () =>
+                {
+                    _category = name;
+                    RenderCategories();
+                    _ = LoadAsync();
+                });
+            var layout = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WrapContent, ViewGroup.LayoutParams.WrapContent)
+            {
+                RightMargin = Ui.Dp(this, 6),
+            };
+            _categoryRow.AddView(pill, layout);
+        }
+    }
+
     private void Share()
     {
         try
         {
+            var category = _coreLog?.Checked == true ? "лог ядра" : _category;
             var send = new Intent(Intent.ActionSend)
                 .SetType("text/plain")
                 .PutExtra(Intent.ExtraText, _view?.Text ?? string.Empty)
-                .PutExtra(Intent.ExtraSubject, "VieNLink — журнал");
-            StartActivity(Intent.CreateChooser(send, "Поделиться журналом"));
+                .PutExtra(Intent.ExtraSubject, "VieNLink — журнал · " + category);
+            StartActivity(Intent.CreateChooser(send, "Поделиться журналом · " + category));
         }
         catch (Exception exception)
         {

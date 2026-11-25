@@ -113,10 +113,12 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        RenderLogCategories();
+        AppLog.DeleteOldFiles(includeRuntime: true);
 
         // Текущая версия видна и в заголовке окна, и в шапке: пользователь сразу
         // понимает, какая сборка установлена.
-        Title = $"{AppInfo.Name} {AppInfo.Version} — свободные серверы";
+        Title = $"{AppInfo.DisplayName} — свободные серверы";
         HeaderVersionText.Text = "v" + AppInfo.Version;
 
         SourceInitialized += (_, _) => WindowChromeTheme.Apply(this);
@@ -440,13 +442,21 @@ public partial class MainWindow : Window
 
         var result = await SourceDiscoveryService.DiscoverAsync(
             _sources, progress, _operation!.Token, _settings.SourceFreshnessHours);
+        var addedSources = 0;
         foreach (var source in result.Sources)
         {
+            if (SourceBlacklist.IsBlocked(source, out var blocked))
+            {
+                AppendLog($"Автопоиск: {source.Name} в чёрном списке ({blocked?.Reason}) — не добавляю");
+                continue;
+            }
+
             _sources.Add(source);
             _sourceRows.Add(new SourceRow(source));
+            addedSources++;
         }
 
-        if (result.Sources.Count > 0)
+        if (addedSources > 0)
         {
             if (includeNodes)
             {
@@ -456,12 +466,12 @@ public partial class MainWindow : Window
             var removed = PruneAutoSources();
             NodeSourceService.SaveSources(_sources);
             var nodesNote = includeNodes ? $", серверов {result.Nodes.Count}" : ", серверы не добавлялись (авто-сбор выключен)";
-            AppendLog($"Найдено источников: {result.Sources.Count}{nodesNote}" +
+            AppendLog($"Найдено источников: {addedSources}{nodesNote}" +
                       (removed > 0 ? $", старых автоисточников удалено: {removed}" : string.Empty));
-            SetStatus("Найдены новые источники", $"Добавлено {result.Sources.Count}{nodesNote}");
+            SetStatus("Найдены новые источники", $"Добавлено {addedSources}{nodesNote}");
             _tray?.ShowBalloon(
                 "Найдены новые источники",
-                string.Join(Environment.NewLine, result.Sources.Select(s => s.Name)) + Environment.NewLine +
+                string.Join(Environment.NewLine, _sources.TakeLast(addedSources).Select(s => s.Name)) + Environment.NewLine +
                 (includeNodes ? $"Серверов: {result.Nodes.Count}" : "Серверы не добавлялись: авто-сбор выключен"));
         }
         else

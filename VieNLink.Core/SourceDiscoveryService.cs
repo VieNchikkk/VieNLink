@@ -140,6 +140,12 @@ internal static class SourceDiscoveryService
                     continue;
                 }
 
+                if (SourceBlacklist.IsBlockedRepository("github", fullName, out var blockedRepo))
+                {
+                    progress?.Report($"  {fullName}: в чёрном списке ({blockedRepo?.Reason}), пропускаю");
+                    continue;
+                }
+
                 if (item.TryGetProperty("fork", out var fork) && fork.ValueKind == JsonValueKind.True)
                 {
                     continue;
@@ -193,6 +199,12 @@ internal static class SourceDiscoveryService
                     continue;
                 }
 
+                if (SourceBlacklist.IsBlockedRepository("gitlab", fullName, out var blockedRepo))
+                {
+                    progress?.Report($"  {fullName}: в чёрном списке ({blockedRepo?.Reason}), пропускаю");
+                    continue;
+                }
+
                 if (item.TryGetProperty("archived", out var archived) && archived.ValueKind == JsonValueKind.True)
                 {
                     continue;
@@ -238,6 +250,12 @@ internal static class SourceDiscoveryService
                 var updatedAt = GetString(item, "updated_at");
                 if (fullName is null || knownRepositories.Contains(fullName))
                 {
+                    continue;
+                }
+
+                if (SourceBlacklist.IsBlockedRepository("gitee", fullName, out var blockedRepo))
+                {
+                    progress?.Report($"  {fullName}: в чёрном списке ({blockedRepo?.Reason}), пропускаю");
                     continue;
                 }
 
@@ -304,6 +322,12 @@ internal static class SourceDiscoveryService
                 };
                 if (!knownUrls.Add(rawUrl))
                 {
+                    continue;
+                }
+
+                if (SourceBlacklist.IsBlockedUrl(rawUrl, out var blockedUrl))
+                {
+                    progress?.Report($"  {candidate.FullName}/{Shorten(path, 28)}: в чёрном списке ({blockedUrl?.Reason}), пропускаю");
                     continue;
                 }
 
@@ -402,6 +426,12 @@ internal static class SourceDiscoveryService
 
                     if (!Uri.TryCreate(candidate, UriKind.Absolute, out var candidateUri))
                     {
+                        continue;
+                    }
+
+                    if (SourceBlacklist.IsBlockedUrl(candidate, out var blockedUrl))
+                    {
+                        progress?.Report($"  {candidateUri.Host}: в чёрном списке ({blockedUrl?.Reason}), пропускаю");
                         continue;
                     }
 

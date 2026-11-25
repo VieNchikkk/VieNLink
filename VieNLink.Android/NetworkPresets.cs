@@ -52,11 +52,52 @@ internal static class NetworkPresets
             return string.IsNullOrWhiteSpace(ssid) ? "wifi" : "wifi:" + ssid;
         }
 
-        var (code, name) = MobileProvider(context);
-        var identity = string.Join(":",
-            new[] { code, name }.Where(part => !string.IsNullOrWhiteSpace(part)));
-        return identity.Length == 0 ? "cell" : "cell:" + identity;
+        var (code, _) = MobileProvider(context);
+        // Ключ — только MCCMNC. Имя оператора зависит от локали и прошивки («МТС» / «MTS RUS»,
+        // «МегаФон» / «MegaFon»), из-за него одна сеть распадалась на разные записи и не
+        // совпадала с базой, собранной на другом телефоне. Имя хранится отдельно.
+        return string.IsNullOrWhiteSpace(code) ? "cell" : "cell:" + code;
     }
+
+    /// <summary>Имя оператора для записи в базе и журнала (пусто для Wi-Fi).</summary>
+    public static string ProviderName(Context context)
+    {
+        var (wifi, _) = Detect(context);
+        if (wifi is not false)
+        {
+            return string.Empty;
+        }
+
+        var (_, name) = MobileProvider(context);
+        return name.Trim();
+    }
+
+    /// <summary>
+    /// Ключ сети, на которой запущен обход: подтверждения пишем ей, даже если сеть
+    /// переключилась уже после запуска (иначе запись LTE уезжала в пресет Wi-Fi).
+    /// </summary>
+    public static string RecordKey(Context context)
+    {
+        var started = ForwarderHost.NetworkKey;
+        return string.IsNullOrWhiteSpace(started) ? Key(context) : started;
+    }
+
+    /// <summary>Ручной выбор пользователя: в базе помечается как manual.</summary>
+    public static void RememberChoice(Context context, string page, string video, bool blockQuic) =>
+        ProviderPresetStore.RecordChoice(RecordKey(context), page, video, blockQuic,
+            ProviderName(context));
+
+    /// <summary>Подбор подтвердил стратегию: страница и превью, либо реальный поток видео.</summary>
+    public static void RememberSuccess(Context context, string page, string video, bool blockQuic,
+        string transport = "", int videoKbps = 0) =>
+        ProviderPresetStore.RecordSuccess(RecordKey(context), page, video, blockQuic,
+            transport, videoKbps, ProviderName(context));
+
+    /// <summary>Видео реально шло через обход: отмечаем транспорт, подтверждения не растут.</summary>
+    public static void RememberVideo(Context context, string page, string video, bool blockQuic,
+        string transport) =>
+        ProviderPresetStore.RecordVideo(RecordKey(context), page, video, blockQuic,
+            transport, ProviderName(context));
 
     public static bool IsWifi(Context context) => Detect(context).Wifi ?? true;
 
@@ -184,17 +225,16 @@ internal static class NetworkPresets
     private static (string Value, string Source) ResolvePage(
         AndroidSettings settings, string key, bool? wifi)
     {
-        if (key.Length > 0 && settings.BypassPresets is not null &&
-            settings.BypassPresets.TryGetValue(key, out var local) &&
-            !string.IsNullOrWhiteSpace(local.Page))
+        var local = FindPreset(settings, key);
+        if (local is not null && !string.IsNullOrWhiteSpace(local.Page))
         {
             return (local.Page, "локальный пресет сети");
         }
 
-        var provider = ProviderPresetStore.Find(key, out var shipped);
+        var provider = ProviderPresetStore.Find(key, out var origin);
         if (provider is not null && !string.IsNullOrWhiteSpace(provider.Page))
         {
-            return (provider.Page, shipped ? "база операторов (зашитая)" : "база операторов (на устройстве)");
+            return (provider.Page, Base(origin));
         }
 
         var typeValue = (wifi ?? true) ? settings.TunBypassStrategyWifi : settings.TunBypassStrategyMobile;
@@ -213,16 +253,16 @@ internal static class NetworkPresets
     {
         // Пустое значение в пресете сети — осознанное «как для страниц», поэтому без записи
         // в пресет сети к запасным вариантам не откатываемся.
-        if (key.Length > 0 && settings.BypassPresets is not null &&
-            settings.BypassPresets.TryGetValue(key, out var local))
+        var localVideo = FindPreset(settings, key);
+        if (localVideo is not null)
         {
-            return (local.Video, "локальный пресет сети");
+            return (localVideo.Video, "локальный пресет сети");
         }
 
-        var provider = ProviderPresetStore.Find(key, out var shipped);
+        var provider = ProviderPresetStore.Find(key, out var origin);
         if (provider is not null)
         {
-            return (provider.Video, shipped ? "база операторов (зашитая)" : "база операторов (на устройстве)");
+            return (provider.Video, Base(origin));
         }
 
         var typeValue = (wifi ?? true)
@@ -234,31 +274,88 @@ internal static class NetworkPresets
     private static (bool Value, string Source) ResolveQuic(
         AndroidSettings settings, string key, bool? wifi)
     {
-        if (key.Length > 0 && settings.BypassPresets is not null &&
-            settings.BypassPresets.TryGetValue(key, out var local) && local.BlockQuic is bool localValue)
+        var local = FindPreset(settings, key);
+        if (local?.BlockQuic is bool localValue)
         {
             return (localValue, "локальный пресет сети");
         }
 
-        var provider = ProviderPresetStore.Find(key, out var shipped);
+        var provider = ProviderPresetStore.Find(key, out var origin);
         if (provider is not null)
         {
-            return (provider.BlockQuic, shipped ? "база операторов (зашитая)" : "база операторов (на устройстве)");
+            return (provider.BlockQuic, Base(origin));
         }
 
         _ = wifi;
         return (SettingsStore.Current.TunBypassBlockQuic, "общая настройка");
     }
 
+    /// <summary>Откуда взята запись базы операторов: видно в «Данных обхода».</summary>
+    private static string Base(PresetOrigin origin) => origin switch
+    {
+        PresetOrigin.Remote => "база операторов (обновляемая)",
+        PresetOrigin.Shipped => "база операторов (зашитая)",
+        _ => "база операторов (на устройстве)",
+    };
+
+    /// <summary>
+    /// Пресет сети с учётом старых ключей: до 1.3.55 ключ мобильной сети содержал имя
+    /// оператора («cell:25002:МегаФон»), поэтому ищем и по префиксу MCCMNC.
+    /// </summary>
+    private static BypassPreset? FindPreset(AndroidSettings settings, string key)
+    {
+        if (key.Length == 0 || settings.BypassPresets is null)
+        {
+            return null;
+        }
+
+        if (settings.BypassPresets.TryGetValue(key, out var preset))
+        {
+            return preset;
+        }
+
+        if (!key.StartsWith("cell:", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        foreach (var pair in settings.BypassPresets)
+        {
+            if (pair.Key.StartsWith(key + ":", StringComparison.OrdinalIgnoreCase))
+            {
+                return pair.Value;
+            }
+        }
+
+        return null;
+    }
+
     private static BypassPreset Preset(AndroidSettings settings, string key)
     {
         settings.BypassPresets ??= new Dictionary<string, BypassPreset>();
-        if (!settings.BypassPresets.TryGetValue(key, out var preset))
+        if (settings.BypassPresets.TryGetValue(key, out var preset))
         {
-            preset = new BypassPreset();
-            settings.BypassPresets[key] = preset;
+            return preset;
         }
 
+        // Старую запись с именем оператора в ключе переносим на чистый MCCMNC,
+        // чтобы стратегия этой сети не потерялась после обновления.
+        if (key.StartsWith("cell:", StringComparison.OrdinalIgnoreCase))
+        {
+            var legacyKey = settings.BypassPresets.Keys.FirstOrDefault(item =>
+                item.StartsWith(key + ":", StringComparison.OrdinalIgnoreCase));
+            if (legacyKey is not null)
+            {
+                var migrated = settings.BypassPresets[legacyKey];
+                settings.BypassPresets.Remove(legacyKey);
+                settings.BypassPresets[key] = migrated;
+                AppLog.Write("tun-bypass", $"Пресет сети {legacyKey} перенесён на ключ {key}");
+                return migrated;
+            }
+        }
+
+        preset = new BypassPreset();
+        settings.BypassPresets[key] = preset;
         return preset;
     }
 

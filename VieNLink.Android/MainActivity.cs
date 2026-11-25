@@ -1177,6 +1177,7 @@ public sealed partial class MainActivity : BaseActivity
         // Пока идёт поиск и проверка сервера служба ещё не запущена — для человека это тоже «подключаюсь».
         var connecting = serviceStarting || _connecting;
         var bypass = TunnelService.IsBypassMode;
+        RefreshBypassState(bypass, running && !bypass);
 
         _statusText.Text = running
             ? bypass ? "TUN-обход (бета)" : "Подключено"

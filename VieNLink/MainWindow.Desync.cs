@@ -33,11 +33,13 @@ public partial class MainWindow
         {
             DesyncStrategyPanel.Children.Clear();
             var order = DesyncService.GetPriorityOrder();
-            var columns = Math.Max(1, (order.Count + StrategyRows - 1) / StrategyRows);
-            DesyncStrategyPanel.Rows = StrategyRows;
+            // Четыре колонки, рядов — сколько нужно: плашки не переносятся за край окна.
+            var columns = Math.Min(StrategyColumns, Math.Max(1, order.Count));
+            var rows = Math.Max(1, (order.Count + columns - 1) / columns);
+            DesyncStrategyPanel.Rows = rows;
             DesyncStrategyPanel.Columns = columns;
 
-            var cells = new RadioButton?[StrategyRows * columns];
+            var cells = new RadioButton?[rows * columns];
             for (var position = 0; position < order.Count; position++)
             {
                 var index = order[position];
@@ -52,7 +54,7 @@ public partial class MainWindow
                     ToolTip = strategy.Description + "\n\nНажмите, чтобы применить стратегию вручную.",
                 };
                 item.Checked += OnDesyncStrategyChecked;
-                cells[(position % StrategyRows) * columns + position / StrategyRows] = item;
+                cells[(position % rows) * columns + position / rows] = item;
             }
 
             for (var cell = 0; cell < cells.Length; cell++)
@@ -324,7 +326,7 @@ public partial class MainWindow
         if (!IsAdministrator())
         {
             AskElevation(
-                "Собственный обход DPI работает с сетевыми пакетами через WinDivert и требует прав администратора.\n\n" +
+                "Свой обход DPI работает с сетевыми пакетами через WinDivert и требует прав администратора.\n\n" +
                 (forceTune
                     ? "Перезапустить VieNLink с повышением прав и подобрать стратегию?"
                     : "Перезапустить VieNLink с повышением прав? Списки и настройки сохранятся."),
@@ -414,11 +416,11 @@ public partial class MainWindow
 
                     DesyncTuneText.Text = ipBlocked
                         ? "TCP до YouTube не устанавливается (IP-блок), а Cloudflare открывается. " +
-                          "Обход по SNI здесь не поможет — подключитесь к серверу («Инструменты → Серверы → Подключить») или добавьте свою подписку."
+                          "Обход по SNI здесь не поможет — подключитесь к серверу на вкладке «Подключение» или добавьте свою подписку."
                         : tlsBlocked
                             ? "YouTube блокируется на уровне SNI/TLS. Автоподбор попробовал все стратегии; " +
-                              "если не помогло — включите zapret на вкладке «Обход Zapret» или подключитесь к серверу."
-                            : "Автоподбор не нашёл рабочую стратегию. Попробуйте «Обход Zapret» или подключитесь к серверу.";
+                              "если не помогло — включите zapret на вкладке «Обход DPI (zapret)» или подключитесь к серверу."
+                            : "Автоподбор не нашёл рабочую стратегию. Попробуйте «Обход DPI (zapret)» или подключитесь к серверу.";
                     SetStatus("Автоподбор не удался", ipBlocked
                         ? "YouTube блокируется по IP — нужен сервер"
                         : "Обход не включён — попробуйте zapret или сервер");

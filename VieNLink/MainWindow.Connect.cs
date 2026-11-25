@@ -1061,8 +1061,8 @@ public partial class MainWindow
         StatusDot.Fill = (Brush)FindResource(connected ? "AccentBrush" : held ? "DangerBrush" : "MutedBrush");
         _tray?.UpdateStatus(connected, null, held);
         Title = connected
-            ? $"{AppInfo.Name} {AppInfo.Version} — подключено"
-            : $"{AppInfo.Name} {AppInfo.Version} — свободные серверы";
+            ? $"{AppInfo.DisplayName} — подключено"
+            : $"{AppInfo.DisplayName} — свободные серверы";
         if (!connected)
         {
             _lastTrafficSample = null;

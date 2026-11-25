@@ -6,7 +6,10 @@ Hysteria2) из открытых списков, подписок и Telegram-к
 сервер и включает системный прокси Windows (или VPN на Android). Плюс обходы DPI, MTProto-прокси
 для Telegram и TUN-режимы.
 
-- Статус: бета (флаг `AppInfo.IsBeta` в `VieNLink.Core/AppInfo.cs`).
+- Статус: бета (флаг `AppInfo.IsBeta` в `VieNLink.Core/AppInfo.cs`). **Проект заморожен
+  25.11.2026** (решение владельца): новые возможности и релизы не планируются, магазинные
+  сборки отменены. Заморозка **не отменяет ТВ-сборку**: она выходит своим ритмом (примерно
+  раз в 5 патчей, если изменения касаются ТВ). Правки — только по прямой просьбе.
 - Лицензия GPL-3.0 на весь репозиторий (Android линкует `libbox`, GPL). Репозиторий публичный.
 - Версия одна на ПК и Android: `build/Version.props` (`VieNLinkVersion`, `VieNLinkVersionCode`,
   `VieNLinkIsBeta`). `versionCode` = major*10000 + minor*100 + patch, только растёт (1.3.3 → 10303).
@@ -58,7 +61,8 @@ CoreLog, TrayState, ProductFeatures, BypassProfiles, Layout); сервисы `Si
 - Сервер считается рабочим, только если HTTP-запрос **через него** открыл сайт. Узлы проверяются
   по Cloudflare (`cp.cloudflare.com` — универсальный доступ), YouTube, Telegram, Discord.
   Windows дополнительно по `TlsHello.TargetDomains` (18 заблокированных доменов) → `OpenDomains`.
-  Выбор: больше доменов, затем меньше задержка; «мои» подписки первыми (`NodeRanking`).
+  Выбор: сначала меньшая задержка (самый быстрый), затем больше открытых доменов и «мои»
+  подписки (`NodeRanking`).
   Перед полной проверкой мёртвые `host:port` отсеиваются TCP-опросом (`NodePrecheck`):
   в пробное ядро попадают только отвечающие адреса; UDP-протоколы не трогаются.
   Проверка через уже поднятый прокси (health-check, проверка после подключения) — только повод
@@ -105,8 +109,23 @@ CoreLog, TrayState, ProductFeatures, BypassProfiles, Layout); сервисы `Si
   остаётся до `NodeLimits.MaxPerEndpoint` (4) вариантов; результаты проверок переносятся только
   между точными дублями.
 - Свежесть данных: `LastSeenUtc` при сборе; в кэше удаляются не встречавшиеся дольше
-  `KeepUnseenNodeDays` (7). Лимит списка `NodeLimits.DefaultMaxTotal` (12000), из Telegram —
+  `KeepUnseenNodeDays` (7). Лимит списка `NodeLimits.DefaultMaxTotal` (5000), из Telegram —
   посты за `TelegramText.FreshHours` (48 ч).
+- Чёрный список источников (`sources-blacklist.json`, `SourceBlacklist`): ручная блокировка
+  навсегда, автоматическая — мягкая на 30 дней. Причины `barren`/`mirror`/`gone`/`manual`;
+  ключи — URL, репозиторий (GitHub/GitLab/Gitee) и «семейство» ежедневных URL с датой.
+  Проверяется при автопоиске (до скачивания), в `LoadSources`/`CollectAsync`, при ручном
+  добавлении и при удалении автоисточника. «Мои» подписки авто-блокировкой не трогаются.
+- Негативный кэш серверов (`servers-blacklist.json`, `NodeNegativeCache`): провалы ядра —
+  по полному `Id` узла (24 ч, у подтверждённо мёртвого рабочего 48 ч), TCP-отсев — по
+  `host:port` (6 ч), успешная проверка снимает запись. Фильтр — в `CollectAsync`/`ParseText`
+  до `RegisterNodes`; пропущенное считается в `LastSuppressedCount`/`SuppressedNodeCount`.
+  Процесс `:probe` кэш только читает (`SuppressWrites`), пишет основной процесс.
+- Журнал: один суточный файл `vienlink-YYYYMMDD.log` с тегом категории, ротация 2 МБ.
+  Категории (`AppLogCategories`) — «Всё · Обход · Проверки · MTProto · Обновления · Ошибки»,
+  на ПК и Android одинаковые. Хранение — **72 часа** (`AppLog.RetentionHours`): старые
+  журналы, `.log.1`, `core-stderr.log`, временные `runtime/*.json`, файлы `rawcache` и
+  `probe-*.json` удаляются; чистка при старте и раз в час/в обслуживании.
 - MTProto: сбор только реальных `tg://proxy`, проверка как у Telegram — FakeTLS/obfuscated2 +
   `req_pq_multi` → `resPQ`. Пинг = время TCP-подключения (min из трёх), `HandshakeMs` только
   для диагностики. Нерабочие живут 24 ч, быстрая перепроверка через 20 мин
@@ -123,9 +142,19 @@ CoreLog, TrayState, ProductFeatures, BypassProfiles, Layout); сервисы `Si
   Пресеты Android — по конкретной сети (`wifi:<SSID>` / `cell:<MCCMNC>:<оператор>`), затем
   по типу сети, затем общая стратегия; при поднятом VPN VPN-сеть пропускается, иначе
   определяется неверно. Подтверждённые параметры по операторам копятся в
-  `provider-presets.json` (локально) и экспортируются кнопкой «Поделиться подборками» —
-  их зашивают в `VieNLink.Core/Assets/provider-presets.json` как стартовые для новых
-  установок. SSID Wi-Fi в экспорт и зашитую базу не попадают.
+  `provider-presets.json` (локально) и экспортируются кнопкой «Поделиться подборками».
+  Порядок применения: своё устройство → обновляемая база → зашитая в сборку.
+  **Обновляемая база** (`ProviderPresetStore.RemoteUrl`) — тот же
+  `VieNLink.Core/Assets/provider-presets.json`, но читается из репозитория
+  (`raw.githubusercontent.com` + зеркала, не чаще раза в сутки, кэш
+  `provider-presets-remote.json`), поэтому новые операторы доезжают без релиза; в ней
+  принимаются только ключи `cell:` и известные стратегии, SSID Wi-Fi отбрасываются.
+  **Отправка с устройств** (`ProviderPresetShare`) пока отложена: приёмника нет
+  (`Endpoint` пуст), галочка согласия в настройках не показывается, очередь пуста.
+  Когда приёмник поднят — вписать URL в `Endpoint`, остальной путь готов: при
+  включённой галочке подтверждённые подборки сами ставятся в очередь
+  (`provider-presets-outbox.json`) и уходят в обслуживании. Уходят только оператор
+  и стратегии, без SSID, адресов и идентификаторов устройства.
   Удачные конфиги копятся в `bypass-profiles.json` и применяются первыми.
   Автоподбор проверяет видео по нескольким хостам googlevideo (до 2) и требует ≥64 КБ
   потока; если curl/HttpClient получают 0 (YouTube подписывает поток в JS, n-sig/PO-токен),
@@ -137,6 +166,16 @@ CoreLog, TrayState, ProductFeatures, BypassProfiles, Layout); сервисы `Si
   23.11.2026: видео идёт по TCP со стратегией №2, yt-dlp скачал 629 172 байта.
 - TUN на Windows требует `wintun.dll` и админа; системный прокси — WinINET (реестр +
   `InternetSetOption`), прежние настройки в `proxy-backup.json`, восстановление при старте.
+- **ПК: стратегия обхода запоминается по сети (25.11.2026).** `NetworkIdentity` определяет
+  текущую сеть (`wifi:<SSID>` через `netsh wlan show interfaces` в кодировке OEM,
+  `eth:<адаптер>` по проводному адаптеру со шлюзом). Кэш 30 с, а обновление идёт **в фоне**:
+  интерфейс получает прежнее значение и не ждёт `netsh` (процесс может отвечать сотни мс);
+  синхронно сеть определяется только один раз, когда данных ещё нет. `BypassProfile.Networks`
+  хранит сети, где конфиг реально работал; `BypassProfileStore.Ranked(mode, network)`
+  поднимает их вверх, `Fits` — проверка совпадения. Так же упорядочены `ZapretService.GetPriorityOrder`
+  и `DesyncService.GetPriorityOrder`. В строке состояния TUN-обхода видно сеть и сохранённую
+  для неё стратегию. База операторов (`provider-presets.json`) на ПК не применяется: MCCMNC
+  там не определить, а база по сетям — это `bypass-profiles.json`.
 - `AppSettings.KillSwitch`: при падении ядра прокси не снимается (трафик не уходит напрямую).
 - sing-box запускается в job-объекте с `KILL_ON_JOB_CLOSE`; конфиг с UUID удаляется после
   отключения и выхода (`runtime\sing-box-config.json`, UTF-8 без BOM).
@@ -193,10 +232,9 @@ CoreLog, TrayState, ProductFeatures, BypassProfiles, Layout); сервисы `Si
   `release\VieNLink-Browser-<версия>-setup.exe` + ZIP (`build\browser-installer.iss`).
   Связь с VPN — локальный канал `VieNLink.Vpn` (`VpnClient` в браузере, `VpnPipeServer` в VPN).
   Релизы браузера пока **не публикуются** (решение владельца), сборка только локально.
-- Android: `build\publish-android.ps1` (подписанный APK + `.apk.sha256`), магазинная сборка
-  `build\publish-store.ps1` (`StoreBuild=true`: APK для RuStore и AAB для Play, без
-  `REQUEST_INSTALL_PACKAGES` и самообновления). **Правило: магазинную сборку собирать при каждом
-  релизе**, чтобы `versionCode` не отставал; в RuStore/Play пока не публикуем (решение владельца).
+- Android: `build\publish-android.ps1` (подписанный APK + `.apk.sha256`). Магазинные
+  сборки (`publish-store.ps1`, APK для RuStore и AAB для Play) **больше не собираются**:
+  проект заморожен 25.11.2026, в магазинах не публиковались.
 - Теги: `v<версия>-beta` (Windows) и `v<версия>-android`; релизы — pre-release с assets
   (`setup.exe`, ZIP, `SHA256SUMS.txt`; APK + `.apk.sha256`).
 - GitHub в РФ часто недоступен: зеркала `ghfast.top`, `gh-proxy.com`; API-лимит — резервная

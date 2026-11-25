@@ -28,7 +28,6 @@ public partial class MainWindow
         _settings.TlsFragment = TlsFragmentCheck.IsChecked == true;
         _settings.TlsRecordFragment = TlsRecordFragmentCheck.IsChecked == true;
         _settings.ApplySystemProxy = ApplyProxyCheck.IsChecked == true;
-        _settings.AutoSelectBest = AutoBestCheck.IsChecked == true;
         _settings.AutoFailover = AutoFailoverCheck.IsChecked == true;
         _settings.ConnectOnlyVerified = OnlyVerifiedConnectCheck.IsChecked == true;
         _settings.ConnectOnlyMine = OnlyMineConnectCheck.IsChecked == true;
@@ -43,7 +42,6 @@ public partial class MainWindow
         _settings.IdleTestMinutes = ParseInt(IdleMinutesBox, _settings.IdleTestMinutes, 1, 120);
         _settings.IdleTestBatch = ParseInt(IdleBatchBox, _settings.IdleTestBatch, 5, 500);
         _settings.IdleTestIntervalMinutes = ParseInt(IdleIntervalBox, _settings.IdleTestIntervalMinutes, 1, 1440);
-        _settings.IdleRecheckHours = ParseInt(IdleRecheckBox, _settings.IdleRecheckHours, 1, 168);
         _settings.MinimizeToTray = MinimizeTrayCheck.IsChecked == true;
         _settings.WidgetTopmost = WidgetTopmostCheck.IsChecked == true;
         _settings.KillSwitch = KillSwitchCheck.IsChecked == true;

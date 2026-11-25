@@ -25,6 +25,9 @@ internal sealed class FetchOutcome
 
     /// <summary>Хеш сырого текста: одинаковый хеш у разных источников — зеркала одного списка.</summary>
     public string? ContentHash { get; set; }
+
+    /// <summary>Сколько серверов источника пропущено по негативному кэшу (не проверялись).</summary>
+    public int Suppressed { get; set; }
 }
 
 internal sealed class CollectResult
@@ -495,7 +498,9 @@ internal static class NodeSourceService
 
         if (saved is null || saved.Count == 0)
         {
-            var defaults = DefaultSources();
+            var defaults = DefaultSources()
+                .Where(source => !SourceBlacklist.IsBlocked(source, out _))
+                .ToList();
             SeedFirstSeen(defaults);
             SaveSources(defaults);
             return defaults;
@@ -504,6 +509,15 @@ internal static class NodeSourceService
         // Убираем источники, которые больше не поставляем (давно не обновлялись).
         var obsoleteRemoved = saved.RemoveAll(source =>
             ObsoleteSourceUrls.Any(url => source.Url.Equals(url, StringComparison.OrdinalIgnoreCase)));
+
+        // Чёрный список: и ручные, и автоматические блокировки. «Мои» подписки
+        // не трогаем — пользователь добавил их осознанно.
+        var blacklistedRemoved = saved.RemoveAll(source =>
+            !source.IsMine && SourceBlacklist.IsBlocked(source, out _));
+        if (blacklistedRemoved > 0)
+        {
+            AppLog.Write("sources", $"Убрано источников из чёрного списка: {blacklistedRemoved}");
+        }
 
         // Источники серверов без даты публикации (не GitHub) больше не используем.
         // У авто-найденных сайтов дата есть в LastPublishedUtc — такие не трогаем.
@@ -524,6 +538,11 @@ internal static class NodeSourceService
         var addedDefaults = 0;
         foreach (var defaultSource in DefaultSources())
         {
+            if (SourceBlacklist.IsBlocked(defaultSource, out _))
+            {
+                continue;
+            }
+
             if (saved.All(s => !s.Url.Equals(defaultSource.Url, StringComparison.OrdinalIgnoreCase)))
             {
                 saved.Add(defaultSource);
@@ -533,7 +552,7 @@ internal static class NodeSourceService
 
         var firstSeenChanged = SeedFirstSeen(saved);
 
-        if (obsoleteRemoved > 0 || addedDefaults > 0 || firstSeenChanged)
+        if (obsoleteRemoved > 0 || blacklistedRemoved > 0 || addedDefaults > 0 || firstSeenChanged)
         {
             SaveSources(saved);
         }
@@ -614,12 +633,25 @@ internal static class NodeSourceService
         int freshnessHours = 24)
     {
         var maximumAge = TimeSpan.FromHours(Math.Clamp(freshnessHours, 1, 168 * 24));
+        // Источники из чёрного списка не собираем вовсе: иначе автопоиск или старый
+        // sources.dat продолжат тянуть заведомо мёртвый список.
+        var allSources = sources.ToList();
+        var blockedSources = allSources
+            .Where(source => !source.IsMine && source.Enabled && SourceBlacklist.IsBlocked(source, out _))
+            .ToList();
+        foreach (var blocked in blockedSources)
+        {
+            blocked.LastError = "источник в чёрном списке — пропущен";
+            AppLog.Write("sources", $"{blocked.Name}: в чёрном списке — пропущен");
+        }
+
         // Каналы Telegram собираются и как серверы, и как MTProto-прокси: публичные
         // конфиг-каналы постят ссылки vless/vmess, а не только tg://proxy. Чистые
         // сайты/списки MTProto в сбор серверов не попадают.
-        var enabled = sources
+        var enabled = allSources
             .Where(s => s.Enabled && !string.IsNullOrWhiteSpace(s.Url))
             .Where(SourceKinds.IsServerSource)
+            .Where(source => !blockedSources.Contains(source))
             .ToList();
 
         // Общий бюджет обращений к GitHub API на этот сбор: источники сверх лимита
@@ -705,7 +737,8 @@ internal static class NodeSourceService
             progress?.Report(outcome.Skipped
                 ? $"{source.Name}: пропущен — {outcome.Error}"
                 : outcome.Error is null
-                    ? $"{source.Name}: {outcome.Nodes.Count} серверов"
+                    ? $"{source.Name}: {outcome.Nodes.Count} серверов" +
+                      (outcome.Suppressed > 0 ? $", пропущено по кэшу {outcome.Suppressed}" : string.Empty)
                     : $"{source.Name}: ошибка — {outcome.Error}");
             onSource?.Invoke(outcome);
             return outcome;
@@ -755,11 +788,43 @@ internal static class NodeSourceService
 
         // Ротация «бесплодных» источников: давние и ни разу не давшие рабочего сервера
         // отключаются, а затем удаляются — на их место автопоиск подберёт новые.
-        var (disable, remove) = NodeSourceStats.RotateBarrenSources(sources, DateTime.UtcNow);
+        var (barrenDisable, barrenRemove) = NodeSourceStats.RotateBarrenSources(allSources, DateTime.UtcNow);
 
         // Карантин: источники без даты публикации отключаем, не вернувшихся — удаляем.
         var quarantine = batches.Where(outcome => outcome.Quarantine).Select(outcome => outcome.Source).ToList();
-        var quarantineRemoval = NodeSourceStats.RotateQuarantinedSources(sources, DateTime.UtcNow);
+        var quarantineRemoval = NodeSourceStats.RotateQuarantinedSources(allSources, DateTime.UtcNow);
+
+        // Закрываем цикл «удалили — автопоиск нашёл снова». Мягкая блокировка на 30 дней:
+        // если источник оживёт, после срока его снова можно будет добавить.
+        foreach (var source in barrenDisable.Concat(barrenRemove).Distinct())
+        {
+            if (!source.IsMine)
+            {
+                SourceBlacklist.BlockAuto(source, "barren",
+                    $"0 рабочих на {source.TotalNodeCount} серверов — источник бесплоден",
+                    TimeSpan.FromDays(30));
+            }
+        }
+
+        foreach (var source in mirrorRemoval)
+        {
+            if (!source.IsMine)
+            {
+                SourceBlacklist.BlockAuto(source, "mirror",
+                    "точное зеркало уже известного списка", TimeSpan.FromDays(30),
+                    repositoryScope: false);
+            }
+        }
+
+        foreach (var outcome in batches.Where(outcome => outcome.RemoveSource))
+        {
+            if (!outcome.Source.IsMine)
+            {
+                SourceBlacklist.BlockAuto(outcome.Source, "gone",
+                    outcome.Error ?? "источник больше не отдаёт список", TimeSpan.FromDays(7),
+                    repositoryScope: false);
+            }
+        }
 
         return new CollectResult
         {
@@ -770,11 +835,11 @@ internal static class NodeSourceService
                 .Where(outcome => outcome.RemoveSource)
                 .Select(outcome => outcome.Source)
                 .Concat(mirrorRemoval)
-                .Concat(remove)
+                .Concat(barrenRemove)
                 .Concat(quarantineRemoval)
                 .Distinct()
                 .ToList(),
-            SourcesToDisable = disable.Concat(quarantine).Distinct().ToList(),
+            SourcesToDisable = barrenDisable.Concat(quarantine).Distinct().ToList(),
         };
     }
 
@@ -817,17 +882,33 @@ internal static class NodeSourceService
         var parsed = SubscriptionParser.Parse(text, source.Name);
 
         // Заглушки вида «Приложение не поддерживается» и группы с 127.0.0.1:1 — не серверы.
-        var nodes = parsed.Where(node => !IsPlaceholderNode(node)).ToList();
-        foreach (var node in nodes)
+        var candidates = parsed.Where(node => !IsPlaceholderNode(node)).ToList();
+        var nodes = new List<ProxyNode>(candidates.Count);
+        var suppressed = 0;
+        foreach (var node in candidates)
         {
             node.IsMine = source.IsMine;
+            // Мёртвые адреса из ежедневных списков не гоняем по кругу: негативный кэш
+            // помнит недавние подтверждённые провалы. «Мои» подписки не фильтруем.
+            if (!node.IsMine && NodeNegativeCache.IsBlocked(node))
+            {
+                suppressed++;
+                continue;
+            }
+
+            nodes.Add(node);
         }
 
+        source.LastSuppressedCount = suppressed;
+        source.SuppressedNodeCount += suppressed;
+
         // «Всего зарегистрировано» — уникальные серверы за всё время, а не за этот сбор.
+        // Пропущенные по кэшу не регистрируем: иначе мёртвый источник продолжает
+        // выглядеть большим, а его выход занижается.
         source.RegisterNodes(nodes);
 
         string? error = null;
-        if (nodes.Count == 0 && parsed.Count > 0)
+        if (candidates.Count == 0 && parsed.Count > 0)
         {
             error = "Провайдер отдаёт только заглушки — серверы доступны лишь в его клиенте (Happ). " +
                     "Нужна универсальная подписка или ссылки на серверы.";
@@ -841,6 +922,7 @@ internal static class NodeSourceService
             MtProto = mtproto,
             Error = error,
             ContentHash = Sha256(text),
+            Suppressed = suppressed,
         };
     }
 

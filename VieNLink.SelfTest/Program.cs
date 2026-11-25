@@ -152,6 +152,9 @@ internal static class Program
             case "statuslogic":
                 await RunStatusLogicAsync();
                 break;
+            case "blacklist":
+                RunBlacklistTests();
+                break;
             case "connectflow":
                 await RunConnectFlowAsync();
                 break;
@@ -175,6 +178,9 @@ internal static class Program
                 break;
             case "providerpresets":
                 RunProviderPresetsTest();
+                break;
+            case "presetsremote":
+                await RunPresetsRemoteAsync();
                 break;
             case "ranking":
                 RunRankingTest();
@@ -1979,6 +1985,41 @@ internal static class Program
     }
 
     /// <summary>
+    /// Живая проверка обновляемой базы: скачивает файл из репозитория (при недоступности —
+    /// через зеркала) и показывает, что легло в кэш. Запуск: presetsremote
+    /// </summary>
+    private static async Task RunPresetsRemoteAsync()
+    {
+        Console.WriteLine($"Обновляемая база операторов: {ProviderPresetStore.RemoteUrl}");
+        var path = Path.Combine(Path.GetTempPath(), "vienlink-presets-remote-test.json");
+        TryDelete(path);
+        TryDelete(Path.ChangeExtension(path, ".remote.json"));
+        TryDelete(Path.ChangeExtension(path, ".sync.json"));
+        var previous = ProviderPresetStore.PathOverride;
+        ProviderPresetStore.PathOverride = path;
+        try
+        {
+            var changed = await ProviderPresetStore.RefreshRemoteAsync(CancellationToken.None, force: true);
+            var sync = ProviderPresetStore.SyncStatus();
+            Console.WriteLine($"Результат: {(changed ? "база обновлена" : "изменений нет")}, " +
+                              $"записей {sync.Count}, успех {sync.LastOkUtc:u}");
+            foreach (var preset in ProviderPresetStore.LoadShipped().Presets.Take(5))
+            {
+                Console.WriteLine($"  (зашитая) {preset.Key}: страница {preset.Page}, видео {preset.Video}");
+            }
+
+            Check(sync.LastOkUtc != default, "обновляемая база получена из репозитория");
+        }
+        finally
+        {
+            ProviderPresetStore.PathOverride = previous;
+            TryDelete(path);
+            TryDelete(Path.ChangeExtension(path, ".remote.json"));
+            TryDelete(Path.ChangeExtension(path, ".sync.json"));
+        }
+    }
+
+    /// <summary>
     /// База параметров обхода по операторам: подтверждение, ручной выбор, приоритеты
     /// и экспорт без личных данных (Wi-Fi SSID не попадают).
     /// </summary>
@@ -1996,8 +2037,9 @@ internal static class Program
             Check(ProviderPresetStore.Find(key) is null, "база пуста");
 
             ProviderPresetStore.RecordSuccess(key, "Oob", string.Empty, blockQuic: false);
-            var preset = ProviderPresetStore.Find(key, out var shipped);
-            Check(preset is not null && preset.Page == "Oob" && !shipped && preset.Successes == 1,
+            var preset = ProviderPresetStore.Find(key, out var origin);
+            Check(preset is not null && preset.Page == "Oob" && origin == PresetOrigin.Device &&
+                  preset.Successes == 1,
                 "подтверждение сохранено на устройстве");
             Check(preset is not null && !preset.BlockQuic, "QUIC: режим релея запомнен");
 
@@ -2021,13 +2063,80 @@ internal static class Program
             Check(export.Contains(key, StringComparison.Ordinal) &&
                   !export.Contains("wifi:", StringComparison.OrdinalIgnoreCase),
                 "экспорт: только операторы, без SSID");
+            Check(ProviderPresetStore.ExportCount() == 1, "экспорт считает только операторов");
+
+            // Видео по QUIC через релей: транспорт отмечается, подтверждения не растут.
+            ProviderPresetStore.RecordVideo(key, "Oob", string.Empty, blockQuic: false, "quic");
+            preset = ProviderPresetStore.Find(key);
+            Check(preset is not null && preset.VideoTransport == "quic" &&
+                  preset.VideoSeenUtc != default && preset.Successes == 3,
+                "видео по QUIC отмечено без подтверждений");
+
+            // Совместимость ключей: прежние версии хранили имя оператора в ключе.
+            ProviderPresetStore.RecordSuccess("cell:25003:Билайн", "Oob", string.Empty, false);
+            preset = ProviderPresetStore.Find("cell:25003", out origin);
+            Check(preset is not null && preset.Page == "Oob" && origin == PresetOrigin.Device,
+                "старый ключ с именем оператора находится по MCCMNC");
+
+            ProviderPresetStore.RecordSuccess("cell:25003", "Split1", string.Empty, false,
+                operatorName: "Билайн");
+            preset = ProviderPresetStore.Find("cell:25003");
+            Check(preset is not null && preset.Key == "cell:25003" && preset.Page == "Split1" &&
+                  preset.Successes == 2 && preset.Operator == "Билайн",
+                "запись приведена к ключу MCCMNC, имя оператора хранится отдельно");
 
             var shippedFile = ProviderPresetStore.LoadShipped();
             Check(shippedFile.Version >= 1 && shippedFile.Presets is not null,
                 "зашитая база читается из сборки");
+
+            // Обновляемая база из репозитория: тот же файл, но свежее зашитого.
+            File.WriteAllText(ProviderPresetStore.RemotePath, """
+                {
+                  "version": 1,
+                  "updatedUtc": "2026-11-25T00:00:00Z",
+                  "presets": [
+                    { "key": "cell:25002:Мегафон", "page": "Oob", "video": "", "blockQuic": false }
+                  ]
+                }
+                """);
+            ProviderPresetStore.PathOverride = path; // сбросить кэш и перечитать файлы
+            preset = ProviderPresetStore.Find("cell:25002:Мегафон", out origin);
+            Check(preset is not null && preset.Page == "Oob" && origin == PresetOrigin.Remote,
+                "обновляемая база применяется к новой сети");
+
+            ProviderPresetStore.RecordSuccess("cell:25002:Мегафон", "Split1", string.Empty, false);
+            preset = ProviderPresetStore.Find("cell:25002:Мегафон", out origin);
+            Check(preset is not null && preset.Page == "Split1" && origin == PresetOrigin.Device,
+                "своё устройство главнее обновляемой базы");
+
+            Check(ProviderPresetStore.TryParseRemote("""
+                {
+                  "version": 1,
+                  "presets": [
+                    { "key": "wifi:Lena11", "page": "Oob" },
+                    { "key": "cell:25002:Мегафон", "page": "НетТакой" },
+                    { "key": "cell:25003:Билайн", "page": "Oob" },
+                    { "key": "cell:25003:Билайн", "page": "Split1" }
+                  ]
+                }
+                """, out var remote, out _) && remote.Presets.Count == 1 &&
+                  remote.Presets[0].Key == "cell:25003:Билайн",
+                "удалённая база: только операторы и известные стратегии");
+            Check(!ProviderPresetStore.TryParseRemote("{ \"version\": 1, \"presets\": [", out _, out _),
+                "битый файл обновляемой базы отклоняется");
+
+            // Отправка подборок: приёмник отложен, поэтому данные не уходят и не копятся.
+            ProviderPresetShare.Enabled = true;
+            Check(!ProviderPresetShare.IsConfigured, "отправка подборок пока не настроена");
+            ProviderPresetShare.Enqueue(new ProviderPreset { Key = "cell:25002:Мегафон", Page = "Oob" });
+            Check(ProviderPresetShare.QueueCount == 0,
+                "без приёмника очередь пуста (ничего не отправляется и не копится)");
+            ProviderPresetShare.Enabled = false;
         }
         finally
         {
+            TryDelete(ProviderPresetStore.RemotePath);
+            TryDelete(ProviderPresetStore.SyncPath);
             ProviderPresetStore.PathOverride = previous;
             TryDelete(path);
             TryDelete(path + ".bak");
@@ -3056,6 +3165,157 @@ internal static class Program
     /// Проверка логики статусов без внешних узлов: узел с выходом direct.
     /// Доступные адреса → Working с отметками; заблокированные → Dead (узел удаляется).
     /// </summary>
+    private static void RunBlacklistTests()
+    {
+        Console.WriteLine("Чёрный список источников и негативный кэш серверов:");
+
+        var directory = Path.Combine(Path.GetTempPath(), "vienlink-blacklist-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(directory);
+        var sourcePath = Path.Combine(directory, "sources-blacklist.json");
+        var nodePath = Path.Combine(directory, "servers-blacklist.json");
+        var now = new DateTime(2026, 11, 25, 12, 0, 0, DateTimeKind.Utc);
+        SourceBlacklist.ResetForTests(sourcePath, now);
+        NodeNegativeCache.ResetForTests(nodePath, now);
+
+        try
+        {
+            var mirrored = SourceBlacklist.CanonicalUrl(
+                "https://ghfast.top/https://raw.githubusercontent.com/owner/repo/main/list.txt");
+            Check(mirrored == "https://raw.githubusercontent.com/owner/repo/main/list.txt",
+                "источники: зеркало ghfast сводится к исходному адресу");
+
+            Check(SourceBlacklist.RepositoryKey("https://raw.githubusercontent.com/Owner/Repo/main/a.txt") ==
+                  "github:owner/repo",
+                "источники: ключ репозитория не зависит от файла и регистра");
+            Check(SourceBlacklist.RepositoryKey("https://gitlab.com/owner/repo/-/raw/main/list.txt") ==
+                  "gitlab:owner/repo",
+                "источники: GitLab-репозиторий распознан");
+
+            var family1 = SourceBlacklist.FamilyKey("https://node.freeclashnode.com/1-20261123.txt");
+            var family2 = SourceBlacklist.FamilyKey("https://node.freeclashnode.com/1-20261124.txt");
+            Check(family1 is not null && family1 == family2,
+                "источники: семейство ежедневных ссылок не зависит от даты");
+
+            var barren = new SourceDefinition
+            {
+                Name = "barren",
+                Url = "https://raw.githubusercontent.com/bad/repo/main/list.txt",
+                TotalNodeCount = 500,
+                TotalWorkingNodeCount = 0,
+            };
+            var barrenEntry = SourceBlacklist.BlockAuto(barren, "barren", "тест", TimeSpan.FromDays(30));
+            Check(barrenEntry.Manual == false && barrenEntry.ExpiresUtc is not null,
+                "источники: авто-блокировка мягкая и имеет срок");
+
+            var sameRepoOtherFile = new SourceDefinition
+            {
+                Url = "https://raw.githubusercontent.com/bad/repo/main/other.txt",
+            };
+            Check(SourceBlacklist.IsBlocked(sameRepoOtherFile, out var blockedRepo) &&
+                  blockedRepo?.Reason == "barren",
+                "источники: блокировка репозитория ловит другой файл");
+
+            SourceBlacklist.NowOverride = now.AddDays(31);
+            Check(!SourceBlacklist.IsBlocked(sameRepoOtherFile, out _),
+                "источники: мягкая блокировка истекает через 30 дней");
+
+            SourceBlacklist.NowOverride = now;
+            SourceBlacklist.BlockManual(sameRepoOtherFile, "тест");
+            SourceBlacklist.NowOverride = now.AddDays(365);
+            Check(SourceBlacklist.IsBlocked(sameRepoOtherFile, out var manualEntry) &&
+                  manualEntry is { Manual: true, ExpiresUtc: null },
+                "источники: ручная блокировка не истекает");
+
+            SourceBlacklist.NowOverride = now;
+            Check(SourceBlacklist.Unblock(new SourceDefinition
+                  {
+                      Url = "https://raw.githubusercontent.com/bad/repo/main/other.txt",
+                  }) > 0,
+                "источники: разблокировка снимает запись");
+            Check(!SourceBlacklist.IsBlocked(sameRepoOtherFile, out _),
+                "источники: после разблокировки источник снова разрешён");
+
+            var first = new ProxyNode
+            {
+                Name = "first",
+                Protocol = "vless",
+                Server = "1.2.3.4",
+                Port = 443,
+                Identity = "uuid-first",
+                Tag = "first",
+                RawLink = "vless://uuid-first@1.2.3.4:443",
+            };
+            var sibling = new ProxyNode
+            {
+                Name = "sibling",
+                Protocol = "vless",
+                Server = "1.2.3.4",
+                Port = 443,
+                Identity = "uuid-sibling",
+                Tag = "sibling",
+                RawLink = "vless://uuid-sibling@1.2.3.4:443",
+            };
+            NodeNegativeCache.RecordDead(first);
+            Check(NodeNegativeCache.IsBlocked(first),
+                "кэш: провал узла запоминается");
+            Check(!NodeNegativeCache.IsBlocked(sibling),
+                "кэш: соседний UUID на том же IP:port не подавляется");
+
+            NodeNegativeCache.NowOverride = now.AddHours(25);
+            Check(!NodeNegativeCache.IsBlocked(first),
+                "кэш: непроверенный мёртвый узел забывается через 24 часа");
+
+            NodeNegativeCache.NowOverride = now;
+            first.DelayMs = 120;
+            first.UniversalOk = true;
+            NodeNegativeCache.RecordDead(first);
+            NodeNegativeCache.NowOverride = now.AddHours(47);
+            Check(NodeNegativeCache.IsBlocked(first),
+                "кэш: подтверждённо мёртвый рабочий держится 48 часов");
+            NodeNegativeCache.NowOverride = now.AddHours(49);
+            Check(!NodeNegativeCache.IsBlocked(first),
+                "кэш: подтверждённо мёртвый рабочий истекает через 48 часов");
+
+            NodeNegativeCache.NowOverride = now;
+            NodeNegativeCache.RecordTcpDead(sibling);
+            Check(NodeNegativeCache.IsBlocked(sibling),
+                "кэш: TCP-провал запоминается по host:port");
+            NodeNegativeCache.NowOverride = now.AddHours(7);
+            Check(!NodeNegativeCache.IsBlocked(sibling),
+                "кэш: TCP-провал истекает через 6 часов");
+
+            NodeNegativeCache.NowOverride = now;
+            NodeNegativeCache.RecordDead(first);
+            NodeHealth.RegisterSuccess(first);
+            Check(!NodeNegativeCache.IsBlocked(first),
+                "кэш: успешная проверка снимает блокировку");
+
+            NodeNegativeCache.RecordDead(first);
+            NodeNegativeCache.Flush();
+            NodeNegativeCache.ResetForTests(nodePath, now);
+            Check(NodeNegativeCache.IsBlocked(first),
+                "кэш: записи сохраняются на диск и читаются после перезапуска");
+
+            SourceBlacklist.BlockManual(barren, "тест сохранения");
+            SourceBlacklist.ResetForTests(sourcePath, now);
+            Check(SourceBlacklist.IsBlocked(barren, out _),
+                "источники: чёрный список сохраняется на диск");
+        }
+        finally
+        {
+            SourceBlacklist.ResetForTests();
+            NodeNegativeCache.ResetForTests();
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch (IOException)
+            {
+                // Временная папка не критична для теста.
+            }
+        }
+    }
+
     private static async Task RunStatusLogicAsync()
     {
         Console.WriteLine("Логика статусов (узел direct, без внешних серверов):");

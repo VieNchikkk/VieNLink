@@ -406,15 +406,21 @@ internal sealed class ZapretService : IDisposable
         var historyPosition = historyOrder
             .Select((index, position) => (index, position))
             .ToDictionary(item => item.index, item => item.position);
-        var quality = BypassProfileStore.Ranked("zapret")
+        var quality = BypassProfileStore.Ranked("zapret", NetworkIdentity.Key)
             .GroupBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
                 group => group.Key,
                 group => group.Max(profile => profile.Quality),
                 StringComparer.OrdinalIgnoreCase);
+        // Стратегия, уже работавшая на этой сети, идёт первой даже при меньшем «качестве».
+        var fits = BypassProfileStore.Ranked("zapret", NetworkIdentity.Key)
+            .Where(profile => BypassProfileStore.Fits(profile, NetworkIdentity.Key))
+            .Select(profile => profile.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var order = Enumerable.Range(0, Presets.Count)
-            .OrderByDescending(index => quality.TryGetValue(Presets[index].Name, out var value) ? value : 0)
+            .OrderByDescending(index => fits.Contains(Presets[index].Name) ? 1 : 0)
+            .ThenByDescending(index => quality.TryGetValue(Presets[index].Name, out var value) ? value : 0)
             .ThenBy(index => historyPosition.TryGetValue(index, out var position) ? position : int.MaxValue)
             .ThenBy(index => index)
             .ToList();

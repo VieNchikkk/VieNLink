@@ -38,7 +38,7 @@ public partial class MainWindow
             await AutoCheckMtProtoAsync();
             await AutoCollectMtProtoAsync();
 
-            // Отсев — тем же путём, что и кнопка «Перепроверить всё», раз в 5 минут.
+            // Отсев — тем же путём, что и кнопка «Перепроверить всё», раз в минуту.
             if (!_idleTesting)
             {
                 await AutoRecheckRejectedAsync();
@@ -540,9 +540,8 @@ public partial class MainWindow
         UpdateSummary();
     }
 
-    /// <summary>Проверяем сначала непроверенные и давно проверенные серверы.</summary>
     /// <summary>
-    /// Партия для кнопки «Партия 500»: ровно <see cref="TestBatchSize"/> серверов, независимо от
+    /// Партия для кнопки «Проверить 500»: ровно <see cref="TestBatchSize"/> серверов, независимо от
     /// лимита конфига. Лимит «серверов в конфиге» ограничивает только список для sing-box.
     /// </summary>
     private List<ProxyNode> SelectBatch(IEnumerable<ProxyNode> nodes)

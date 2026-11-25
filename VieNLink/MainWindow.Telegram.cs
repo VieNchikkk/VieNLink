@@ -268,7 +268,7 @@ public partial class MainWindow
         MtProtoService.SaveCache(map.Values);
     }
 
-    /// <summary>Раскладывает прокси по подвкладкам «Рабочие» и «Нерабочие».</summary>
+    /// <summary>Раскладывает прокси по подвкладкам «Собранные» и «Нерабочие».</summary>
     private void RebuildMtProtoRows(IEnumerable<MtProtoProxy> proxies)
     {
         var all = proxies.ToList();
@@ -336,9 +336,10 @@ public partial class MainWindow
         }
 
         var alive = _mtprotoRows.Count(r => r.Proxy.Status == MtProtoStatus.Working);
-        MtProtoWorkingTab.Header = $"Список ({_mtprotoRows.Count})";
+        MtProtoWorkingTab.Header = $"Собранные ({_mtprotoRows.Count})";
         MtProtoDeadTab.Header = $"Нерабочие ({_mtprotoDeadRows.Count})";
-        MtProtoSummary.Text = $"В списке {_mtprotoRows.Count} · работают {alive} · нерабочих {_mtprotoDeadRows.Count}";
+        MtProtoSummary.Text =
+            $"Рабочих {alive} · ждут проверки {_mtprotoRows.Count - alive} · нерабочих {_mtprotoDeadRows.Count}";
 
         if (MtProtoEmpty is not null)
         {
@@ -392,7 +393,7 @@ public partial class MainWindow
 
             var alive = proxies.Count(p => p.Status == MtProtoStatus.Working);
             StatusDetail.Text = dead
-                ? $"Заработало {alive} из {proxies.Count} — они вернулись в «Список»"
+                ? $"Заработало {alive} из {proxies.Count} — они вернулись в «Собранные»"
                 : $"Работают {alive} из {proxies.Count} (Telegram ответил); остальные перенесены в «Нерабочие»";
         }
         catch (OperationCanceledException)

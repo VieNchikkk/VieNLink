@@ -62,6 +62,15 @@ public sealed class SourcesActivity : BaseActivity
             () => _ = RunDiscoveryAsync(), Resource.Drawable.ic_globe);
         Ui.Add(page, discover, 8);
 
+        // На ТВ управление чёрным списком не нужно: там минимум кнопок и нет ручного
+        // добавления источников. Сам чёрный список в ядре работает на всех платформах.
+        if (!DeviceProfile.IsTelevision)
+        {
+            var blacklist = Ui.Pill(this, P, "Чёрный список", UiButtonKind.Secondary,
+                ShowBlacklistDialog, Resource.Drawable.ic_delete);
+            Ui.Add(page, blacklist, 8);
+        }
+
         var collectProxies = Ui.Pill(this, P, "Собрать Telegram-прокси", UiButtonKind.Secondary,
             () => _ = RunMtProtoCollectAsync(), Resource.Drawable.ic_refresh);
         Ui.Add(page, collectProxies, 8);
@@ -211,7 +220,10 @@ public sealed class SourcesActivity : BaseActivity
             var working = workingBySource.TryGetValue(source.Name, out var found) ? found : 0;
             var total = source.TotalNodeCount > 0 ? source.TotalNodeCount : source.LastNodeCount;
             count = "всего: " + total + " · сейчас рабочих: " + working +
-                    "\nрабочих всего: " + source.TotalWorkingNodeCount;
+                    "\nрабочих всего: " + source.TotalWorkingNodeCount +
+                    (source.LastSuppressedCount > 0
+                        ? " · пропущено по кэшу: " + source.LastSuppressedCount
+                        : string.Empty);
         }
         else
         {
@@ -259,6 +271,67 @@ public sealed class SourcesActivity : BaseActivity
             ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
         outer.BottomMargin = Ui.Dp(this, 8);
         _list.AddView(card, outer);
+    }
+
+    private void ShowBlacklistDialog()
+    {
+        var entries = SourceBlacklist.All()
+            .Where(entry => !entry.IsExpired(DateTime.UtcNow))
+            .OrderBy(entry => entry.Manual ? 0 : 1)
+            .ThenBy(entry => entry.Key)
+            .ToList();
+        if (entries.Count == 0)
+        {
+            Ui.Toast(this, "Чёрный список пуст");
+            return;
+        }
+
+        var labels = entries.Select(entry =>
+        {
+            var target = entry.Repository ?? entry.Url ?? entry.Family ?? entry.Key;
+            var until = entry.Manual
+                ? "навсегда"
+                : entry.ExpiresUtc is { } expires
+                    ? "до " + expires.ToLocalTime().ToString("dd.MM")
+                    : "бессрочно";
+            return $"{target}\n{BlacklistReason(entry.Reason)} · {until}";
+        }).ToArray();
+
+        using var dialog = new AlertDialog.Builder(this)
+            .SetTitle("Чёрный список источников")
+            .SetItems(labels, (_, args) =>
+            {
+                var entry = entries[args.Which];
+                ConfirmUnblock(entry);
+            })
+            .SetNegativeButton("Закрыть", (_, _) => { })
+            .Create();
+        dialog.Show();
+    }
+
+    private static string BlacklistReason(string reason) => reason switch
+    {
+        "barren" => "бесплодный: 0 рабочих",
+        "mirror" => "точное зеркало",
+        "gone" => "источник пропал",
+        "manual" => "заблокирован вручную",
+        _ => reason,
+    };
+
+    private void ConfirmUnblock(SourceBlacklistEntry entry)
+    {
+        var target = entry.Repository ?? entry.Url ?? entry.Family ?? entry.Key;
+        using var dialog = new AlertDialog.Builder(this)
+            .SetMessage("Разблокировать «" + target + "»? Автопоиск снова сможет его добавить.")
+            .SetPositiveButton("Разблокировать", (_, _) =>
+            {
+                SourceBlacklist.UnblockKey(entry.Key);
+                SetProgress("Источник разблокирован: " + target);
+                Reload();
+            })
+            .SetNegativeButton("Отмена", (_, _) => { })
+            .Create();
+        dialog.Show();
     }
 
     private void ShowAddDialog()
@@ -344,13 +417,23 @@ public sealed class SourcesActivity : BaseActivity
 
     private void ConfirmRemove(SourceDefinition source)
     {
+        var blockNote = source.IsAutoDiscovered && !source.IsMine
+            ? " Автопоиск больше не будет его добавлять (чёрный список)."
+            : string.Empty;
         using var dialog = new AlertDialog.Builder(this)
-            .SetMessage("Удалить источник «" + source.Name + "»? Серверы из него останутся в кэше до чистки.")
+            .SetMessage("Удалить источник «" + source.Name + "»?" + blockNote +
+                        " Серверы из него останутся в кэше до чистки.")
             .SetPositiveButton("Удалить", (_, _) =>
             {
+                if (source.IsAutoDiscovered && !source.IsMine)
+                {
+                    SourceBlacklist.BlockManual(source, "удалён на Android");
+                }
+
                 NodeStore.RemoveSource(source);
                 Reload();
-                SetProgress("Источник удалён: " + source.Name);
+                SetProgress("Источник удалён: " + source.Name +
+                            (source.IsAutoDiscovered ? " (в чёрном списке)" : string.Empty));
             })
             .SetNegativeButton("Отмена", (_, _) => { })
             .Create();

@@ -23,6 +23,13 @@ internal sealed class BypassProfile
     public int AverageMs { get; set; }
     public int Uses { get; set; }
     public DateTime LastSuccessUtc { get; set; }
+
+    /// <summary>
+    /// Сети, на которых конфиг реально работал: «wifi:&lt;SSID&gt;», «eth:&lt;адаптер&gt;»,
+    /// «cell:&lt;MCCMNC&gt;». На них он пробуется первым: дома, на работе и на раздаче
+    /// с телефона рабочие стратегии разные.
+    /// </summary>
+    public List<string> Networks { get; set; } = new();
 }
 
 internal sealed class BypassProfileCache
@@ -40,19 +47,31 @@ internal static class BypassProfileStore
     private static readonly object Sync = new();
     private static BypassProfileCache? _cache;
 
-    public static IReadOnlyList<BypassProfile> Ranked(string mode)
+    public static IReadOnlyList<BypassProfile> Ranked(string mode) => Ranked(mode, null);
+
+    /// <summary>
+    /// Лучшие конфиги режима. Сначала те, что уже работали на этой сети, затем по качеству.
+    /// </summary>
+    public static IReadOnlyList<BypassProfile> Ranked(string mode, string? network)
     {
         lock (Sync)
         {
             return LoadCore().Profiles
                 .Where(profile => profile.Mode.Equals(mode, StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(profile => profile.Quality)
+                .OrderByDescending(profile => Fits(profile, network))
+                .ThenByDescending(profile => profile.Quality)
                 .ThenByDescending(profile => profile.LastSuccessUtc)
                 .ThenByDescending(profile => profile.Uses)
                 .Take(20)
                 .ToList();
         }
     }
+
+    /// <summary>Конфиг уже работал на этой сети.</summary>
+    public static bool Fits(BypassProfile profile, string? network) =>
+        !string.IsNullOrWhiteSpace(network) &&
+        profile.Networks is not null &&
+        profile.Networks.Contains(network, StringComparer.OrdinalIgnoreCase);
 
     public static void Record(BypassProfile profile) => RecordMany(new[] { profile });
 
@@ -97,6 +116,24 @@ internal static class BypassProfileStore
                         : Math.Min(existing.AverageMs, profile.AverageMs);
                 existing.Uses++;
                 existing.LastSuccessUtc = DateTime.UtcNow;
+                if (profile.Networks is { Count: > 0 })
+                {
+                    existing.Networks ??= new List<string>();
+                    foreach (var network in profile.Networks)
+                    {
+                        if (string.IsNullOrWhiteSpace(network) ||
+                            existing.Networks.Contains(network, StringComparer.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        existing.Networks.Add(network);
+                        while (existing.Networks.Count > 8)
+                        {
+                            existing.Networks.RemoveAt(0);
+                        }
+                    }
+                }
             }
 
             cache.Profiles = cache.Profiles

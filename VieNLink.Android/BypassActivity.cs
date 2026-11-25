@@ -81,6 +81,19 @@ public sealed class BypassActivity : BaseActivity
         AppLog.Write("tun-bypass", "Экран TUN: " + NetworkPresets.Describe(this));
         _lastNetworkKey = NetworkPresets.Key(this);
 
+        // Обновляемая база операторов: проверяем не чаще раза в сутки, экран не ждёт.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await ProviderPresetStore.RefreshRemoteAsync(CancellationToken.None);
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write("presets", "Обновление базы операторов не удалось", exception);
+            }
+        });
+
         if (Intent?.GetBooleanExtra("start", false) == true)
         {
             _ = new Handler(Looper.MainLooper!).Post(StartBypass);
@@ -338,8 +351,8 @@ public sealed class BypassActivity : BaseActivity
                 _selected = selectedIndex;
                 NetworkPresets.SetPage(this, strategy.Mode.ToString());
                 // Ручной выбор: попадает в базу по операторам и не перезаписывается автоподбором.
-                ProviderPresetStore.RecordChoice(
-                    NetworkPresets.Key(this),
+                NetworkPresets.RememberChoice(
+                    this,
                     strategy.Mode.ToString(),
                     NetworkPresets.GetVideo(this),
                     NetworkPresets.GetBlockQuic(this));
@@ -637,6 +650,7 @@ public sealed class BypassActivity : BaseActivity
         {
             _lastPageResult = modeLabel + ": остановлен";
             _lastVideoResult = null;
+            PersistAutotuneResult();
             if (_autotunePhase is not null)
             {
                 _autotunePhase.Text = "Подбор остановлен";
@@ -654,6 +668,7 @@ public sealed class BypassActivity : BaseActivity
         {
             _lastPageResult = modeLabel + ": прерван — сеть пропала";
             _lastVideoResult = null;
+            PersistAutotuneResult();
             if (_autotunePhase is not null)
             {
                 _autotunePhase.Text = "Подбор прерван";
@@ -732,12 +747,13 @@ public sealed class BypassActivity : BaseActivity
 
         Ui.Toast(this, summary);
         AppLog.Write("tun-bypass", "Подбор стратегии: " + summary);
+        PersistAutotuneResult();
 
         // Автоматически включаем только подтверждённую страницу (с превью).
         if (page?.Strategy is not null && page.Strong)
         {
-            ProviderPresetStore.RecordSuccess(
-                NetworkPresets.Key(this),
+            NetworkPresets.RememberSuccess(
+                this,
                 page.Strategy.Mode.ToString(),
                 video?.Strategy?.Mode.ToString() ?? NetworkPresets.GetVideo(this),
                 NetworkPresets.GetBlockQuic(this),
@@ -759,8 +775,29 @@ public sealed class BypassActivity : BaseActivity
     {
         try
         {
+            var count = ProviderPresetStore.ExportCount();
+            if (count == 0)
+            {
+                // На Wi-Fi экспорт пустой: раньше кнопка отдавала «{"presets":[]}»,
+                // и это выглядело как «поделиться ничего не копирует».
+                AppLog.Write("presets",
+                    "Экспорт базы: подборок по операторам нет — делиться нечем (Wi-Fi не выгружается)");
+                Ui.Toast(this,
+                    "Подборок по операторам пока нет. Записи для Wi-Fi не выгружаются — " +
+                    "SSID это личные данные. Подключитесь к мобильной сети и подберите обход там.");
+                return;
+            }
+
             var json = ProviderPresetStore.ExportJson();
             AppLog.Write("presets", "Экспорт базы параметров обходов: " + json.ReplaceLineEndings(" "));
+
+            // Сразу кладём в буфер: работает и там, где «Поделиться» не открывается.
+            if (GetSystemService(ClipboardService) is ClipboardManager clipboard)
+            {
+                clipboard.PrimaryClip = ClipData.NewPlainText("VieNLink: параметры обхода", json);
+            }
+            Ui.Toast(this, $"Скопировано в буфер: записей подборок {count}");
+
             var intent = new Intent(Intent.ActionSend).SetType("text/plain");
             intent.PutExtra(Intent.ExtraSubject, "VieNLink: параметры обхода по операторам");
             intent.PutExtra(Intent.ExtraText, json);
@@ -773,8 +810,13 @@ public sealed class BypassActivity : BaseActivity
         }
     }
 
-    private void SetAutotuneRunning(bool running, AutotuneMode mode = AutotuneMode.Quick)
+    /// <summary>Итог подбора сохраняем в настройки: экран TUN покажет его и после перезапуска.</summary>
+    private void PersistAutotuneResult()
     {
+        AndroidSettingsStore.RecordAutotune(_lastPageResult ?? string.Empty, _lastQuicResult);
+    }
+
+    private void SetAutotuneRunning(bool running, AutotuneMode mode = AutotuneMode.Quick)    {
         if (_autotuneQuick is null || _autotuneBest is null)
         {
             return;
@@ -850,7 +892,8 @@ public sealed class BypassActivity : BaseActivity
                 ? $"Форвардер 127.0.0.1:{ForwarderHost.Port} · {ForwarderHost.Mode} · " +
                   $"соединений {ForwarderHost.AcceptedConnections}, разрезано {ForwarderHost.FragmentedConnections}" +
                   (ForwarderHost.UdpAssociations > 0
-                      ? $", QUIC-фейков {ForwarderHost.FakeQuicPackets}"
+                      ? $", QUIC-сессий {ForwarderHost.UdpAssociations}, " +
+                        $"ответов {ForwarderHost.QuicDownlinkPackets}"
                       : string.Empty)
                 : "Форвардер не запущен";
         }
@@ -896,6 +939,16 @@ public sealed class BypassActivity : BaseActivity
         if (_statsSaved is not null)
         {
             var preset = ProviderPresetStore.Find(snapshot.Key);
+            var video = string.Equals(preset?.VideoTransport, "tcp", StringComparison.Ordinal)
+                ? "поток по TCP"
+                : string.Equals(preset?.VideoTransport, "quic", StringComparison.Ordinal)
+                    ? "поток по QUIC через релей"
+                    : "поток не подтверждён";
+            if (preset?.VideoSeenUtc is { } videoSeen && videoSeen != default)
+            {
+                video += $", замечен {videoSeen.ToLocalTime():dd.MM HH:mm}";
+            }
+
             _statsSaved.Text = preset is null
                 ? "Записи для этой сети нет"
                 : $"{Value(preset.Page)} · " +
@@ -903,9 +956,7 @@ public sealed class BypassActivity : BaseActivity
                       ? "выбрано вручную"
                       : "подтверждено подбором") +
                   $" · подтверждений {preset.Successes}\n" +
-                  (string.Equals(preset.VideoTransport, "tcp", StringComparison.Ordinal)
-                      ? "поток по TCP"
-                      : "поток не подтверждён") +
+                  video +
                   (preset.LastSuccessUtc == default
                       ? string.Empty
                       : $" · последний успех {preset.LastSuccessUtc.ToLocalTime():dd.MM HH:mm}");
@@ -914,29 +965,59 @@ public sealed class BypassActivity : BaseActivity
         if (_statsForwarder is not null)
         {
             var videoKb = ForwarderHost.VideoBytes / 1024;
+            var quicDownlink = ForwarderHost.QuicDownlinkBytes;
             var videoLine = videoKb > 0
                 ? $"по TCP через обход — {videoKb} КБ за {ForwarderHost.VideoConnections} соединений"
-                : ForwarderHost.UdpAssociations > 0
-                    ? $"по QUIC через релей (TCP-потока нет) — {ForwarderHost.UdpAssociations} сессий"
-                    : "пока не наблюдалось";
+                : quicDownlink > 0
+                    ? $"по QUIC через релей (TCP-потока нет) — {FormatBytes(quicDownlink)} ответов, " +
+                      $"{ForwarderHost.UdpAssociations} сессий"
+                    : ForwarderHost.UdpAssociations > 0
+                        ? $"QUIC-сессии есть ({ForwarderHost.UdpAssociations}), ответов нет — возможно, режут"
+                        : "пока не наблюдалось";
+            var quicLine = ForwarderHost.UdpAssociations > 0
+                ? $"QUIC: {ForwarderHost.UdpAssociations} сессий, {ForwarderHost.FakeQuicPackets} фейков · " +
+                  $"вверх {FormatBytes(ForwarderHost.QuicUplinkBytes)}, " +
+                  $"вниз {FormatBytes(quicDownlink)}" +
+                  (ForwarderHost.QuicDownlinkPackets == 0 ? " (ответов нет)" : string.Empty)
+                : "QUIC: сессий нет";
             _statsForwarder.Text = ForwarderHost.IsRunning
                 ? $"Порт {ForwarderHost.Port} · {ForwarderHost.Mode} · " +
                   $"{ForwarderHost.AcceptedConnections} соединений, разрезано {ForwarderHost.FragmentedConnections}\n" +
-                  $"QUIC: {ForwarderHost.UdpAssociations} сессий, {ForwarderHost.FakeQuicPackets} фейков\n" +
+                  quicLine + "\n" +
                   $"Видео: {videoLine}"
                 : "Не запущен";
         }
 
         if (_statsAutotune is not null)
         {
+            // В памяти — итог этого запуска; после перезапуска показываем сохранённый,
+            // иначе экран врал «Ещё не запускался» после фонового автоподбора.
+            var android = AndroidSettingsStore.Current;
+            var pageLine = _lastPageResult ??
+                (string.IsNullOrWhiteSpace(android.LastAutotuneSummary)
+                    ? "Ещё не запускался"
+                    : $"{android.LastAutotuneSummary} · {android.LastAutotuneUtc.ToLocalTime():dd.MM HH:mm}");
+            var quicLine = _lastQuicResult ??
+                (string.IsNullOrWhiteSpace(android.LastQuicProbe)
+                    ? "ещё не проверялась"
+                    : $"{android.LastQuicProbe} · {android.LastQuicProbeUtc.ToLocalTime():dd.MM HH:mm}");
             _statsAutotune.Text =
-                (_lastPageResult ?? "Ещё не запускался") +
+                pageLine +
                 (_lastVideoResult is null ? string.Empty : "\nВидео: " + _lastVideoResult) +
-                "\nQUIC-проба: " + (_lastQuicResult ?? "ещё не проверялась");
+                "\nQUIC-проба: " + quicLine;
         }
     }
 
     private static string Value(string value) => string.IsNullOrWhiteSpace(value) ? "не задано" : value;
+
+    /// <summary>Байты в понятном виде: ответы QUIC удобнее читать в КБ/МБ, а не пакетами.</summary>
+    private static string FormatBytes(long bytes) => bytes switch
+    {
+        <= 0 => "0 Б",
+        < 1024 => $"{bytes} Б",
+        < 1024 * 1024 => $"{bytes / 1024.0:0.#} КБ",
+        _ => $"{bytes / (1024.0 * 1024.0):0.##} МБ",
+    };
 
     /// <summary>Названия источников — простыми словами, без технических ключей.</summary>
     private static string Humanize(string source) => source switch

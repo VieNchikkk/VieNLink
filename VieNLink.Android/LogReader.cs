@@ -2,10 +2,13 @@ using System.Text;
 
 namespace VieNLink.Mobile;
 
-/// <summary>Чтение хвоста журнала приложения и stderr ядра.</summary>
+/// <summary>Чтение хвоста журнала приложения и stderr ядра с фильтром по категории.</summary>
 internal static class LogReader
 {
-    public static (string Text, string Source) Read(bool core, int maxLines = 400)
+    public static (string Text, string Source) Read(
+        bool core,
+        int maxLines = 400,
+        string category = AppLogCategories.All)
     {
         if (core)
         {
@@ -13,12 +16,12 @@ internal static class LogReader
                 Android.App.Application.Context.FilesDir?.AbsolutePath ?? AppPaths.DataDirectory,
                 "core-stderr.log");
             return (Tail(path, maxLines, "Лог ядра пуст: ядро ещё не писало в stderr."),
-                "Ядро: " + path);
+                "Ядро: " + path + " · без категорий");
         }
 
         var directory = AppPaths.LogsDirectory;
         var latest = Directory.Exists(directory)
-            ? Directory.GetFiles(directory, "vienlink-*.log")
+            ? Directory.GetFiles(directory, "vienlink-*.log*")
                 .OrderByDescending(File.GetLastWriteTimeUtc)
                 .FirstOrDefault()
             : null;
@@ -28,7 +31,16 @@ internal static class LogReader
             return ("Журнал приложения пуст.", "Файл ещё не создан");
         }
 
-        return (Tail(latest, maxLines, "Журнал пуст."), "Приложение: " + latest);
+        var all = File.ReadAllLines(latest);
+        var matched = all.Where(line => AppLogCategories.Matches(line, category)).ToList();
+        var start = Math.Max(0, matched.Count - maxLines);
+        var tail = matched[start..];
+        var empty = category == AppLogCategories.All
+            ? "Журнал пуст."
+            : $"В категории «{category}» пока пусто. Откройте «{AppLogCategories.All}», чтобы увидеть весь журнал.";
+        var text = tail.Count == 0 ? empty : string.Join(System.Environment.NewLine, tail);
+        var source = $"Приложение: {latest} · {category} · строк {tail.Count} из {all.Length}";
+        return (text, source);
     }
 
     private static string Tail(string path, int count, string empty)

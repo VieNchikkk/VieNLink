@@ -11,6 +11,14 @@ public sealed partial class MainActivity
 {
     private StreamFragmentMode? _pendingBypass;
 
+    // Ссылки на карточку обхода: состояние меняется из плитки/уведомления, а страница
+    // строится один раз — иначе «Обход выключен» висит поверх работающего TUN.
+    private TextView? _bypassBadge;
+    private TextView? _bypassStart;
+    private TextView? _bypassStop;
+    private TextView? _bypassPageStatus;
+    private TextView? _bypassPageHint;
+
     // -------------------------------------------------------------- подключение
 
     private View BuildConnectionPage()
@@ -24,8 +32,9 @@ public sealed partial class MainActivity
         var tunTop = Ui.Row(this);
         tunTop.AddView(Ui.Text(this, "Обход блокировок без сервера", 15f, P.TextStrong, bold: true),
             new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WrapContent, 1f));
-        tunTop.AddView(Ui.Badge(this, P, bypass ? "РАБОТАЕТ" : "ВЫКЛЮЧЕН",
-            bypass ? P.Positive : P.Muted));
+        _bypassBadge = Ui.Badge(this, P, bypass ? "РАБОТАЕТ" : "ВЫКЛЮЧЕН",
+            bypass ? P.Positive : P.Muted);
+        tunTop.AddView(_bypassBadge);
         tunCard.AddView(tunTop);
         tunCard.AddView(Ui.Hint(this,
             "Без прокси-сервера. Настройка и подробности — на вкладке «Обход».", P));
@@ -34,6 +43,8 @@ public sealed partial class MainActivity
             StartBypassFromMain, Resource.Drawable.ic_power);
         var stopBypass = Ui.Pill(this, P, "Выключить обход", UiButtonKind.Secondary,
             StopBypassFromMain);
+        _bypassStart = startBypass;
+        _bypassStop = stopBypass;
         startBypass.Enabled = !bypass && !serverRunning;
         startBypass.Alpha = startBypass.Enabled ? 1f : 0.5f;
         stopBypass.Enabled = bypass;
@@ -89,6 +100,53 @@ public sealed partial class MainActivity
 
     // ------------------------------------------------------------------- обход
 
+    /// <summary>
+    /// Обновляет карточки обхода без пересборки страницы: обход могут включить
+    /// с плитки или из уведомления, а страница «Подключение»/«Обход» уже построена.
+    /// </summary>
+    private void RefreshBypassState(bool bypass, bool serverRunning)
+    {
+        if (_bypassBadge is not null)
+        {
+            var tone = bypass ? P.Positive : P.Muted;
+            _bypassBadge.Text = bypass ? "РАБОТАЕТ" : "ВЫКЛЮЧЕН";
+            _bypassBadge.SetTextColor(tone);
+            _bypassBadge.Background = Ui.Rounded(
+                Color.Argb(40, tone.R, tone.G, tone.B), 8, this,
+                Color.Argb(110, tone.R, tone.G, tone.B));
+        }
+
+        if (_bypassStart is not null)
+        {
+            _bypassStart.Enabled = !bypass && !serverRunning;
+            _bypassStart.Alpha = _bypassStart.Enabled ? 1f : 0.5f;
+        }
+
+        if (_bypassStop is not null)
+        {
+            _bypassStop.Enabled = bypass;
+            _bypassStop.Alpha = _bypassStop.Enabled ? 1f : 0.5f;
+        }
+
+        if (_bypassPageStatus is not null)
+        {
+            _bypassPageStatus.Text = bypass
+                ? "TUN-обход (бета) работает"
+                : serverRunning ? "Подключён прокси-сервер" : "Обход выключен";
+            _bypassPageStatus.SetTextColor(bypass || serverRunning ? P.Positive : P.MutedStrong);
+        }
+
+        if (_bypassPageHint is not null)
+        {
+            _bypassPageHint.Text = bypass
+                ? "Трафик идёт в TUN и в локальный форвардер с фрагментацией TLS. Прокси-сервер не нужен. " +
+                  "Режим в бете: часть сайтов может не открываться."
+                : serverRunning
+                    ? "TUN-обход и прокси-сервер взаимоисключающие: при подключении к серверу обход останавливается."
+                    : "TUN-обход (бета) работает без сервера. Остальные сайты — через прокси-сервер.";
+        }
+    }
+
     private void StartBypassFromMain()
     {
         if (!VpnStarter.CanStartBypass(out var reason))
@@ -129,18 +187,18 @@ public sealed partial class MainActivity
 
         var running = TunnelService.State == TunnelState.Running;
         var bypass = TunnelService.IsBypassMode;
-        var status = Ui.Card(P, this,
-            Ui.Text(this,
-                bypass ? "TUN-обход (бета) работает" : running ? "Подключён прокси-сервер" : "Обход выключен",
-                16f, bypass || running ? P.Positive : P.MutedStrong, bold: true),
-            Ui.Hint(this,
-                bypass
-                    ? "Трафик идёт в TUN и в локальный форвардер с фрагментацией TLS. Прокси-сервер не нужен. " +
-                      "Режим в бете: часть сайтов может не открываться."
-                    : running
-                        ? "TUN-обход и прокси-сервер взаимоисключающие: при подключении к серверу обход останавливается."
-                        : "TUN-обход (бета) работает без сервера. Остальные сайты — через прокси-сервер.",
-                P));
+        _bypassPageStatus = Ui.Text(this,
+            bypass ? "TUN-обход (бета) работает" : running ? "Подключён прокси-сервер" : "Обход выключен",
+            16f, bypass || running ? P.Positive : P.MutedStrong, bold: true);
+        _bypassPageHint = Ui.Hint(this,
+            bypass
+                ? "Трафик идёт в TUN и в локальный форвардер с фрагментацией TLS. Прокси-сервер не нужен. " +
+                  "Режим в бете: часть сайтов может не открываться."
+                : running
+                    ? "TUN-обход и прокси-сервер взаимоисключающие: при подключении к серверу обход останавливается."
+                    : "TUN-обход (бета) работает без сервера. Остальные сайты — через прокси-сервер.",
+            P);
+        var status = Ui.Card(P, this, _bypassPageStatus, _bypassPageHint);
         page.AddView(status);
 
         page.AddView(Ui.Section(this, "TUN-обход (Beta)", P));

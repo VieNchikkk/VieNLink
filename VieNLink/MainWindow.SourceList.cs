@@ -119,6 +119,14 @@ public partial class MainWindow
             return (false, $"не похоже на ссылку: {url}");
         }
 
+        if (SourceBlacklist.IsBlockedUrl(url, out var blockedSource))
+        {
+            // Пользователь добавляет источник как «мой»: это осознанное действие,
+            // снимаем мягкую блокировку, иначе он не сможет вернуть нужный список.
+            SourceBlacklist.Unblock(new SourceDefinition { Url = url });
+            AppendLog($"Источник был в чёрном списке ({blockedSource?.Reason}) — разблокирован вручную: {url}");
+        }
+
         if (name.Length == 0)
         {
             name = uri.Host.Equals("t.me", StringComparison.OrdinalIgnoreCase)
@@ -314,6 +322,92 @@ public partial class MainWindow
         await LoadSingleSourceAsync(row.Source);
     }
 
+    private void OnBlacklistClick(object sender, RoutedEventArgs e)
+    {
+        var entries = SourceBlacklist.All()
+            .Where(entry => !entry.IsExpired(DateTime.UtcNow))
+            .OrderBy(entry => entry.Manual ? 0 : 1)
+            .ThenBy(entry => entry.Key)
+            .ToList();
+        if (entries.Count == 0)
+        {
+            MessageBox.Show(this, "Чёрный список пуст: автопоиск ничего не блокировал.",
+                "VieNLink", MessageBoxButton.OK, MessageBoxImage.Information);
+            return;
+        }
+
+        var items = new ObservableCollection<SourceBlacklistEntry>(entries);
+        var window = new Window
+        {
+            Owner = this,
+            Title = "Чёрный список источников",
+            Width = 760,
+            Height = 480,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = (Brush)FindResource("AppBackgroundBrush"),
+        };
+        var panel = new DockPanel { Margin = new Thickness(14) };
+        var hint = new TextBlock
+        {
+            Text = "Автопоиск не добавляет эти источники. Ручные блокировки — навсегда, " +
+                   "автоматические — на 30 дней; разблокировка возвращает источник в поиск.",
+            Foreground = (Brush)FindResource("MutedStrongBrush"),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+        DockPanel.SetDock(hint, Dock.Top);
+        panel.Children.Add(hint);
+
+        var list = new ListBox
+        {
+            ItemsSource = items,
+            DisplayMemberPath = nameof(SourceBlacklistEntry.Display),
+            Margin = new Thickness(0, 0, 0, 8),
+        };
+
+        var buttons = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        var unblock = new Button
+        {
+            Content = "Разблокировать",
+            Style = (Style)FindResource("AccentSmallButton"),
+            IsEnabled = false,
+            Margin = new Thickness(0, 0, 8, 0),
+        };
+        var close = new Button
+        {
+            Content = "Закрыть",
+            Style = (Style)FindResource("SmallButton"),
+        };
+        list.SelectionChanged += (_, _) => unblock.IsEnabled = list.SelectedItem is SourceBlacklistEntry;
+        unblock.Click += (_, _) =>
+        {
+            if (list.SelectedItem is not SourceBlacklistEntry entry)
+            {
+                return;
+            }
+
+            SourceBlacklist.UnblockKey(entry.Key);
+            items.Remove(entry);
+            AppendLog("Источник разблокирован: " + (entry.Repository ?? entry.Url ?? entry.Key));
+            if (items.Count == 0)
+            {
+                window.Close();
+            }
+        };
+        close.Click += (_, _) => window.Close();
+        buttons.Children.Add(unblock);
+        buttons.Children.Add(close);
+        DockPanel.SetDock(buttons, Dock.Bottom);
+        panel.Children.Add(buttons);
+        panel.Children.Add(list);
+        window.Content = panel;
+        window.ShowDialog();
+    }
+
     private void OnRemoveSourceClick(object sender, RoutedEventArgs e)
     {
         if (SourcesList.SelectedItem is not SourceRow row)
@@ -321,9 +415,17 @@ public partial class MainWindow
             return;
         }
 
-        if (MessageBox.Show(this, "Удалить источник «" + row.Name + "»?", "VieNLink", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
+        var blockNote = row.Source.IsAutoDiscovered && !row.Source.IsMine
+            ? "\n\nАвтопоиск больше не будет его добавлять (чёрный список)."
+            : string.Empty;
+        if (MessageBox.Show(this, "Удалить источник «" + row.Name + "»?" + blockNote, "VieNLink", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes)
         {
             return;
+        }
+
+        if (row.Source.IsAutoDiscovered && !row.Source.IsMine)
+        {
+            SourceBlacklist.BlockManual(row.Source, "удалён на ПК");
         }
 
         _sources.Remove(row.Source);
@@ -530,44 +632,4 @@ public partial class MainWindow
             FooterText.Text = "Ссылка скопирована";
         }
     }
-
-    /// <summary>Короткая памятка: как пользоваться маскировкой и автопереключением.</summary>
-    private void OnMaskingHelpClick(object sender, RoutedEventArgs e)
-    {
-        MessageBox.Show(
-            this,
-            "Как пользоваться\n\n" +
-            "1. Нажмите «Обновить списки».\n" +
-            "2. Включите «Только маскированные» — останутся серверы, чей трафик похож на обычный HTTPS.\n" +
-            "3. Нажмите «Все серверы». Серверы с ✓ появятся в подвкладке «Рабочие».\n" +
-            "4. Нажмите «Подключиться» — приложение само выберет быстрый и маскированный сервер.\n\n" +
-            "Что означают колонки\n" +
-            "• Маскировка — REALITY · Vision, WS · TLS · uTLS, Hysteria2 · obfs, TLS или «без TLS».\n" +
-            "• Камуфляж — под какой сайт маскируется рукопожатие: YouTube/Google, Yandex, Cloudflare.\n\n" +
-            "Если сервер перестанет отвечать, приложение само переключится на другой камуфляж\n" +
-            "(YouTube → Yandex → Cloudflare), без перезапуска и без диалогов.\n\n" +
-            "Как убедиться, что это работает\n" +
-            "1. Подключитесь и откройте вкладку «Диагностика»:\n" +
-            "   там видно активный и запасной камуфляж и счётчики переключений.\n" +
-            "2. Нажмите «Проверить туннель» — YouTube и t.me должны открыться.\n" +
-            "3. Смоделируйте сбой: заблокируйте IP:порт активного сервера в брандмауэре Windows\n" +
-            "   (или дождитесь, когда умрёт бесплатный сервер).\n" +
-            "4. Через 45–60 секунд приложение переключится само: в журнале появится\n" +
-            "   «Переключено без перезапуска ядра», а счётчик «тёплых» вырастет.\n" +
-            "5. Для сравнения выключите «Автопереключение при сбое сервера» и повторите:\n" +
-            "   соединение просто упадёт — это и есть разница между сервером и нашей логикой.\n\n" +
-            "Проверенные серверы и свой сервер\n" +
-            "• По умолчанию приложение подключается только к серверам с задержкой.\n" +
-            "• Свой сервер: «Диагностика → Добавить свой сервер», затем включите\n" +
-            "  «Подключаться только к моим подпискам» в настройках.\n" +
-            "• Шифрование до сервера не создаёт выход в интернет само по себе —\n" +
-            "  нужен сервер, до которого ТСПУ пропускает.\n\n" +
-            $"Сервер, который уже был рабочим, переживает один провал: после {NodeLimits.RemoveAfterFailures} провалов подряд удаляется.\n" +
-            "  Непроверенные удаляются после первой неудачной проверки.\n" +
-            "Telegram: «Собрать из каналов»; если t.me недоступен, приложение попробует RSS-зеркала.",
-            "VieNLink — как пользоваться",
-            MessageBoxButton.OK,
-            MessageBoxImage.Information);
-    }
-
 }

@@ -23,7 +23,12 @@ public sealed class VieNLinkApp : Application
     {
         base.OnCreate();
 
+        // В процессе :probe негативный кэш только читаем: писать в общий файл из двух
+        // процессов нельзя, результаты применит основной процесс.
+        NodeNegativeCache.SuppressWrites = ProbeScheduler.IsProbeProcess();
+
         DeviceProfile.Initialize(this);
+        CleanupOldFiles();
         RedirectStandardError();
         RegisterSecretProtector();
         WarmNetworkAssemblies();
@@ -68,6 +73,32 @@ public sealed class VieNLinkApp : Application
         catch (Exception exception)
         {
             Android.Util.Log.Warn("VieNLink", "не удалось прогреть сетевые сборки: " + exception.Message);
+        }
+    }
+
+    /// <summary>
+    /// Сразу при старте убираем журналы и временные файлы старше 72 часов. Делается
+    /// до открытия core-stderr.log: удалять файл, в который уже пишет fd, нельзя.
+    /// </summary>
+    private void CleanupOldFiles()
+    {
+        try
+        {
+            AppLog.DeleteOldFiles(includeRuntime: true);
+            var filesDir = FilesDir?.AbsolutePath;
+            if (!string.IsNullOrEmpty(filesDir))
+            {
+                AppLog.CleanupFile(Path.Combine(filesDir, "core-stderr.log"));
+            }
+
+            AppLog.CleanupFile(ProbeProtocol.RequestPath);
+            AppLog.CleanupFile(ProbeProtocol.ResultPath);
+            AppLog.CleanupFile(ProbeProtocol.ProgressPath);
+            AppLog.CleanupFile(ProbeProtocol.LivePath);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            Android.Util.Log.Warn("VieNLink", "не удалось очистить старые журналы: " + exception.Message);
         }
     }
 

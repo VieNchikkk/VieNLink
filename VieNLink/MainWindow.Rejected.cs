@@ -230,7 +230,7 @@ public partial class MainWindow
         SaveSettings();
         UpdateRejectedAutoButton();
         SetStatus("Авто-перепроверка отсева",
-            _settings.AutoRecheckRejected ? "включена — раз в 5 минут" : "выключена");
+            _settings.AutoRecheckRejected ? "включена — раз в минуту" : "выключена");
     }
 
     private void UpdateRejectedAutoButton()

@@ -383,6 +383,9 @@ internal static class NodeHealth
     {
         node.FailCount = 0;
         node.Status = NodeStatus.Working;
+        // Сервер ожил — снимаем его из негативного кэша, иначе повторный сбор
+        // пропустит рабочий узел до истечения TTL.
+        NodeNegativeCache.Forget(node);
     }
 }
 
@@ -613,6 +616,16 @@ internal sealed class SourceDefinition
     /// <summary>Id серверов, которые хотя бы раз были рабочими; повторные проверки не считаются.</summary>
     public HashSet<string> RegisteredWorkingNodeIds { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Сколько серверов источника не проверялись в этот раз, потому что они уже лежат
+    /// в негативном кэше (недавно подтверждённый провал). Служит для честной статистики:
+    /// выход источника считается по проверенным, а не по всем найденным строкам.
+    /// </summary>
+    public int LastSuppressedCount { get; set; }
+
+    /// <summary>Сколько серверов источника пропущено по негативному кэшу за всё время.</summary>
+    public int SuppressedNodeCount { get; set; }
+
     /// <summary>Учитывает серверы источника в общем счётчике (повторы не считаются).</summary>
     public void RegisterNodes(IEnumerable<ProxyNode> nodes)
     {
@@ -758,7 +771,10 @@ internal sealed class AppSettings
     /// <summary>Адрес проверки серверов: важно, чтобы он открывался только через рабочий сервер.</summary>
     public string TestUrl { get; set; } = "https://www.youtube.com/";
 
-    /// <summary>При подключении без выбранного сервера брать самый быстрый рабочий.</summary>
+    /// <summary>
+    /// Оставлено для совместимости со старыми файлами настроек: сервер всегда выбирается
+    /// автоматически, отдельной галочки в интерфейсе больше нет.
+    /// </summary>
     public bool AutoSelectBest { get; set; } = true;
 
     /// <summary>При сбое сервера автоматически переключаться на запасной другого камуфляжа.</summary>
@@ -904,14 +920,16 @@ internal sealed class AppSettings
     /// <summary>Сколько минут бездействия компьютера считать простоем.</summary>
     public int IdleTestMinutes { get; set; } = 5;
 
-    /// <summary>Сколько серверов проверять за один проход в простое.</summary>
     /// <summary>Сколько серверов проверять за один проход в простое. 200 — на ПК партия по 10 слишком мала.</summary>
     public int IdleTestBatch { get; set; } = 200;
 
     /// <summary>Пауза между проходами проверки в простое, минут.</summary>
     public int IdleTestIntervalMinutes { get; set; } = 10;
 
-    /// <summary>Рабочие серверы и MTProto старше этого возраста перепроверяются в простое, часов.</summary>
+    /// <summary>
+    /// Оставлено для совместимости со старыми файлами настроек: рабочие серверы
+    /// перепроверяются по <see cref="NodeLimits.WorkingRecheckMinutes"/>, а не по этому значению.
+    /// </summary>
     public int IdleRecheckHours { get; set; } = 6;
 
     public bool MinimizeToTray { get; set; } = true;

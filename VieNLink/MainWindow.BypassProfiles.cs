@@ -6,7 +6,7 @@ public partial class MainWindow
 
     private bool TryApplyBestZapretProfile()
     {
-        var best = BypassProfileStore.Ranked("zapret").FirstOrDefault();
+        var best = BypassProfileStore.Ranked("zapret", NetworkIdentity.Key).FirstOrDefault();
         if (best is null)
         {
             return false;
@@ -35,7 +35,7 @@ public partial class MainWindow
 
     private bool TryApplyBestDesyncProfile()
     {
-        var best = BypassProfileStore.Ranked("desync").FirstOrDefault();
+        var best = BypassProfileStore.Ranked("desync", NetworkIdentity.Key).FirstOrDefault();
         if (best is null)
         {
             return false;
@@ -65,9 +65,10 @@ public partial class MainWindow
     private bool TryApplyBestTunProfile(out bool desyncEngine)
     {
         desyncEngine = false;
-        var best = BypassProfileStore.Ranked("tun")
-            .Concat(BypassProfileStore.Ranked("tun-desync"))
-            .OrderByDescending(profile => profile.Quality)
+        var best = BypassProfileStore.Ranked("tun", NetworkIdentity.Key)
+            .Concat(BypassProfileStore.Ranked("tun-desync", NetworkIdentity.Key))
+            .OrderByDescending(profile => BypassProfileStore.Fits(profile, NetworkIdentity.Key))
+            .ThenByDescending(profile => profile.Quality)
             .ThenByDescending(profile => profile.LastSuccessUtc)
             .FirstOrDefault();
         if (best is null)
@@ -137,6 +138,7 @@ public partial class MainWindow
         DiscordOk = result.DiscordOk,
         VideoOk = result.VideoOk,
         AverageMs = result.AverageMs,
+        Networks = NetworkIdentity.Networks(),
     };
 
     private static BypassProfile DesyncProfile(
@@ -157,6 +159,7 @@ public partial class MainWindow
         TelegramOk = result.TelegramOk,
         VideoOk = result.VideoOk,
         AverageMs = result.AverageMs,
+        Networks = NetworkIdentity.Networks(),
     };
 
     private static BypassProfile TunProfile(DesyncProbeResult result, bool blockQuic) =>
@@ -172,5 +175,6 @@ public partial class MainWindow
         Quality = 30,
         Ok = 1,
         Total = 1,
+        Networks = NetworkIdentity.Networks(),
     };
 }

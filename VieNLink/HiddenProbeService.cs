@@ -105,9 +105,11 @@ internal sealed class HiddenProbeService : IAsyncDisposable
                         }
 
                         NodeHealth.RegisterFailure(node);
+                        NodeNegativeCache.RecordTcpDead(node);
                         onNodeTested?.Invoke(node);
                     }
 
+                    NodeNegativeCache.Flush();
                     progress?.Report(
                         $"TCP-отсев: {originalCount - alive.Count} из {originalCount} не отвечают");
                     ordered = alive;

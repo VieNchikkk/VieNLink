@@ -15,7 +15,7 @@ public partial class MainWindow
 {
     // ---------- обход DPI (zapret) ----------
 
-    private const int StrategyRows = 5;
+    private const int StrategyColumns = 4;
     private bool _updatingZapretList;
 
     /// <summary>
@@ -34,13 +34,15 @@ public partial class MainWindow
         {
             ZapretPresetPanel.Children.Clear();
             var order = ZapretService.GetPriorityOrder();
-            var columns = Math.Max(1, (order.Count + StrategyRows - 1) / StrategyRows);
-            ZapretPresetPanel.Rows = StrategyRows;
+            // Четыре колонки, рядов — сколько нужно: плашки не переносятся за край окна.
+            var columns = Math.Min(StrategyColumns, Math.Max(1, order.Count));
+            var rows = Math.Max(1, (order.Count + columns - 1) / columns);
+            ZapretPresetPanel.Rows = rows;
             ZapretPresetPanel.Columns = columns;
 
-            // UniformGrid заполняет построчно, а нужен «столбиками» по 5: раскладываем
+            // UniformGrid заполняет построчно, а нужен «столбиками»: раскладываем
             // элементы в массив по колонкам и добавляем в построчном порядке.
-            var cells = new RadioButton?[StrategyRows * columns];
+            var cells = new RadioButton?[rows * columns];
             for (var position = 0; position < order.Count; position++)
             {
                 var index = order[position];
@@ -55,7 +57,7 @@ public partial class MainWindow
                     ToolTip = preset.Name + "\n\nНажмите, чтобы применить пресет вручную.",
                 };
                 item.Checked += OnZapretPresetChecked;
-                cells[(position % StrategyRows) * columns + position / StrategyRows] = item;
+                cells[(position % rows) * columns + position / rows] = item;
             }
 
             for (var cell = 0; cell < cells.Length; cell++)
@@ -190,7 +192,7 @@ public partial class MainWindow
                 "zapret", index, preset.Name, gameMode: false, _settings.ZapretBlockQuic));
             UpdateZapretStrategyInfo(index);
             ZapretTuneText.Text = $"Выбран вручную: «{preset.Name}».";
-            SetStatus("Обход DPI включён", $"zapret: «{preset.Name}» (выбран вручную)");
+            SetStatus("zapret включён", $"Стратегия: {preset.Name} (выбрана вручную)");
             AppendLog($"zapret: вручную выбран пресет «{preset.Name}»");
         }
         catch (Exception exception)
@@ -248,7 +250,7 @@ public partial class MainWindow
             else
             {
                 ZapretActiveText.ClearValue(ForegroundProperty);
-                ZapretActiveText.Text = "Обход DPI выключен — при включении стратегия подберётся сама.";
+                ZapretActiveText.Text = "zapret выключен — при включении стратегия подберётся сама.";
             }
         }
 
@@ -428,7 +430,7 @@ public partial class MainWindow
 
             if (_zapret.IsRunning)
             {
-                return "Обход запрет";
+                return "zapret";
             }
 
             if (_tunBypass.IsRunning)
@@ -562,7 +564,7 @@ public partial class MainWindow
                 AppendLog(line);
             });
             await ZapretService.EnsureAsync(progress, _operation!.Token);
-            SetStatus("zapret установлен", "Нажмите «Включить обход DPI»");
+            SetStatus("zapret установлен", "Нажмите «Включить обход»");
             AppendLog("zapret установлен: " + ZapretService.Directory);
         }
         catch (OperationCanceledException)
@@ -705,14 +707,14 @@ public partial class MainWindow
             }
 
             var preset = Math.Clamp(_settings.ZapretPreset, 0, ZapretService.Presets.Count - 1);
-            SetStatus("Включаю обход DPI", $"Стратегия: {ZapretService.Presets[preset].Name}");
+            SetStatus("Включаю zapret", $"Стратегия: {ZapretService.Presets[preset].Name}");
             await _zapret.StartAsync(
                 progress, _operation!.Token, preset, gameMode: false, blockQuic: _settings.ZapretBlockQuic);
             BypassProfileStore.Record(StartedProfile(
                 "zapret", preset, ZapretService.Presets[preset].Name,
                 false, _settings.ZapretBlockQuic));
             UpdateZapretStrategyInfo(preset);
-            SetStatus("Обход DPI включён", "zapret запущен. Проверьте YouTube и t.me напрямую.");
+            SetStatus("zapret включён", "Проверьте YouTube и t.me напрямую — трафик идёт без прокси-сервера.");
             FooterText.Text = "zapret: обход DPI включён (без прокси-сервера)";
         }
         catch (OperationCanceledException)
@@ -741,6 +743,11 @@ public partial class MainWindow
 
     private void OnMainTabsSelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (LogTab?.IsSelected == true)
+        {
+            _ = LoadLogAsync();
+        }
+
         if (WidgetTab?.IsSelected != true)
         {
             return;
@@ -755,7 +762,7 @@ public partial class MainWindow
     private void OnZapretStopClick(object sender, RoutedEventArgs e)
     {
         _zapret.Stop();
-        SetStatus("Обход DPI остановлен", "Трафик снова идёт напрямую");
+        SetStatus("zapret остановлен", "Трафик снова идёт напрямую");
         UpdateZapretUi();
     }
 

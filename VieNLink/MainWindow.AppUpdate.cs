@@ -128,9 +128,10 @@ public partial class MainWindow
 
         if (release is null)
         {
-            SetAppUpdateStatus("Не удалось получить список релизов (GitHub недоступен). " +
-                               "Проверьте интернет или откройте страницу релизов вручную: " +
-                               AppUpdateService.ReleasesPage);
+            SetAppUpdateStatus(
+                "Не удалось получить список релизов (GitHub недоступен). Проверьте интернет " +
+                "или откройте страницу релизов вручную: " + AppUpdateService.ReleasesPage,
+                "GitHub недоступен — проверьте интернет");
             return null;
         }
 
@@ -387,11 +388,11 @@ public partial class MainWindow
     }
 
     /// <summary>Пишет ход обновления в «Общие» и в строку состояния окна.</summary>
-    private void SetAppUpdateStatus(string message)
+    private void SetAppUpdateStatus(string message, string? header = null)
     {
         if (!Dispatcher.CheckAccess())
         {
-            Dispatcher.BeginInvoke(new Action(() => SetAppUpdateStatus(message)));
+            Dispatcher.BeginInvoke(new Action(() => SetAppUpdateStatus(message, header)));
             return;
         }
 
@@ -400,6 +401,6 @@ public partial class MainWindow
             AppUpdateText.Text = message;
         }
 
-        SetStatus("Обновление VieNLink", message);
+        SetStatus("Обновление VieNLink", header ?? message);
     }
 }

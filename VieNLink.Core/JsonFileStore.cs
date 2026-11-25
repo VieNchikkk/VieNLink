@@ -25,7 +25,13 @@ internal static class JsonFileStore
     /// <summary>Файлы пишутся из фона (кэш серверов), поэтому общий временный файл защищаем.</summary>
     private static readonly object WriteLock = new();
 
-    public static T? Read<T>(string path) where T : class
+    public static T? Read<T>(string path) where T : class => Read<T>(path, Options);
+
+    /// <summary>
+    /// Чтение файла с чужими именами полей: настройки сериализации задаёт вызывающий
+    /// (например, база параметров обхода ведётся вручную в репозитории строчными именами).
+    /// </summary>
+    public static T? Read<T>(string path, JsonSerializerOptions options) where T : class
     {
         foreach (var candidate in new[] { path, path + ".bak" })
         {
@@ -44,7 +50,7 @@ internal static class JsonFileStore
 
                 // Читаем потоком: копия JSON в строку или byte[] на 20 МБ кэша не нужна.
                 SkipUtf8Bom(stream);
-                return JsonSerializer.Deserialize<T>(stream, Options);
+                return JsonSerializer.Deserialize<T>(stream, options);
             }
             catch (Exception exception) when (exception is IOException or JsonException or UnauthorizedAccessException)
             {
@@ -56,6 +62,10 @@ internal static class JsonFileStore
     }
 
     public static void Write<T>(string path, T value) => WriteCore(path, value, Options);
+
+    /// <summary>Запись с настройками сериализации вызывающего (парно к <see cref="Read{T}(string,JsonSerializerOptions)"/>).</summary>
+    public static void Write<T>(string path, T value, JsonSerializerOptions options) =>
+        WriteCore(path, value, options);
 
     /// <summary>Компактная запись (без отступов) — для кэша серверов на тысячи записей.</summary>
     public static void WriteCompact<T>(string path, T value) => WriteCore(path, value, CompactOptions);

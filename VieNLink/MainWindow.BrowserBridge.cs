@@ -41,7 +41,7 @@ public partial class MainWindow
         var node = PickBestNode();
         if (node is null)
         {
-            SetStatus("Нет серверов", "Проверенных серверов нет — откройте VieNLink и нажмите «Проверить серверы»");
+            SetStatus("Нет серверов", "Проверенных серверов нет — откройте VieNLink, обновите списки и нажмите «Все серверы»");
             ShowFromTray();
             return false;
         }

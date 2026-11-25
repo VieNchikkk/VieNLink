@@ -41,7 +41,6 @@ public partial class MainWindow
             AutoCoreUpdateCheck.IsChecked = _settings.AutoUpdateCore;
             AutoCheckAppUpdatesCheck.IsChecked = _settings.AutoCheckAppUpdates;
             ApplyProxyCheck.IsChecked = _settings.ApplySystemProxy;
-            AutoBestCheck.IsChecked = _settings.AutoSelectBest;
             AutoFailoverCheck.IsChecked = _settings.AutoFailover;
             OnlyVerifiedConnectCheck.IsChecked = _settings.ConnectOnlyVerified;
             OnlyMineConnectCheck.IsChecked = _settings.ConnectOnlyMine;
@@ -59,7 +58,6 @@ public partial class MainWindow
             IdleMinutesBox.Text = _settings.IdleTestMinutes.ToString();
             IdleBatchBox.Text = _settings.IdleTestBatch.ToString();
             IdleIntervalBox.Text = _settings.IdleTestIntervalMinutes.ToString();
-            IdleRecheckBox.Text = _settings.IdleRecheckHours.ToString();
             MinimizeTrayCheck.IsChecked = _settings.MinimizeToTray;
             WidgetTopmostCheck.IsChecked = _settings.WidgetTopmost;
             UpdateAutomationUi();
@@ -445,8 +443,13 @@ public partial class MainWindow
         // серверы не должны оставаться в отсеве.
         foreach (var node in _droppedNodes.Where(node => node.Status == NodeStatus.Dead))
         {
+            // Негативный кэш: сервер подтверждённо не работает — не проверяем его снова
+            // при следующем сборе того же источника (24 ч, для рабочего — 48 ч).
+            NodeNegativeCache.RecordDead(node);
             ArchiveRejectedNode(node);
         }
+
+        NodeNegativeCache.Flush();
 
         // Удалённые (10 провалов) серверы в кэш не попадают: их просто выбрасываем.
         var all = AllRows.Select(r => r.Node)

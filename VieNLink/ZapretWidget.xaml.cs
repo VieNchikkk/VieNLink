@@ -128,7 +128,7 @@ public partial class ZapretWidget : Window
         var active = mode.Length > 0;
 
         WidgetDot.Fill = (Brush)FindResource(active ? "PositiveTextBrush" : "DangerBrush");
-        WidgetTitle.Text = "Обход DPI";
+        WidgetTitle.Text = "VieNLink";
         WidgetMiniInfo.Text = _main.WidgetMiniInfoText;
 
         WidgetYoutubeCount.Text = _main.YoutubeNodeCount.ToString();

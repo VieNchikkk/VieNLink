@@ -26,11 +26,26 @@ internal static class ForwarderHost
     /// <summary>Сколько фейковых QUIC Initial отправлено.</summary>
     public static long FakeQuicPackets => _forwarder?.FakeQuicPackets ?? 0;
 
+    /// <summary>QUIC-датаграммы вверх и ответы (downlink) через релей.</summary>
+    public static long QuicUplinkPackets => _forwarder?.QuicUplinkPackets ?? 0;
+
+    public static long QuicDownlinkPackets => _forwarder?.QuicDownlinkPackets ?? 0;
+
+    public static long QuicUplinkBytes => _forwarder?.QuicUplinkBytes ?? 0;
+
+    public static long QuicDownlinkBytes => _forwarder?.QuicDownlinkBytes ?? 0;
+
     /// <summary>Сколько байт реально пришло от видео-хостов.</summary>
     public static long VideoBytes => _forwarder?.VideoBytes ?? 0;
 
     /// <summary>Сколько видео-соединений отдали данные.</summary>
     public static long VideoConnections => _forwarder?.VideoConnections ?? 0;
+
+    /// <summary>
+    /// Ключ сети, на которой запущен обход: подтверждения в базе операторов пишем ей,
+    /// даже если Wi-Fi/LTE переключили уже после запуска.
+    /// </summary>
+    public static string NetworkKey { get; private set; } = string.Empty;
 
     /// <summary>Запускает форвардер на свободном порту и возвращает его.</summary>
     public static async Task<int> StartAsync(
@@ -42,11 +57,13 @@ internal static class ForwarderHost
         try
         {
             await StopCoreAsync().ConfigureAwait(false);
+            NetworkKey = NetworkPresets.Key(Android.App.Application.Context);
 
             var forwarder = new TlsFragmentForwarder();
             TlsFragmentForwarder.Trace = line => AppLog.Write("tun-bypass", line);
             TlsFragmentForwarder.VideoObserved = OnVideoObserved;
             TlsFragmentForwarder.QuicTrafficObserved = OnQuicTrafficObserved;
+            TlsFragmentForwarder.QuicDownlinkSeen = OnQuicDownlinkSeen;
             await forwarder.StartAsync(mode, 0, fragmentAllHosts, videoMode).ConfigureAwait(false);
             _forwarder = forwarder;
             Mode = mode;
@@ -75,9 +92,11 @@ internal static class ForwarderHost
     {
         var forwarder = _forwarder;
         _forwarder = null;
+        NetworkKey = string.Empty;
         TlsFragmentForwarder.Trace = null;
         TlsFragmentForwarder.VideoObserved = null;
         TlsFragmentForwarder.QuicTrafficObserved = null;
+        TlsFragmentForwarder.QuicDownlinkSeen = null;
 
         if (forwarder is null)
         {
@@ -96,6 +115,7 @@ internal static class ForwarderHost
 
     private static DateTime _lastVideoPresetUtc;
     private static DateTime _lastQuicPresetUtc;
+    private static DateTime _lastQuicVideoUtc;
 
     /// <summary>
     /// Реальный видео-поток — лучшее доказательство, что стратегия работает: подтверждаем
@@ -116,8 +136,8 @@ internal static class ForwarderHost
             AppLog.Write("presets",
                 $"Видео реально пошло ({host}: {bytes} байт) через «{Mode}» — подтверждаю для " +
                 $"«{NetworkPresets.Label(context)}»");
-            ProviderPresetStore.RecordSuccess(
-                NetworkPresets.Key(context),
+            NetworkPresets.RememberSuccess(
+                context,
                 Mode.ToString(),
                 NetworkPresets.GetVideo(context),
                 NetworkPresets.GetBlockQuic(context),
@@ -126,6 +146,34 @@ internal static class ForwarderHost
         catch (Exception exception)
         {
             AppLog.Write("presets", "Не удалось подтвердить видео-стратегию", exception);
+        }
+    }
+
+    /// <summary>
+    /// QUIC-ответы идут прямо сейчас: отмечаем в базе, что видео играет через релей.
+    /// Закрытия UDP-ассоциации не ждём — длинная сессия может не закрыться вовсе.
+    /// </summary>
+    private static void OnQuicDownlinkSeen()
+    {
+        if (DateTime.UtcNow - _lastQuicVideoUtc < TimeSpan.FromMinutes(5))
+        {
+            return;
+        }
+
+        _lastQuicVideoUtc = DateTime.UtcNow;
+        try
+        {
+            var context = Android.App.Application.Context;
+            NetworkPresets.RememberVideo(
+                context,
+                Mode.ToString(),
+                NetworkPresets.GetVideo(context),
+                NetworkPresets.GetBlockQuic(context),
+                "quic");
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("presets", "Не удалось отметить видео по QUIC", exception);
         }
     }
 

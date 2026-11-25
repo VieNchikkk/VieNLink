@@ -1,7 +1,7 @@
 <Window x:Class="VieNLink.ZapretWidget"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="VieNLink — обход"
+        Title="VieNLink — виджет"
         Width="212"
         SizeToContent="Height"
         WindowStyle="None"
@@ -38,7 +38,7 @@
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                     <Ellipse x:Name="WidgetDot" Width="8" Height="8" Fill="{DynamicResource DangerBrush}"
                              Margin="0,0,5,0" VerticalAlignment="Center" />
-                    <TextBlock x:Name="WidgetTitle" Text="Обход DPI" FontWeight="SemiBold" FontSize="10.5"
+                    <TextBlock x:Name="WidgetTitle" Text="VieNLink" FontWeight="SemiBold" FontSize="10.5"
                                Foreground="{DynamicResource TextStrongBrush}" VerticalAlignment="Center"
                                TextTrimming="CharacterEllipsis" />
                     <TextBlock x:Name="WidgetMiniInfo" FontSize="10.5" FontWeight="SemiBold"
@@ -123,12 +123,12 @@
                 <UniformGrid Columns="2">
                     <Button x:Name="WidgetZapretButton" Style="{StaticResource WidgetButton}" Margin="1"
                             HorizontalContentAlignment="Center" Click="OnZapretClick"
-                            ToolTip="Обход DPI (zapret): стратегия подбирается сама">
+                            ToolTip="zapret: обход DPI без прокси-сервера, стратегия подбирается сама">
                         <StackPanel Orientation="Horizontal">
                             <Path Width="13" Height="13" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,4,0"
                                   Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                   Data="M7,2V13H10V22L17,10H13L17,2H7Z" />
-                            <TextBlock Text="Zapret" VerticalAlignment="Center" />
+                            <TextBlock Text="zapret" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
 
@@ -139,7 +139,7 @@
                             <Path Width="13" Height="13" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,4,0"
                                   Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
                                   Data="M21,9L17,5V8H10V10H17V13M7,11L3,15L7,19V16H14V14H7V11Z" />
-                            <TextBlock Text="Обход DPI" VerticalAlignment="Center" />
+                            <TextBlock Text="Свой DPI" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                 </UniformGrid>

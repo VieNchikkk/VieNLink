@@ -244,15 +244,21 @@ internal sealed class DesyncService : IDisposable
     /// </summary>
     public static IReadOnlyList<int> GetPriorityOrder(int? preferredIndex = null)
     {
-        var quality = BypassProfileStore.Ranked("desync")
+        var quality = BypassProfileStore.Ranked("desync", NetworkIdentity.Key)
             .GroupBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(
                 group => group.Key,
                 group => group.Max(profile => profile.Quality),
                 StringComparer.OrdinalIgnoreCase);
+        // Стратегия, уже работавшая на этой сети, идёт первой даже при меньшем «качестве».
+        var fits = BypassProfileStore.Ranked("desync", NetworkIdentity.Key)
+            .Where(profile => BypassProfileStore.Fits(profile, NetworkIdentity.Key))
+            .Select(profile => profile.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         var order = Enumerable.Range(0, Strategies.Count)
-            .OrderByDescending(index => quality.TryGetValue(Strategies[index].Name, out var value) ? value : 0)
+            .OrderByDescending(index => fits.Contains(Strategies[index].Name) ? 1 : 0)
+            .ThenByDescending(index => quality.TryGetValue(Strategies[index].Name, out var value) ? value : 0)
             .ThenBy(index => index)
             .ToList();
         if (preferredIndex is { } preferred && preferred >= 0 && preferred < Strategies.Count)

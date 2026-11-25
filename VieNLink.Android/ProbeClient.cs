@@ -675,13 +675,14 @@ internal static class ProbeClient
                         }
 
                         NodeHealth.RegisterFailure(node);
+                        NodeNegativeCache.RecordTcpDead(node);
                         precheckDead.Add(node);
                         dropped++;
                     }
 
                     // Непроверенные, не ответившие по TCP, удаляем сразу: иначе они
                     // висят в кэше мёртвыми и раздувают «В списке» до перезагрузки.
-                    NodeStore.DropDeadNodes(precheckDead);
+                    NodeStore.DropDeadNodes(precheckDead, negativeCache: false);
                     NodeStore.SaveNodes();
                     toTest = alive;
                     if (toTest.Count == 0)

@@ -96,6 +96,51 @@ internal static class Maintenance
         {
             await Task.Run(NodeStore.EnsureLoaded, cancellationToken).ConfigureAwait(false);
 
+            // Журналы и служебные файлы живут не дольше 72 часов: stderr ядра и
+            // промежуточные файлы :probe иначе копятся месяцами и занимают место.
+            try
+            {
+                AppLog.DeleteOldFiles();
+                var filesDir = Application.Context.FilesDir?.AbsolutePath;
+                if (!string.IsNullOrEmpty(filesDir))
+                {
+                    AppLog.CleanupFile(Path.Combine(filesDir, "core-stderr.log"));
+                }
+
+                AppLog.CleanupFile(ProbeProtocol.RequestPath);
+                AppLog.CleanupFile(ProbeProtocol.ResultPath);
+                AppLog.CleanupFile(ProbeProtocol.ProgressPath);
+                AppLog.CleanupFile(ProbeProtocol.LivePath);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                AppLog.Write("maintenance", "Не удалось очистить старые журналы", exception);
+            }
+
+            // База параметров обхода: раз в сутки подтягиваем обновлённую из репозитория,
+            // чтобы новые операторы появлялись без выпуска версии. Ошибки не мешают работе.
+            try
+            {
+                await ProviderPresetStore.RefreshRemoteAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                AppLog.Write("presets", "Обновление базы операторов не удалось", exception);
+            }
+
+            // Отправка подборок — только если пользователь поставил галочку согласия.
+            if (ProviderPresetShare.Enabled)
+            {
+                try
+                {
+                    await ProviderPresetShare.FlushAsync(cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception exception) when (exception is not OperationCanceledException)
+                {
+                    AppLog.Write("presets", "Отправка подборок не удалась", exception);
+                }
+            }
+
             // Сначала применяем результаты, которые :probe успел записать до прошлой
             // остановки процесса — иначе работа в фоне пропадала бы молча.
             await Task.Run(ProbeClient.ApplyPendingResults, cancellationToken).ConfigureAwait(false);

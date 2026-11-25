@@ -247,6 +247,11 @@ internal sealed class SourceRow : INotifyPropertyChanged
         ? "—"
         : Source.TotalWorkingNodeCount.ToString();
 
+    /// <summary>Сколько серверов последнего сбора пропущено по негативному кэшу.</summary>
+    public string SuppressedLabel => SourceKinds.IsProxy(Source) || Source.LastSuppressedCount <= 0
+        ? "—"
+        : Source.LastSuppressedCount.ToString();
+
     public string TrafficLabel => Source.SubscriptionInfo ?? "—";
 
     public string StatusLabel => Source.LastError is not null

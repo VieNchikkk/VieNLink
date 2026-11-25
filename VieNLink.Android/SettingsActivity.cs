@@ -175,6 +175,26 @@ public sealed class SettingsActivity : BaseActivity
 
         // -------------------------------------------------------------- данные и VPN
         page.AddView(Ui.Section(this, "Данные и VPN", P));
+
+        // Согласие на отправку подборок показываем только когда приёмник уже поднят:
+        // галочка без работающего приёма обещала бы то, чего нет.
+        if (ProviderPresetShare.IsConfigured)
+        {
+            AddAutomationToggle(page, "Помогать другим: отправлять подобранные параметры",
+                "Уходят только оператор и стратегии обхода — без имени Wi-Fi, адресов и данных " +
+                "об устройстве. Так новые установки сразу работают на вашем операторе.",
+                android.ShareProviderPresets,
+                value =>
+                {
+                    android.ShareProviderPresets = value;
+                    ProviderPresetShare.Enabled = value;
+                    if (value)
+                    {
+                        _ = Task.Run(() => ProviderPresetShare.FlushAsync(CancellationToken.None));
+                    }
+                });
+        }
+
         var clear = Ui.Pill(this, P, "Очистить кэш серверов", UiButtonKind.Danger, ConfirmClearNodes,
             Resource.Drawable.ic_delete);
         page.AddView(clear);

@@ -74,6 +74,23 @@ internal sealed class AndroidSettings
 
     /// <summary>Автоматически проверять серверы в фоне (в дополнение к :probe в процессе).</summary>
     public bool AutoProbe { get; set; } = true;
+
+    /// <summary>
+    /// Пользователь разрешил делиться подобранными параметрами обхода: отправляются только
+    /// оператор и стратегии (без Wi-Fi SSID, адресов и идентификаторов устройства).
+    /// По умолчанию выключено — согласие даётся галочкой в настройках.
+    /// </summary>
+    public bool ShareProviderPresets { get; set; }
+
+    /// <summary>Итог последнего автоподбора (ручного или фонового): виден на экране TUN после перезапуска.</summary>
+    public DateTime LastAutotuneUtc { get; set; }
+
+    public string LastAutotuneSummary { get; set; } = string.Empty;
+
+    /// <summary>Результат последней пробы QUIC — синтетической, до реального трафика.</summary>
+    public DateTime LastQuicProbeUtc { get; set; }
+
+    public string LastQuicProbe { get; set; } = string.Empty;
 }
 
 /// <summary>Стратегии TUN-обхода, сохранённые для одной сети (Wi-Fi или оператора).</summary>
@@ -137,6 +154,8 @@ internal static class AndroidSettingsStore
                 }
 
                 _current = loaded;
+                // Согласие на отправку подборок живёт в этих настройках, а очередь — в ядре.
+                ProviderPresetShare.Enabled = loaded.ShareProviderPresets;
                 return _current;
             }
         }
@@ -151,6 +170,28 @@ internal static class AndroidSettingsStore
                 JsonFileStore.Write(Path, _current);
             }
         }
+    }
+
+    /// <summary>
+    /// Запомнить итог автоподбора. Экран TUN показывает его и после перезапуска приложения,
+    /// иначе фоновый подбор выглядел как «ещё не запускался».
+    /// </summary>
+    public static void RecordAutotune(string summary, string? quicProbe)
+    {
+        var settings = Current;
+        if (!string.IsNullOrWhiteSpace(summary))
+        {
+            settings.LastAutotuneSummary = summary;
+            settings.LastAutotuneUtc = DateTime.UtcNow;
+        }
+
+        if (!string.IsNullOrWhiteSpace(quicProbe))
+        {
+            settings.LastQuicProbe = quicProbe;
+            settings.LastQuicProbeUtc = DateTime.UtcNow;
+        }
+
+        Save();
     }
 
     public static bool IsAllowed(string packageName)

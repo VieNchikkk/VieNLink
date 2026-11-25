@@ -20,6 +20,19 @@ internal static class AppPaths
 
     /// <summary>Зашифрованный DPAPI список источников: ссылки подписок содержат токены.</summary>
     public static string SourcesProtectedPath { get; } = Path.Combine(DataDirectory, "sources.dat");
+
+    /// <summary>
+    /// Чёрный список источников: URL/репозитории, которые нельзя добавлять.
+    /// Секретов не содержит, поэтому лежит открытым JSON.
+    /// </summary>
+    public static string SourceBlacklistPath { get; } = Path.Combine(DataDirectory, "sources-blacklist.json");
+
+    /// <summary>
+    /// Негативный кэш серверов: недавно подтверждённые мёртвые узлы/эндпоинты.
+    /// Экономит проверки ядром и TCP-опросы при повторном сборе тех же списков.
+    /// </summary>
+    public static string ServerBlacklistPath { get; } = Path.Combine(DataDirectory, "servers-blacklist.json");
+
     public static string NodesPath { get; } = Path.Combine(DataDirectory, "nodes.json");
 
     /// <summary>
@@ -61,6 +74,24 @@ internal static class AppPaths
     /// экспортируются и зашиваются в сборку как стартовые для других пользователей.
     /// </summary>
     public static string ProviderPresetsPath { get; } = Path.Combine(DataDirectory, "provider-presets.json");
+
+    /// <summary>
+    /// Обновляемая база параметров обхода из репозитория: кэш на устройстве. Новые
+    /// параметры доезжают до пользователей без выпуска новой версии.
+    /// </summary>
+    public static string ProviderPresetsRemotePath { get; } =
+        Path.Combine(DataDirectory, "provider-presets-remote.json");
+
+    /// <summary>Когда последний раз проверяли обновляемую базу: чтобы не ходить в сеть чаще раза в сутки.</summary>
+    public static string ProviderPresetsSyncPath { get; } =
+        Path.Combine(DataDirectory, "provider-presets-sync.json");
+
+    /// <summary>
+    /// Очередь подтверждённых параметров, которые ещё не отправлены разработчику.
+    /// Пустая, пока пользователь не дал согласие; отправляется при следующем обслуживании.
+    /// </summary>
+    public static string ProviderPresetsOutboxPath { get; } =
+        Path.Combine(DataDirectory, "provider-presets-outbox.json");
 
     /// <summary>Кэш дат публикации GitHub-источников: чтобы после перезапуска не жечь квоту API заново.</summary>
     public static string FreshnessPath { get; } = Path.Combine(DataDirectory, "freshness.json");

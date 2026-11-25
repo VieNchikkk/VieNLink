@@ -322,7 +322,7 @@ public partial class MainWindow
             var quality = FormatQuality(stars, qualityLabel);
             var details = new List<string>
             {
-                desyncOnly ? "Обход: TUN (движок WinDivert)" : "Обход: TUN-обход (Beta)",
+                desyncOnly ? "Обход: TUN · движок WinDivert" : "Обход: TUN-обход",
                 "Стратегия: " + strategy,
                 "Прокси-сервер не нужен",
                 "Скорость: " + speed,
@@ -344,7 +344,7 @@ public partial class MainWindow
             }
 
             ApplyHeaderCard(
-                desyncOnly ? "Обход: TUN · WinDivert" : "Обход: TUN (Beta)",
+                desyncOnly ? "Обход: TUN · WinDivert" : "Обход: TUN-обход",
                 "Стратегия: " + strategy,
                 (desyncOnly ? "WinDivert" : "TUN") + " · " + speed,
                 "Качество: " + quality,
@@ -364,7 +364,7 @@ public partial class MainWindow
             var quality = FormatQuality(stars, qualityLabel);
             var details = new List<string>
             {
-                "Обход: Zapret",
+                "Обход: zapret",
                 $"Стратегия: {preset}",
                 "Режим: WinDivert, без прокси-сервера",
                 "Правила: только целевые домены",
@@ -378,7 +378,7 @@ public partial class MainWindow
             }
 
             ApplyHeaderCard(
-                "Обход: Zapret",
+                "Обход: zapret",
                 $"Стратегия: {preset}",
                 "WinDivert · " + speed,
                 "Качество: " + quality,

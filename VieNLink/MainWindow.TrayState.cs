@@ -106,7 +106,8 @@ public partial class MainWindow
         BlockDiagnoseButton.IsEnabled = !busy;
         CancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         Cursor = busy ? System.Windows.Input.Cursors.Wait : System.Windows.Input.Cursors.Arrow;
-        UpdateHeaderState();        ZapretStateChanged?.Invoke();
+        UpdateHeaderState();
+        ZapretStateChanged?.Invoke();
     }
 
     private void OnCancelClick(object sender, RoutedEventArgs e)
@@ -148,7 +149,8 @@ public partial class MainWindow
         _tray.WidgetRequested += ToggleZapretWidget;
         _tray.NodeSelected += OnTrayNodeSelected;
         _tray.ToggleRequested += async () =>
-        {            try
+        {
+            try
             {
                 if (_manager.IsConnected || _manager.IsKillSwitchHeld)
                 {
@@ -159,7 +161,7 @@ public partial class MainWindow
                 var node = PickBestNode();
                 if (node is null)
                 {
-                    _tray.ShowBalloon("Нет серверов", "Обновите списки в окне VieNLink.", warning: true);
+                    _tray.ShowBalloon("Нет серверов", "Откройте VieNLink, обновите списки и нажмите «Все серверы» в «Инструменты → Серверы».", warning: true);
                     return;
                 }
 

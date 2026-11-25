@@ -514,6 +514,19 @@ internal static class NodeStore
                 return "Нужна ссылка http(s) на подписку, список или канал t.me/s/…";
             }
 
+            if (SourceBlacklist.IsBlockedUrl(url, out var blockedSource) && !mine)
+            {
+                return "Источник в чёрном списке (" + (blockedSource?.Reason ?? "blocked") +
+                       "). Если это ошибка, добавьте его как «мою» подписку.";
+            }
+
+            if (mine)
+            {
+                // Пользователь явно добавляет источник как свой: снимаем мягкую блокировку,
+                // иначе он не сможет вернуть нужный список.
+                SourceBlacklist.Unblock(new SourceDefinition { Url = url });
+            }
+
             if (Sources.Any(source => source.Url.Equals(url, StringComparison.OrdinalIgnoreCase)))
             {
                 return "Такой источник уже добавлен";
@@ -853,6 +866,13 @@ internal static class NodeStore
                     continue;
                 }
 
+                if (SourceBlacklist.IsBlocked(source, out var blocked))
+                {
+                    AppLog.Write("sources",
+                        $"Автопоиск: {source.Name} в чёрном списке ({blocked?.Reason}) — не добавляю");
+                    continue;
+                }
+
                 source.IsAutoDiscovered = true;
                 source.AddedAtUtc = DateTime.UtcNow;
                 Sources.Add(source);
@@ -879,7 +899,7 @@ internal static class NodeStore
     /// Возвращает число удалённых. Кэш не пишет: вызывающий делает это один раз
     /// через <see cref="SaveNodes"/> (иначе на партию приходилось две записи).
     /// </summary>
-    public static int DropDeadNodes(IEnumerable<ProxyNode> tested)
+    public static int DropDeadNodes(IEnumerable<ProxyNode> tested, bool negativeCache = true)
     {
         var dead = tested
             .Where(node => node.Status == NodeStatus.Dead)
@@ -893,6 +913,16 @@ internal static class NodeStore
         int removed;
         lock (Gate)
         {
+            // Запоминаем провал на 24/48 часов: те же ссылки придут в следующем сборе
+            // источников, и их не надо снова гонять через ядро.
+            if (negativeCache)
+            {
+                foreach (var node in tested.Where(node => node.Status == NodeStatus.Dead))
+                {
+                    NodeNegativeCache.RecordDead(node);
+                }
+            }
+
             // Рабочие серверы, которые перестали работать, не теряем: кладём в отсев
             // для ручной перепроверки. Непроверенный мусор просто удаляется.
             foreach (var node in tested.Where(node =>
@@ -915,6 +945,7 @@ internal static class NodeStore
             AppLog.Write("nodes", $"Убрано нерабочих серверов: {removed}");
         }
 
+        NodeNegativeCache.Flush();
         return removed;
     }
 
