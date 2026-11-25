@@ -23,7 +23,9 @@ param(
     [switch]$WithoutCore,
     [string]$Thumbprint,
     [string]$TimestampUrl = 'http://timestamp.digicert.com',
-    [switch]$NoSign
+    [switch]$NoSign,
+    # Не собирать портативный ZIP: для релиза нужен только setup.exe (быстрее).
+    [switch]$NoPortable
 )
 
 $ErrorActionPreference = 'Stop'
@@ -45,6 +47,7 @@ if (-not $Version) {
 $publishArgs = @{}
 if ($Version) { $publishArgs.Version = $Version }
 if ($WithoutCore) { $publishArgs.WithoutCore = $true }
+if ($NoPortable) { $publishArgs.NoZip = $true }
 & (Join-Path $PSScriptRoot 'publish-release.ps1') @publishArgs
 
 $outDir = Join-Path $root "release\VieNLink-$Version-win-x64"

@@ -288,19 +288,6 @@ public sealed class TunnelService : VpnService
                        ?? TlsFragmentForwarder.Strategies[0];
         AppLog.Write("tun-bypass", $"Сеть: {NetworkPresets.Describe(this)}");
 
-        // «Сначала с QUIC, потом без»: если реальный QUIC молчит, настройка уже переключена
-        // на блокировку — просто перезапускаем обход, чтобы она применилась.
-        ForwarderHost.RestartRequested = () =>
-        {
-            AppLog.Write("tun-bypass", "QUIC не отвечает — перезапускаю обход без QUIC");
-            StopTunnel();
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(TimeSpan.FromSeconds(1)).ConfigureAwait(false);
-                StartBypass(mode);
-            });
-        };
-
         _ = Task.Run(async () =>
         {
             try
@@ -1514,7 +1501,6 @@ public sealed class TunnelService : VpnService
         _autoTuneCts = null;
         _bypassMode = false; IsBypassMode = false;
         ActiveService = null;
-        ForwarderHost.RestartRequested = null;
         StopHealthMonitor();
 
         // Ядро закрываем через CoreRuntime: у процесса один CommandServer.

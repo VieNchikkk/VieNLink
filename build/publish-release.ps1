@@ -22,7 +22,9 @@ param(
     [string]$Thumbprint,
     [string]$TimestampUrl = 'http://timestamp.digicert.com',
     [switch]$WithoutCore,
-    [switch]$AllowRunning
+    [switch]$AllowRunning,
+    # Не собирать портативный ZIP: для быстрого релиза нужен только установщик.
+    [switch]$NoZip
 )
 
 $ErrorActionPreference = 'Stop'
@@ -312,10 +314,14 @@ Telegram MTProtoProxies:
 "@
 Set-Content -LiteralPath (Join-Path $outDir 'ЧИТАЙ.txt') -Value $readme -Encoding UTF8
 
-if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
-Compress-Archive -Path (Join-Path $outDir '*') -DestinationPath $zipPath -CompressionLevel Optimal
-Get-ChildItem -LiteralPath $zipPath | Unblock-File
+if (-not $NoZip) {
+    if (Test-Path -LiteralPath $zipPath) { Remove-Item -LiteralPath $zipPath -Force }
+    Compress-Archive -Path (Join-Path $outDir '*') -DestinationPath $zipPath -CompressionLevel Optimal
+    Get-ChildItem -LiteralPath $zipPath | Unblock-File
+}
 
 Write-Host ''
 Write-Host "Готово: $outDir" -ForegroundColor Green
-Write-Host "Архив: $zipPath" -ForegroundColor Green
+if (-not $NoZip) {
+    Write-Host "Архив: $zipPath" -ForegroundColor Green
+}

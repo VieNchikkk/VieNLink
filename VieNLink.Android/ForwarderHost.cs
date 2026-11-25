@@ -32,12 +32,6 @@ internal static class ForwarderHost
     /// <summary>Сколько видео-соединений отдали данные.</summary>
     public static long VideoConnections => _forwarder?.VideoConnections ?? 0;
 
-    /// <summary>
-    /// Просьба перезапустить обход после смены режима QUIC (ставит TunnelService).
-    /// Так «сначала с QUIC, потом без» происходит само, без нажатий.
-    /// </summary>
-    public static Action? RestartRequested { get; set; }
-
     /// <summary>Запускает форвардер на свободном порту и возвращает его.</summary>
     public static async Task<int> StartAsync(
         StreamFragmentMode mode,
@@ -161,7 +155,7 @@ internal static class ForwarderHost
                 return;
             }
 
-            if (uplink < 20 || !blocked ||
+            if (uplink < 50 || !blocked || VideoBytes > 0 ||
                 DateTime.UtcNow - _lastQuicPresetUtc < TimeSpan.FromMinutes(5))
             {
                 return;
@@ -170,9 +164,8 @@ internal static class ForwarderHost
             _lastQuicPresetUtc = DateTime.UtcNow;
             NetworkPresets.SetBlockQuic(context, true);
             AppLog.Write("presets",
-                $"QUIC молчит ({uplink} пакетов вверх, 0 вниз) — блокирую, видео пойдёт по TCP; " +
-                "перезапускаю обход");
-            RestartRequested?.Invoke();
+                $"QUIC молчит ({uplink} пакетов вверх, 0 вниз, видео не шло) — " +
+                "блокирую при следующем включении обхода (работающую сессию не трогаю)");
         }
         catch (Exception exception)
         {

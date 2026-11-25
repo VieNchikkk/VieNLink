@@ -182,6 +182,8 @@ CoreLog, TrayState, ProductFeatures, BypassProfiles, Layout); сервисы `Si
 ## Релизы
 - Перед сборкой закрыть `VieNLink.exe`.
 - Windows: `build\publish-installer.ps1` → портативный ZIP + `setup.exe` (подпись `CN=VieN`).
+  Быстрый вариант для релиза: `build\publish-installer.ps1 -NoPortable` — только `setup.exe`,
+  без ZIP и без ожидания упаковки.
 - Браузер — **отдельное приложение** `VieNLink.Browser` со своей версией
   (`build/BrowserVersion.props`) и своим установщиком: `build\publish-browser.ps1` →
   `release\VieNLink-Browser-<версия>-setup.exe` + ZIP (`build\browser-installer.iss`).
