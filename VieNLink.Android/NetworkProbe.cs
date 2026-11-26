@@ -41,6 +41,12 @@ internal static class NetworkProbe
     private static double? _speed;
     private static DateTime _speedAtUtc;
 
+    // Один клиент на направление: раньше на каждый адрес создавался новый HttpClient,
+    // и в памяти копились пулы соединений. Сбрасываем при смене сервера (Invalidate).
+    private static readonly object ClientGate = new();
+    private static HttpClient? _tunnelClient;
+    private static HttpClient? _directClient;
+
     public static ExitInfo? CachedExit =>
         _exit is not null && DateTime.UtcNow - _exitAtUtc < TimeSpan.FromMinutes(5) ? _exit : null;
 
@@ -54,6 +60,26 @@ internal static class NetworkProbe
         _speed = null;
         _exitAtUtc = DateTime.MinValue;
         _speedAtUtc = DateTime.MinValue;
+        lock (ClientGate)
+        {
+            _tunnelClient?.Dispose();
+            _tunnelClient = null;
+            _directClient?.Dispose();
+            _directClient = null;
+        }
+    }
+
+    private static HttpClient Client(bool throughTunnel)
+    {
+        lock (ClientGate)
+        {
+            if (throughTunnel)
+            {
+                return _tunnelClient ??= CreateClient(throughTunnel: true);
+            }
+
+            return _directClient ??= CreateClient(throughTunnel: false);
+        }
     }
 
     private static HttpClient CreateClient(bool throughTunnel)
@@ -90,6 +116,12 @@ internal static class NetworkProbe
             return null;
         }
 
+        // Кэш свежий — в сеть не идём: экран подключения опрашивает выход по таймеру.
+        if (CachedExit is { } cached)
+        {
+            return cached;
+        }
+
         foreach (var url in new[]
                  {
                      "https://cp.cloudflare.com/cdn-cgi/trace",
@@ -100,7 +132,7 @@ internal static class NetworkProbe
         {
             try
             {
-                using var client = CreateClient(throughTunnel: true);
+                var client = Client(throughTunnel: true);
                 var text = await client.GetStringAsync(url, cancellationToken).ConfigureAwait(false);
                 var info = text.Contains("ip=", StringComparison.Ordinal)
                     ? ParseTrace(text)
@@ -112,7 +144,8 @@ internal static class NetworkProbe
                     return info;
                 }
             }
-            catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or OperationCanceledException)
+            catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException
+                                                  or OperationCanceledException or ObjectDisposedException)
             {
                 // Сервис недоступен — пробуем следующий.
             }
@@ -200,7 +233,7 @@ internal static class NetworkProbe
     {
         try
         {
-            using var client = CreateClient(throughTunnel: false);
+            var client = Client(throughTunnel: false);
             var text = await client.GetStringAsync("https://api.myip.com", cancellationToken).ConfigureAwait(false);
             using var document = JsonDocument.Parse(text);
             return document.RootElement.TryGetProperty("ip", out var ip) ? ip.GetString() : null;
@@ -230,19 +263,22 @@ internal static class NetworkProbe
         {
             try
             {
-                using var client = CreateClient(throughTunnel: true);
-                client.Timeout = TimeSpan.FromSeconds(20);
+                var client = Client(throughTunnel: true);
+                // Свой предел на попытку: общий HttpClient теперь переиспользуется,
+                // менять его Timeout после первого запроса нельзя.
+                using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                limit.CancelAfter(TimeSpan.FromSeconds(20));
                 var stopwatch = Stopwatch.StartNew();
                 using var response = await client.GetAsync(
-                    url, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+                    url, HttpCompletionOption.ResponseHeadersRead, limit.Token).ConfigureAwait(false);
                 response.EnsureSuccessStatusCode();
 
-                await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+                await using var stream = await response.Content.ReadAsStreamAsync(limit.Token).ConfigureAwait(false);
                 var buffer = new byte[64 * 1024];
                 long total = 0;
                 while (stopwatch.Elapsed < TimeSpan.FromSeconds(10))
                 {
-                    var read = await stream.ReadAsync(buffer, cancellationToken).ConfigureAwait(false);
+                    var read = await stream.ReadAsync(buffer, limit.Token).ConfigureAwait(false);
                     if (read == 0)
                     {
                         break;
@@ -274,7 +310,8 @@ internal static class NetworkProbe
                     return mbps;
                 }
             }
-            catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or OperationCanceledException)
+            catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException
+                                                  or OperationCanceledException or ObjectDisposedException)
             {
                 // Медленный сервер или сервис недоступен — пробуем другой адрес.
                 AppLog.Write("speed", $"{new Uri(url).Host}: {exception.GetType().Name}: {exception.Message}");

@@ -1,4 +1,4 @@
-namespace VieNLink;
+﻿namespace VieNLink;
 
 /// <summary>
 /// Порядок серверов при автоматическом переключении и кнопке «Дальше».
@@ -161,7 +161,7 @@ internal static class NodeFailover
     {
         return nodes
             .Where(node => NodeAvailability.IsUsable(
-                node, NodeLimits.WorkingRecheckMinutes, onlyMine, nowUtc))
+                node, NetworkProfile.WorkingRecheckMinutes, onlyMine, nowUtc))
             .Where(node => filter is null || filter(node))
             .OrderByDescending(node => service is not null &&
                                        NodeAvailability.OpenedFor(node, service))

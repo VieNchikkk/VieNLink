@@ -1,4 +1,4 @@
-using Android.App;
+﻿using Android.App;
 using Android.Content;
 using Android.Graphics;
 using Android.OS;
@@ -238,6 +238,10 @@ public sealed partial class MainActivity : BaseActivity
     protected override void OnResume()
     {
         base.OnResume();
+        // Тип сети нужен ядру до выбора серверов: на мобильной окно перепроверки шире.
+        NetworkPresets.SyncProfile(this);
+        // Галочка QUIC — параметр сети: после смены Wi-Fi/LTE показываем значение этой сети.
+        SyncBypassQuic();
         // Настройки открываются отдельным экраном с четвёртой вкладки; после возврата
         // снимаем защиту и показываем прежнюю вкладку. В остальных случаях страницу
         // не пересобираем: при возврате из фона SelectTab заново строил весь экран
@@ -266,7 +270,9 @@ public sealed partial class MainActivity : BaseActivity
         {
             RefreshHeader();
             EnsureTrafficMonitor();
+            CheckAutoRotateSetting();
             if (TunnelService.State == TunnelState.Running &&
+                NetworkProbe.CachedExit is null &&
                 DateTime.UtcNow - _lastExitAttempt > TimeSpan.FromSeconds(30))
             {
                 _ = EnsureExitAsync();
@@ -275,6 +281,48 @@ public sealed partial class MainActivity : BaseActivity
             _handler?.PostDelayed(_tick, 3000);
         };
         _handler.PostDelayed(_tick, 3000);
+    }
+
+    private int _lastAutoRotate = -1;
+    private DateTime _lastAutoRotateCheckUtc = DateTime.MinValue;
+
+    /// <summary>
+    /// Раз в 15 секунд сверяет системный автоповорот и пишет в журнал, если он
+    /// изменился во время работы. Нужно только для разбора жалобы «после обновления
+    /// включается автоповорот»: видно, меняет ли его система на ходу.
+    /// </summary>
+    private void CheckAutoRotateSetting()
+    {
+        if (DateTime.UtcNow - _lastAutoRotateCheckUtc < TimeSpan.FromSeconds(15))
+        {
+            return;
+        }
+
+        _lastAutoRotateCheckUtc = DateTime.UtcNow;
+        int auto;
+        try
+        {
+            auto = Android.Provider.Settings.System.GetInt(
+                ContentResolver,
+                Android.Provider.Settings.System.AccelerometerRotation,
+                -1);
+        }
+        catch (Exception)
+        {
+            return;
+        }
+
+        if (_lastAutoRotate < 0)
+        {
+            _lastAutoRotate = auto;
+            return;
+        }
+
+        if (auto != _lastAutoRotate)
+        {
+            _lastAutoRotate = auto;
+            DeviceProfile.LogRotationState("настройка изменилась на ходу");
+        }
     }
 
     /// <summary>
@@ -287,7 +335,10 @@ public sealed partial class MainActivity : BaseActivity
     {
         try
         {
-            await Task.Delay(2500, token).ConfigureAwait(false);
+            // Пауза нужна, чтобы тяжёлая работа не совпала с отрисовкой экрана после
+            // возврата из фона (дедлок остановки мира MonoVM). 1,2 с хватает: работа
+            // идёт в фоне, а не на UI-потоке.
+            await Task.Delay(1200, token).ConfigureAwait(false);
 
             if (SettingsStore.Current.AutomationPaused || ProbeClient.IsPaused ||
                 ProbeClient.IsRunning || ProbeClient.IsManualRun)
@@ -1003,7 +1054,7 @@ public sealed partial class MainActivity : BaseActivity
         if (_workingCount is not null)
         {
             // Рабочие — с иконкой-щитом и подписью «рабочих серверов».
-            _workingCount.Text = workingServers.ToString();
+            SetText(_workingCount, workingServers.ToString());
         }
 
         if (_workingDelta is not null)
@@ -1012,36 +1063,37 @@ public sealed partial class MainActivity : BaseActivity
             // «рабочих серверов» не прыгала. При нуле показываем пустой слот.
             if (_workingChange == 0)
             {
-                _workingDelta.Text = string.Empty;
-                _workingDelta.Visibility = ViewStates.Invisible;
+                SetText(_workingDelta, string.Empty);
+                SetVisibility(_workingDelta, ViewStates.Invisible);
             }
             else
             {
-                _workingDelta.Text = _workingChange > 0 ? $"+{_workingChange}" : $"−{-_workingChange}";
-                _workingDelta.SetTextColor(_workingChange > 0 ? P.Positive : P.Warning);
-                _workingDelta.Visibility = ViewStates.Visible;
+                SetText(_workingDelta,
+                    _workingChange > 0 ? $"+{_workingChange}" : $"−{-_workingChange}",
+                    _workingChange > 0 ? P.Positive : P.Warning);
+                SetVisibility(_workingDelta, ViewStates.Visible);
             }
         }
 
         if (_youtubeCount is not null)
         {
-            _youtubeCount.Text = summary.Youtube.ToString();
+            SetText(_youtubeCount, summary.Youtube.ToString());
         }
 
         if (_discordCount is not null)
         {
-            _discordCount.Text = summary.Discord.ToString();
+            SetText(_discordCount, summary.Discord.ToString());
         }
 
         if (_telegramCount is not null)
         {
-            _telegramCount.Text = summary.Telegram.ToString();
+            SetText(_telegramCount, summary.Telegram.ToString());
         }
 
         if (_universalCount is not null)
         {
             // Старый кэш не знает UniversalOk: универсальным считаем сервер с задержкой.
-            _universalCount.Text = summary.Universal.ToString();
+            SetText(_universalCount, summary.Universal.ToString());
         }
     }
 
@@ -1179,14 +1231,14 @@ public sealed partial class MainActivity : BaseActivity
         var bypass = TunnelService.IsBypassMode;
         RefreshBypassState(bypass, running && !bypass);
 
-        _statusText.Text = running
+        SetText(_statusText, running
             ? bypass ? "TUN-обход (бета)" : "Подключено"
             : connecting
                 ? bypass ? "Запускаю TUN-обход (бета)…" : "Подключаюсь…"
-                : "VPN отключён";
+                : "VPN отключён");
         if (_stateDot is not null)
         {
-            _stateDot.SetTextColor(running ? P.Positive : connecting ? P.Warning : P.Muted);
+            SetTextColor(_stateDot, running ? P.Positive : connecting ? P.Warning : P.Muted);
         }
 
         if (_disconnect is not null)
@@ -1235,28 +1287,28 @@ public sealed partial class MainActivity : BaseActivity
         {
             if (bypass)
             {
-                _nodeText.Text = "TUN-обход";
-                _delayText.Text = string.Empty;
-                _nodeSubText.Text = "Прокси-сервер не используется";
+                SetText(_nodeText, "TUN-обход");
+                SetText(_delayText, string.Empty);
+                SetText(_nodeSubText, "Прокси-сервер не используется");
             }
             else if (!running)
             {
                 // Без активного туннеля не показываем остатки прошлой сессии.
-                _nodeText.Text = connecting ? "Подключаюсь…" : "Сервер не подключён";
-                _delayText.Text = string.Empty;
-                _nodeSubText.Text = connecting ? "Выбираю проверенный сервер…" : "Нажмите кнопку сервиса";
+                SetText(_nodeText, connecting ? "Подключаюсь…" : "Сервер не подключён");
+                SetText(_delayText, string.Empty);
+                SetText(_nodeSubText, connecting ? "Выбираю проверенный сервер…" : "Нажмите кнопку сервиса");
             }
             else if (selected is null)
             {
-                _nodeText.Text = "Сервер не выбран";
-                _delayText.Text = string.Empty;
-                _nodeSubText.Text = string.Empty;
+                SetText(_nodeText, "Сервер не выбран");
+                SetText(_delayText, string.Empty);
+                SetText(_nodeSubText, string.Empty);
             }
             else
             {
-                _nodeText.Text = NodeDisplay.Name(selected);
-                _delayText.Text = selected.DisplayDelay;
-                _delayText.SetTextColor(rating >= 4 ? P.Positive : rating >= 2 ? P.Warning : P.Danger);
+                SetText(_nodeText, NodeDisplay.Name(selected));
+                SetText(_delayText, selected.DisplayDelay,
+                    rating >= 4 ? P.Positive : rating >= 2 ? P.Warning : P.Danger);
 
                 // IP, скорость и звёзды — разными цветами.
                 var sub = new Android.Text.SpannableStringBuilder();
@@ -1290,31 +1342,35 @@ public sealed partial class MainActivity : BaseActivity
 
                 Part(new string('★', rating) + new string('☆', 5 - rating),
                     rating >= 4 ? P.Positive : rating >= 2 ? P.Warning : P.Danger);
-                _nodeSubText.SetText(sub, TextView.BufferType.Spannable);
+                var subText = sub.ToString();
+                if (!string.Equals(_nodeSubText.Text, subText, StringComparison.Ordinal))
+                {
+                    _nodeSubText.SetText(sub, TextView.BufferType.Spannable);
+                }
             }
         }
 
         if (_exitText is not null)
         {
             var show = NodeStore.Settings.ShowExitInfo;
-            _exitText.Visibility = show ? ViewStates.Visible : ViewStates.Gone;
+            SetVisibility(_exitText, show ? ViewStates.Visible : ViewStates.Gone);
             var exit = NetworkProbe.CachedExit;
-            _exitText.Text = !running
+            SetText(_exitText, !running
                 ? "Выход: —"
                 : exit is not null
                     ? "Выход: " + exit.Short
                     : _exitFailed
                         ? "Выход: не определён"
-                        : "Выход: определяется…";
+                        : "Выход: определяется…");
         }
 
         if (_trafficText is not null)
         {
             var show = NodeStore.Settings.ShowTraffic;
-            _trafficText.Visibility = show ? ViewStates.Visible : ViewStates.Gone;
-            _trafficText.Text = !running || (_downBytes == 0 && _upBytes == 0)
+            SetVisibility(_trafficText, show ? ViewStates.Visible : ViewStates.Gone);
+            SetText(_trafficText, !running || (_downBytes == 0 && _upBytes == 0)
                 ? "Трафик: —"
-                : $"Трафик: ↓ {FormatBytes(_downBytes)} · ↑ {FormatBytes(_upBytes)}";
+                : $"Трафик: ↓ {FormatBytes(_downBytes)} · ↑ {FormatBytes(_upBytes)}");
         }
 
         // Что именно открывает подключённый сервер — значки сервисов под его данными.
@@ -1379,22 +1435,65 @@ public sealed partial class MainActivity : BaseActivity
                 // Фоновая проверка тоже видна: без этого казалось, что приложение молчит.
                 var countText = $"В списке {summary.Total} серверов · рабочих {workingServers}";
                 var probeActivity = ProbeClient.ActivityText;
-                _connectionStatus.Text = _connecting && _connectText is not null
+                SetText(_connectionStatus, _connecting && _connectText is not null
                     ? _connectText
                     : _headerDetail is not null && (_finding || DateTime.UtcNow < _headerDetailUntil)
                         ? _headerDetail
-                        : probeActivity ?? countText;
+                        : probeActivity ?? countText);
                 if (_findButton is not null && !_connecting)
                 {
                     // «Остановить поиск» — только для ручного прогона: фоновая проверка
                     // не должна выглядеть так, будто пользователь её запустил.
-                    _findButton.Text = _finding ? "Остановить поиск" : "Проверить серверы";
+                    SetText(_findButton, _finding ? "Остановить поиск" : "Проверить серверы");
                 }
             }
             catch (Exception exception)
             {
                 _connectionStatus.Text = "Серверы не прочитаны: " + exception.Message;
             }
+        }
+    }
+
+    /// <summary>
+    /// Меняет текст, только если он отличается. Шапка перерисовывается каждые 3 секунды
+    /// и по ходу проверки; лишнее присваивание TextView.Text каждый раз вызывает
+    /// пересчёт разметки и перерисовку — на телефоне это заметная работа впустую.
+    /// </summary>
+    private static void SetText(TextView? view, string text)
+    {
+        if (view is null || string.Equals(view.Text, text, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        view.Text = text;
+    }
+
+    /// <summary>Текст вместе с цветом: цвет тоже ставится только при изменении.</summary>
+    private static void SetText(TextView? view, string text, Color color)
+    {
+        if (view is null)
+        {
+            return;
+        }
+
+        SetText(view, text);
+        SetTextColor(view, color);
+    }
+
+    private static void SetTextColor(TextView? view, Color color)
+    {
+        if (view is not null && view.CurrentTextColor != color.ToArgb())
+        {
+            view.SetTextColor(color);
+        }
+    }
+
+    private static void SetVisibility(View? view, ViewStates state)
+    {
+        if (view is not null && view.Visibility != state)
+        {
+            view.Visibility = state;
         }
     }
 
@@ -1494,7 +1593,8 @@ public sealed partial class MainActivity : BaseActivity
         return (bytes / 1024.0 / 1024.0 / 1024.0).ToString("0.##") + " ГБ";
     }
 
-    private async Task EnsureExitAsync()    {
+    private async Task EnsureExitAsync()
+    {
         if (_exitBusy || TunnelService.State != TunnelState.Running)
         {
             return;
@@ -1737,8 +1837,8 @@ public sealed partial class MainActivity : BaseActivity
         var enabled = SettingsStore.Current.IdleTestEnabled &&
                       AndroidSettingsStore.Current.AutoProbe;
         var autoLabel = Ui.IsCompactLayout ? "Авто: " : "Авто-проверка: ";
-        _autoButton.Text = (enabled ? "● " : "○ ") + autoLabel + (enabled ? "вкл" : "выкл");
-        _autoButton.SetTextColor(enabled ? P.Positive : P.MutedStrong);
+        SetText(_autoButton, (enabled ? "● " : "○ ") + autoLabel + (enabled ? "вкл" : "выкл"),
+            enabled ? P.Positive : P.MutedStrong);
     }
 
     private void ToggleAutoCheck()
@@ -1987,6 +2087,12 @@ public sealed partial class MainActivity : BaseActivity
 
                 return;
             }
+
+            // Выбор фиксируем до ветвления «тёплое/холодное» подключение: раньше он
+            // сохранялся только в ветке тёплого переключения, а при сборке нового
+            // конфига в хранилище оставался прежний сервер — уведомление, health-check
+            // и главный экран показывали не тот, через который идёт трафик.
+            NodeStore.Select(node);
 
             // Туннель уже работает и сервер загружен — переключаемся без перезапуска TUN.
             if (TunnelService.State == TunnelState.Running && CoreRuntime.IsRunning &&
@@ -2272,7 +2378,7 @@ public sealed partial class MainActivity : BaseActivity
             var now = DateTime.UtcNow;
             var best = candidates
                 .Where(node => NodeAvailability.IsUsable(
-                    node, NodeLimits.WorkingRecheckMinutes, NodeStore.Settings.ConnectOnlyMine, now))
+                    node, NetworkProfile.WorkingRecheckMinutes, NodeStore.Settings.ConnectOnlyMine, now))
                 .OrderBy(node => node.DelayMs ?? int.MaxValue)
                 .ThenByDescending(node => node.OpenDomains)
                 .FirstOrDefault();

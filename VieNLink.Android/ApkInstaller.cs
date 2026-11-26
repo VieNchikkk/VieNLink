@@ -58,6 +58,7 @@ internal static class ApkInstaller
                     }
 
                     context.StartActivity(view);
+                    DeviceProfile.LogRotationState("перед установщиком APK");
                     AppLog.Write("update", "Открыт системный установщик APK: " + Path.GetFileName(path));
                     return true;
                 }
@@ -203,6 +204,10 @@ public sealed class UpdateInstallReceiver : BroadcastReceiver
         if (status == (int)PackageInstallStatus.Success)
         {
             AppLog.Write("update", "Обновление установлено");
+            // Фиксируем состояние системного автоповорота сразу после установки:
+            // если после обновления он «включается», в журнале будет видно, на каком
+            // шаге это произошло (до установщика, после установки или при старте).
+            DeviceProfile.LogRotationState("после установки обновления");
             Ui.Toast(context, "VieNLink обновлён.");
             return;
         }

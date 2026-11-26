@@ -242,6 +242,33 @@ internal sealed class SourceRow : INotifyPropertyChanged
         ? "—"
         : !_workingCountSet ? "—" : _workingCount.ToString();
 
+    private int? _pingMs;
+
+    /// <summary>
+    /// Медиана задержки проверенных серверов источника. Видно, какой список даёт
+    /// быстрые серверы, а какой — только медленные (у таких при обрезке до лимита
+    /// серверы уходят первыми).
+    /// </summary>
+    public int? PingMs
+    {
+        get => _pingMs;
+        set
+        {
+            if (_pingMs == value)
+            {
+                return;
+            }
+
+            _pingMs = value;
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(PingLabel));
+        }
+    }
+
+    public string PingLabel => SourceKinds.IsProxy(Source)
+        ? "—"
+        : _pingMs is { } ms ? ms + " мс" : "—";
+
     /// <summary>Сколько уникальных серверов источника хотя бы раз были рабочими.</summary>
     public string TotalWorkingLabel => SourceKinds.IsProxy(Source)
         ? "—"

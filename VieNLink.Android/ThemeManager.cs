@@ -150,16 +150,15 @@ public abstract class BaseActivity : Activity
 {
     protected Palette P { get; private set; } = Palette.Dark;
 
+    private Android.Content.Res.Orientation _lastOrientation = Android.Content.Res.Orientation.Undefined;
+
     protected override void OnCreate(Bundle? savedInstanceState)
     {
         // Телефон — портрет; планшет — любая ориентация; телевизор — альбомная.
         // Системную настройку автоповорота приложение не меняет.
         DeviceProfile.Initialize(this);
-        RequestedOrientation = DeviceProfile.IsTelevision
-            ? ScreenOrientation.Landscape
-            : DeviceProfile.IsTablet
-                ? ScreenOrientation.FullSensor
-                : ScreenOrientation.Portrait;
+        ApplyOrientation();
+        DeviceProfile.LogRotationState("экран " + GetType().Name);
         ThemeManager.ApplyTheme(this);
         base.OnCreate(savedInstanceState);
         P = ThemeManager.Palette;
@@ -167,6 +166,33 @@ public abstract class BaseActivity : Activity
         if (Window is not null)
         {
             Window.SetBackgroundDrawable(new Android.Graphics.Drawables.ColorDrawable(P.Background));
+        }
+    }
+
+    protected override void OnResume()
+    {
+        base.OnResume();
+        // Повторно подтверждаем ориентацию при каждом возврате: после обновления APK
+        // или смены сети/окна прошивка иногда сбрасывает запрошенную ориентацию,
+        // и экран начинает крутиться вместе с телефоном, хотя выбран портрет.
+        DeviceProfile.Initialize(this);
+        ApplyOrientation();
+    }
+
+    /// <summary>
+    /// Запрашивает ориентацию по форм-фактору. Повторный вызов с тем же значением
+    /// ничего не перестраивает, поэтому дёргать можно в OnCreate и OnResume.
+    /// </summary>
+    private void ApplyOrientation()
+    {
+        var target = DeviceProfile.IsTelevision
+            ? ScreenOrientation.Landscape
+            : DeviceProfile.IsTablet
+                ? ScreenOrientation.FullSensor
+                : ScreenOrientation.Portrait;
+        if (RequestedOrientation != target)
+        {
+            RequestedOrientation = target;
         }
     }
 
@@ -178,6 +204,14 @@ public abstract class BaseActivity : Activity
     public override void OnConfigurationChanged(Configuration newConfig)
     {
         base.OnConfigurationChanged(newConfig);
+        if (newConfig.Orientation != _lastOrientation)
+        {
+            _lastOrientation = newConfig.Orientation;
+            // Если экран всё-таки повернулся — в журнале будет видно, при каком
+            // системном автоповороте и каком форм-факторе это случилось.
+            DeviceProfile.LogRotationState("поворот " + newConfig.Orientation);
+        }
+
         DeviceProfile.Initialize(this);
         P = ThemeManager.Palette;
         ThemeManager.ApplyWindow(this, P);

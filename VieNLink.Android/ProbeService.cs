@@ -195,7 +195,7 @@ public sealed class ProbeService : Service
         _lastProgressUtc = DateTime.UtcNow;
         lock (_progressLock)
         {
-            if (!force && DateTime.UtcNow - _lastProgressWrite < TimeSpan.FromMilliseconds(500))
+            if (!force && DateTime.UtcNow - _lastProgressWrite < TimeSpan.FromMilliseconds(1000))
             {
                 return;
             }
@@ -247,7 +247,7 @@ public sealed class ProbeService : Service
                 FailCount = node.FailCount,
             };
 
-            if (DateTime.UtcNow - _lastLiveWrite < TimeSpan.FromMilliseconds(700))
+            if (DateTime.UtcNow - _lastLiveWrite < TimeSpan.FromMilliseconds(1000))
             {
                 return;
             }
@@ -502,6 +502,9 @@ public sealed class ProbeService : Service
             try
             {
                 Directory.CreateDirectory(AppPaths.DataDirectory);
+                // Отметка записи: основной процесс не применяет результаты, если файл
+                // пролежал дольше ProbeProtocol.ResultsFreshFor (телефон лежал в фоне).
+                result.SavedAtUtc = DateTime.UtcNow;
                 await File.WriteAllTextAsync(
                     ProbeProtocol.ResultPath,
                     JsonSerializer.Serialize(result, ProbeProtocol.Json),

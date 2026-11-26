@@ -1,4 +1,4 @@
-namespace VieNLink.Mobile;
+﻿namespace VieNLink.Mobile;
 
 /// <summary>
 /// Фоновая проверка серверов: такт раз в минуту. Пока живы прошлые результаты, каждый
@@ -45,7 +45,7 @@ internal static class ProbeScheduler
         _timer = new Timer(_ => Tick(context), null, TimeSpan.FromSeconds(2), TickInterval);
         AppLog.Write("probe",
             $"Фоновая проверка серверов запущена (такт {TickInterval.TotalMinutes:0} мин, " +
-            $"рабочие — каждые {NodeLimits.WorkingRecheckMinutes} мин)");
+            $"рабочие — каждые {NetworkProfile.WorkingRecheckMinutes} мин)");
 
         // Результаты, записанные :probe перед тем, как основной процесс убили,
         // применяем при старте: фоновая работа не должна пропадать.

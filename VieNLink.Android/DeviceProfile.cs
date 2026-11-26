@@ -1,5 +1,6 @@
 using Android.Content;
 using Android.Content.Res;
+using Android.Provider;
 
 namespace VieNLink.Mobile;
 
@@ -90,5 +91,30 @@ internal static class DeviceProfile
         Ui.IsTelevision = IsTelevision;
         Ui.IsCompactLayout = IsCompact;
         Ui.IsShortLayout = IsShort;
+    }
+
+    /// <summary>
+    /// Пишет в журнал, что видит приложение: системный автоповорот, форм-фактор и размер
+    /// экрана. Нужно для разбора «после обновления включился автоповорот»: по записи
+    /// видно, изменилась настройка до старта или экран просто повернулся.
+    /// </summary>
+    public static void LogRotationState(string where)
+    {
+        var auto = -1;
+        try
+        {
+            auto = Settings.System.GetInt(
+                Android.App.Application.Context.ContentResolver,
+                Settings.System.AccelerometerRotation,
+                -1);
+        }
+        catch (Exception)
+        {
+            // Настройка недоступна — оставляем -1, чтобы это было видно в журнале.
+        }
+
+        AppLog.Write("android",
+            $"Поворот ({where}): системный автоповорот={auto}, планшет={IsTablet}, " +
+            $"sw={SmallestWidthDp}dp, экран {WidthDp}x{HeightDp}dp");
     }
 }

@@ -316,8 +316,8 @@ internal static class NodeDedup
 /// <summary>
 /// Учёт неудачных проверок сервера. Сервер, который уже был рабочим, не удаляется с первого
 /// провала: счётчик растёт, и только после <see cref="NodeLimits.RemoveAfterFailures"/>
-/// провалов подряд такой сервер убирается из списка. Непроверенные серверы удаляются сразу —
-/// их держать незачем.
+/// провалов подряд такой сервер убирается из списка. Непроверенный получает второй шанс:
+/// один провал на мобильной сети — обычная осечка канала.
 /// </summary>
 internal static class NodeHealth
 {
@@ -328,10 +328,11 @@ internal static class NodeHealth
     public const int GraceFailures = 1;
 
     /// <summary>
-    /// Сколько провалов переживает непроверенный сервер: один. Не прошёл первую же
-    /// проверку — удаляем, чтобы список не копил мусор.
+    /// Сколько провалов переживает непроверенный сервер: два. Один провал на мобильной
+    /// сети — обычная осечка канала (партия 8 серверов × 6 адресов), а сервер после него
+    /// ещё и попадал в негативный кэш на сутки. Первый провал только запоминаем.
     /// </summary>
-    public const int UnverifiedFailures = 1;
+    public const int UnverifiedFailures = 2;
 
     /// <summary>Отмечает неудачную проверку. true — сервер пора удалить.</summary>
     public static bool RegisterFailure(ProxyNode node)
@@ -341,7 +342,8 @@ internal static class NodeHealth
 
         if (!wasWorking)
         {
-            // Непроверенный: одна проверка не прошла — удаляем, чтобы не копить мусор.
+            // Непроверенный: помним провал, но удаляем со второго — первый списываем
+            // на осечку мобильного канала, чтобы свежий список не выпадал целиком.
             node.CheckedAtUtc = DateTime.UtcNow;
             node.DelayMs = null;
             node.YoutubeOk = false;
@@ -433,11 +435,18 @@ internal static class NodeLimits
     public const int MinWorkingPerService = 20;
 
     /// <summary>
-    /// Как часто перепроверять сервер, который уже считается рабочим. 5 минут —
+    /// Как часто перепроверять сервер, который уже считается рабочим. 5 минут на Wi-Fi —
     /// окно свежести для значков и выбора сервера; счётчик не должен обещать сервер,
     /// проверенный дольше этого. (В 1.3.25–1.3.26 временно было 1 минута.)
     /// </summary>
     public const int WorkingRecheckMinutes = 5;
+
+    /// <summary>
+    /// То же окно на мобильной сети: 10 минут. Байты проверки крошечные, дороже будить
+    /// радио каждую минуту; перед подключением сервер всё равно перепроверяется отдельно,
+    /// а счётчики в шапке живут по мягкому окну (<see cref="WorkingDeadAfterMinutes"/>).
+    /// </summary>
+    public const int WorkingRecheckMinutesMobile = 10;
 
     /// <summary>
     /// Насколько раньше окна свежести начинать перепроверку. Фон проверяет не мгновенно
@@ -474,8 +483,17 @@ internal static class NodeLimits
     public static readonly TimeSpan QuarantineRemoveAfter = TimeSpan.FromDays(7);
 
     /// <summary>
+    /// Медиана задержки источника, выше которой он считается медленным. Когда список
+    /// упирается в лимит, серверы таких источников уходят первыми: они всё равно
+    /// открываются за секунды, а место нужно живым и быстрым. Медиана берётся по
+    /// проверенным серверам (минимум 3), чтобы случайные замеры её не двигали.
+    /// </summary>
+    public const int TrimBadSourceMedianMs = 1500;
+
+    /// <summary>
     /// Оставляет не больше <paramref name="max"/> серверов: сначала личные, затем проверенные
-    /// (рабочие), затем самые свежие, затем лучшие по маскировке и задержке.
+    /// (рабочие), затем серверы источников с нормальной медианой задержки, затем самые свежие,
+    /// затем лучшие по маскировке и задержке.
     /// Возвращает число отброшенных.
     /// </summary>
     public static (List<ProxyNode> Nodes, int Trimmed) Trim(IEnumerable<ProxyNode> nodes, int max)
@@ -487,9 +505,29 @@ internal static class NodeLimits
             return (list, 0);
         }
 
+        // Медиана по проверенным серверам источника: у источников с плохим пингом
+        // серверы уходят первыми и не вытесняют живые при обрезке до лимита.
+        var medians = NodeSourceStats.MedianDelayBySource(list);
+        bool FromSlowSource(ProxyNode node)
+        {
+            var best = int.MaxValue;
+            foreach (var source in NodeFailover.SplitSources(node.SourceName))
+            {
+                if (medians.TryGetValue(source, out var median) && median < best)
+                {
+                    best = median;
+                }
+            }
+
+            // Неизвестная медиана (новый источник, мало проверок) не наказывается:
+            // у свежего списка просто ещё нет статистики.
+            return best != int.MaxValue && best >= TrimBadSourceMedianMs;
+        }
+
         var kept = list
             .OrderByDescending(node => node.IsMine)
             .ThenByDescending(node => node.Status == NodeStatus.Working || node.DelayMs is not null)
+            .ThenBy(node => FromSlowSource(node) ? 1 : 0)
             .ThenByDescending(node => node.OpenDomains)
             .ThenByDescending(node => node.LastSeenUtc ?? DateTime.MinValue)
             .ThenByDescending(node => node.RankScore)

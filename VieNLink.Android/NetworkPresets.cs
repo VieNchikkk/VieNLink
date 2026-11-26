@@ -59,6 +59,18 @@ internal static class NetworkPresets
         return string.IsNullOrWhiteSpace(code) ? "cell" : "cell:" + code;
     }
 
+    /// <summary>
+    /// Сообщает ядру текущий тип сети: на мобильной проверки рабочих идут реже
+    /// (<see cref="NetworkProfile.IsMobile"/>), чтобы не будить радиомодуль зря.
+    /// </summary>
+    public static void SyncProfile() => SyncProfile(Android.App.Application.Context);
+
+    public static void SyncProfile(Context context)
+    {
+        var (wifi, _) = Detect(context);
+        NetworkProfile.IsMobile = wifi is false;
+    }
+
     /// <summary>Имя оператора для записи в базе и журнала (пусто для Wi-Fi).</summary>
     public static string ProviderName(Context context)
     {

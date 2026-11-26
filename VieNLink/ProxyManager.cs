@@ -402,9 +402,11 @@ internal sealed class ProxyManager : IAsyncDisposable
                 if (finished % 25 == 0 || finished == nodes.Count)
                 {
                     // В шапке нужен только ход проверки: разбивка по сервисам есть
-                    // в итоговой строке и в журнале.
+                    // в итоговой строке и в журнале. Пишем «партия», а не «проверено»:
+                    // иначе строка читается как общий итог и спорит со щитом в шапке
+                    // (там доступные серверы, а здесь — открывшие адрес в этой партии).
                     progress?.Report(
-                        $"Проверено {finished} из {nodes.Count}: рабочих {Volatile.Read(ref working)}");
+                        $"Партия: {finished} из {nodes.Count} · открыли адрес {Volatile.Read(ref working)}");
                 }
             }
         });

@@ -38,8 +38,7 @@ internal static class NodeAvailability
     /// <see cref="NodeLimits.RecheckLeadMinutes"/> раньше истечения окна свежести.
     /// Так сервер успевает попасть в партию до того, как счётчик перестанет его учитывать.
     /// </summary>
-    public static DateTime RecheckCutoffUtc(DateTime nowUtc) =>
-        nowUtc.AddMinutes(-Math.Max(1, NodeLimits.WorkingRecheckMinutes - NodeLimits.RecheckLeadMinutes));
+    public static DateTime RecheckCutoffUtc(DateTime nowUtc) => NetworkProfile.RecheckCutoffUtc(nowUtc);
 
     /// <summary>
     /// Есть хотя бы один подтверждённый успех: задержка или отметка сервиса. На Android
@@ -84,6 +83,28 @@ internal static class NodeAvailability
         node.FailCount <= 0 &&
         (node.CheckedAtUtc is not { } checkedAt ||
          nowUtc - checkedAt < TimeSpan.FromMinutes(NodeLimits.WorkingDeadAfterMinutes));
+
+    /// <summary>
+    /// Набор для счётчиков: только быстрые серверы, а если их меньше квоты — все рабочие.
+    /// Медленные (задержка выше <see cref="NodeSpeedPolicy.SlowDelayMs"/>) остаются в списке
+    /// и могут подключаться, но значок сервиса их не обещает, пока есть быстрые.
+    /// </summary>
+    public static List<ProxyNode> CountableForDisplay(
+        IEnumerable<ProxyNode> nodes, bool onlyMine, DateTime nowUtc,
+        int minFast = NodeLimits.MinWorkingNodes)
+    {
+        var countable = new List<ProxyNode>();
+        foreach (var node in nodes)
+        {
+            if (IsCountable(node, onlyMine, nowUtc))
+            {
+                countable.Add(node);
+            }
+        }
+
+        var fast = countable.Where(NodeSpeedPolicy.IsFast).ToList();
+        return fast.Count >= Math.Max(1, minFast) ? fast : countable;
+    }
 
     /// <summary>
     /// Открывает ли сервер сервис. Ключи — как в тегах кнопок Windows:

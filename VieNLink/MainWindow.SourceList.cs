@@ -447,10 +447,13 @@ public partial class MainWindow
             return;
         }
 
-        var counts = NodeSourceStats.WorkingBySource(_workingRows.Select(row => row.Node));
+        var workingNodes = _workingRows.Select(row => row.Node).ToList();
+        var counts = NodeSourceStats.WorkingBySource(workingNodes);
+        var medians = NodeSourceStats.MedianDelayBySource(workingNodes);
         foreach (var row in _sourceRows)
         {
             row.WorkingCount = counts.TryGetValue(row.Source.Name, out var count) ? count : 0;
+            row.PingMs = medians.TryGetValue(row.Source.Name, out var median) ? median : null;
             // «Рабочих всего» могло вырасти после проверки — обновляем и его.
             row.Refresh();
         }

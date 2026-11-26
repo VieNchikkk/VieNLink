@@ -51,6 +51,13 @@ internal sealed class ProbeRequestNode
 /// <summary>Результаты проверки: основной процесс применяет их к своему NodeStore.</summary>
 internal sealed class ProbeResultFile
 {
+    /// <summary>
+    /// Когда файл записан. По нему основной процесс решает, можно ли ещё применять
+    /// оставшиеся результаты: старый файл (телефон лежал, процесс убили) уже не
+    /// описывает текущее состояние серверов и только вернул бы устаревшие статусы.
+    /// </summary>
+    public DateTime? SavedAtUtc { get; set; }
+
     public List<ProbeResultNode> Nodes { get; set; } = new();
     public string? Error { get; set; }
 }
@@ -112,6 +119,13 @@ internal static class ProbeProtocol
     /// поэтому счётчики в шапке меняются по ходу партии, а не только в конце.
     /// </summary>
     public static string LivePath => Path.Combine(AppPaths.DataDirectory, "probe-live.json");
+
+    /// <summary>
+    /// Сколько файл результатов считается свежим. Партия идёт минуты, но телефон мог
+    /// полежать сутки: применять вчерашние статусы — значит вернуть в счётчики серверы,
+    /// которых давно нет. Старше — выбрасываем.
+    /// </summary>
+    public static readonly TimeSpan ResultsFreshFor = TimeSpan.FromMinutes(60);
 
     public static readonly JsonSerializerOptions Json = new()
     {

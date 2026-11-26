@@ -14,10 +14,19 @@ public sealed partial class MainActivity
     // Ссылки на карточку обхода: состояние меняется из плитки/уведомления, а страница
     // строится один раз — иначе «Обход выключен» висит поверх работающего TUN.
     private TextView? _bypassBadge;
+    /// <summary>Последнее показанное состояние плашки обхода: фон не пересобираем зря.</summary>
+    private bool? _bypassBadgeOn;
     private TextView? _bypassStart;
     private TextView? _bypassStop;
     private TextView? _bypassPageStatus;
     private TextView? _bypassPageHint;
+
+    // Подбор стратегии и QUIC — прямо на главном экране, рядом с включением обхода.
+    private TextView? _bypassTune;
+    private TextView? _bypassTuneStatus;
+    private CheckBox? _bypassQuic;
+    private string _bypassQuicKey = string.Empty;
+    private CancellationTokenSource? _tuneCts;
 
     // -------------------------------------------------------------- подключение
 
@@ -58,6 +67,48 @@ public sealed partial class MainActivity
             ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
         tunButtonsLayout.TopMargin = Ui.Dp(this, 10);
         tunCard.AddView(tunButtons, tunButtonsLayout);
+
+        // Подбор стратегии — здесь же, где включается обход: не нужно искать экран TUN.
+        // Кнопка работает и как «Остановить подбор», пока идёт перебор.
+        _bypassTune = Ui.Pill(this, P, "Подобрать стратегию", UiButtonKind.Accent,
+            TuneBypassFromMain, Resource.Drawable.ic_speed);
+        var tuneLayout = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+        tuneLayout.TopMargin = Ui.Dp(this, 8);
+        tunCard.AddView(_bypassTune, tuneLayout);
+
+        _bypassTuneStatus = Ui.Hint(this, string.Empty, P);
+        _bypassTuneStatus.Visibility = ViewStates.Gone;
+        _bypassTuneStatus.SetPadding(0, Ui.Dp(this, 6), 0, 0);
+        tunCard.AddView(_bypassTuneStatus);
+
+        // QUIC — параметр сети, применяется при следующем включении обхода.
+        var quic = new CheckBox(this)
+        {
+            Text = "Блокировать QUIC (UDP/443), чтобы браузер шёл по TCP",
+            Checked = NetworkPresets.GetBlockQuic(this),
+        };
+        _bypassQuic = quic;
+        quic.SetTextColor(P.TextSoft());
+        Ui.StyleSystemText(quic);
+        quic.CheckedChange += (_, args) =>
+        {
+            NetworkPresets.SetBlockQuic(this, args.IsChecked);
+            AppLog.Write("tun-bypass",
+                $"QUIC на «{NetworkPresets.Label(this)}»: " +
+                (args.IsChecked ? "блокировать (HTTP-соединения пойдут по TCP)" : "через релей с фейком"));
+        };
+        var quicLayout = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+        quicLayout.TopMargin = Ui.Dp(this, 8);
+        tunCard.AddView(quic, quicLayout);
+
+        var quicHint = Ui.Hint(this,
+            "Видео не идёт — попробуйте наоборот: галочка стоит — трафик по TCP; снята — QUIC " +
+            "через релей с фейком. После смены перезапустите обход.", P);
+        quicHint.SetPadding(Ui.Dp(this, 28), 0, 0, 0);
+        tunCard.AddView(quicHint);
+
         Ui.Add(page, tunCard, 12);
 
         // Кнопки сервисов перенесены в шапку: здесь остаётся пояснение и MTProto.
@@ -106,8 +157,11 @@ public sealed partial class MainActivity
     /// </summary>
     private void RefreshBypassState(bool bypass, bool serverRunning)
     {
-        if (_bypassBadge is not null)
+        // Плашку и фон меняем только при смене состояния: шапка обновляется каждые
+        // 3 секунды, а здесь каждый такт создавался новый GradientDrawable.
+        if (_bypassBadge is not null && _bypassBadgeOn != bypass)
         {
+            _bypassBadgeOn = bypass;
             var tone = bypass ? P.Positive : P.Muted;
             _bypassBadge.Text = bypass ? "РАБОТАЕТ" : "ВЫКЛЮЧЕН";
             _bypassBadge.SetTextColor(tone);
@@ -128,22 +182,30 @@ public sealed partial class MainActivity
             _bypassStop.Alpha = _bypassStop.Enabled ? 1f : 0.5f;
         }
 
+        // Подбор возможен только на остановленном обходе (иначе проверка шла бы поверх туннеля).
+        if (_bypassTune is not null)
+        {
+            var canTune = !bypass && !serverRunning;
+            _bypassTune.Enabled = canTune;
+            _bypassTune.Alpha = canTune ? 1f : 0.5f;
+        }
+
         if (_bypassPageStatus is not null)
         {
-            _bypassPageStatus.Text = bypass
+            SetText(_bypassPageStatus, bypass
                 ? "TUN-обход (бета) работает"
-                : serverRunning ? "Подключён прокси-сервер" : "Обход выключен";
-            _bypassPageStatus.SetTextColor(bypass || serverRunning ? P.Positive : P.MutedStrong);
+                : serverRunning ? "Подключён прокси-сервер" : "Обход выключен",
+                bypass || serverRunning ? P.Positive : P.MutedStrong);
         }
 
         if (_bypassPageHint is not null)
         {
-            _bypassPageHint.Text = bypass
+            SetText(_bypassPageHint, bypass
                 ? "Трафик идёт в TUN и в локальный форвардер с фрагментацией TLS. Прокси-сервер не нужен. " +
                   "Режим в бете: часть сайтов может не открываться."
                 : serverRunning
                     ? "TUN-обход и прокси-сервер взаимоисключающие: при подключении к серверу обход останавливается."
-                    : "TUN-обход (бета) работает без сервера. Остальные сайты — через прокси-сервер.";
+                    : "TUN-обход (бета) работает без сервера. Остальные сайты — через прокси-сервер.");
         }
     }
 
@@ -173,11 +235,162 @@ public sealed partial class MainActivity
         new Handler(Looper.MainLooper!).PostDelayed(() => SelectTab(0), 900);
     }
 
+    /// <summary>
+    /// Приводит галочку QUIC к пресету текущей сети. Вызывается при возврате в приложение:
+    /// после смены Wi-Fi/LTE значение для этой сети может отличаться. Каждый такт шапки
+    /// этого не делаем — определение сети (SSID/MCCMNC) не бесплатное.
+    /// </summary>
+    private void SyncBypassQuic()
+    {
+        if (_bypassQuic is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var key = NetworkPresets.Key(this);
+            if (string.Equals(key, _bypassQuicKey, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _bypassQuicKey = key;
+            var block = NetworkPresets.GetBlockQuic(this);
+            if (_bypassQuic.Checked != block)
+            {
+                _bypassQuic.Checked = block;
+            }
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("tun-bypass", "Не удалось обновить галочку QUIC", exception);
+        }
+    }
+
     private void StopBypassFromMain()
     {
         VpnStarter.Stop(this);
         Ui.Toast(this, "Выключаю TUN-обход…");
         new Handler(Looper.MainLooper!).PostDelayed(() => SelectTab(0), 900);
+    }
+
+    /// <summary>
+    /// Подбор стратегии прямо с главного экрана: быстрый перебор («Первая рабочая»)
+    /// с проверкой страницы, видео и QUIC. Подтверждённая стратегия сохраняется для
+    /// текущей сети и обход включается сразу; подробный перебор («Подобрать лучшую»)
+    /// остаётся на экране TUN.
+    /// </summary>
+    private async void TuneBypassFromMain()
+    {
+        // Пока идёт подбор, эта же кнопка его останавливает.
+        if (_tuneCts is not null)
+        {
+            _tuneCts.Cancel();
+            if (_bypassTuneStatus is not null)
+            {
+                _bypassTuneStatus.Text = "Останавливаю подбор…";
+            }
+
+            return;
+        }
+
+        if (VpnStarter.IsBypassRunning || VpnStarter.IsServerRunning)
+        {
+            Ui.Toast(this, "Сначала выключите обход или прокси-сервер");
+            return;
+        }
+
+        if (_connecting)
+        {
+            Ui.Toast(this, "Дождитесь окончания подключения");
+            return;
+        }
+
+        var cts = new CancellationTokenSource();
+        _tuneCts = cts;
+        SetTuneRunning(true);
+        if (_bypassTuneStatus is not null)
+        {
+            _bypassTuneStatus.Visibility = ViewStates.Visible;
+            _bypassTuneStatus.Text = "Готовлюсь…";
+        }
+
+        AppLog.Write("tun-bypass",
+            "Подбор стратегии с главного экрана: " + NetworkPresets.Describe(this));
+        var progress = new Progress<AutotuneStep>(step =>
+        {
+            AppLog.Write("tun-bypass", "автоподбор: " + step.Text);
+            if (_bypassTuneStatus is not null)
+            {
+                _bypassTuneStatus.Text = step.Text;
+            }
+        });
+
+        try
+        {
+            var outcome = await BypassAutotune.RunAsync(this, AutotuneMode.Quick, progress, cts.Token);
+            // Галочка QUIC могла быть выставлена пробой — приводим её к сохранённому пресету.
+            if (_bypassQuic is not null)
+            {
+                _bypassQuic.Checked = NetworkPresets.GetBlockQuic(this);
+            }
+
+            var summary = outcome.Summary(NetworkPresets.Label(this));
+            if (_bypassTuneStatus is not null)
+            {
+                _bypassTuneStatus.Text = summary;
+            }
+
+            Ui.Toast(this, summary);
+            AppLog.Write("tun-bypass", "Подбор стратегии (главный экран): " + summary);
+
+            if (outcome.Strong)
+            {
+                StartBypassFromMain();
+            }
+        }
+        catch (System.OperationCanceledException)
+        {
+            if (_bypassTuneStatus is not null)
+            {
+                _bypassTuneStatus.Text = "Подбор остановлен.";
+            }
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("tun-bypass", "Подбор стратегии с главного экрана не удался", exception);
+            if (_bypassTuneStatus is not null)
+            {
+                _bypassTuneStatus.Text = "Подбор не удался: " + exception.Message;
+            }
+
+            Ui.Toast(this, "Подбор не удался: " + exception.Message);
+        }
+        finally
+        {
+            if (ReferenceEquals(_tuneCts, cts))
+            {
+                _tuneCts = null;
+            }
+
+            cts.Dispose();
+            SetTuneRunning(false);
+        }
+    }
+
+    /// <summary>Кнопка подбора: «Подобрать стратегию» ↔ «Остановить подбор».</summary>
+    private void SetTuneRunning(bool running)
+    {
+        if (_bypassTune is null)
+        {
+            return;
+        }
+
+        _bypassTune.Text = running ? "Остановить подбор" : "Подобрать стратегию";
+        // Кнопка остаётся активной и во время подбора: ею же подбор останавливается.
+        _bypassTune.Enabled = true;
+        _bypassTune.Alpha = 1f;
     }
 
     private View BuildBypassPage()

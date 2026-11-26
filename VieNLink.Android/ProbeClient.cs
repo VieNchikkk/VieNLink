@@ -92,12 +92,7 @@ internal static class ProbeClient
     {
         try
         {
-            var context = Android.App.Application.Context;
-            if (context.GetSystemService(Android.Content.Context.ActivityService)
-                    is Android.App.ActivityManager manager &&
-                manager.RunningAppProcesses?.FirstOrDefault(process =>
-                    string.Equals(process.ProcessName, context.PackageName + ":probe",
-                        StringComparison.Ordinal)) is { } probe)
+            if (FindProbeProcess() is { } probe)
             {
                 Android.OS.Process.KillProcess(probe.Pid);
                 AppLog.Write("probe", "Процесс :probe завершён принудительно");
@@ -110,6 +105,80 @@ internal static class ProbeClient
         }
 
         return false;
+    }
+
+    private static Android.App.ActivityManager.RunningAppProcessInfo? FindProbeProcess()
+    {
+        var context = Android.App.Application.Context;
+        return context.GetSystemService(Android.Content.Context.ActivityService)
+            is Android.App.ActivityManager manager
+            ? manager.RunningAppProcesses?.FirstOrDefault(process =>
+                string.Equals(process.ProcessName, context.PackageName + ":probe",
+                    StringComparison.Ordinal))
+            : null;
+    }
+
+    /// <summary>
+    /// Гасит прошлый :probe и ждёт его выхода (до 3 с). Без ожидания старый процесс
+    /// мог дописать файл результатов уже после того, как основной процесс его удалил.
+    /// </summary>
+    private static async Task StopPreviousProbeAsync(CancellationToken token)
+    {
+        if (!TryKillProbeProcess())
+        {
+            return;
+        }
+
+        for (var attempt = 0; attempt < 30; attempt++)
+        {
+            if (!IsProbeProcessAlive())
+            {
+                return;
+            }
+
+            await Task.Delay(100, token).ConfigureAwait(false);
+        }
+
+        AppLog.Write("probe", "Прошлый :probe не завершился за 3 с — запускаю новую партию");
+    }
+
+    private static bool IsProbeProcessAlive()
+    {
+        try
+        {
+            return FindProbeProcess() is not null;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Чистит файлы прошлой партии. Вызывать только после остановки прошлого :probe:
+    /// иначе устаревший результат вернулся бы как свежий.
+    /// </summary>
+    private static void DeleteProbeFiles()
+    {
+        foreach (var path in new[]
+                 {
+                     ProbeProtocol.ResultPath,
+                     ProbeProtocol.ProgressPath,
+                     ProbeProtocol.LivePath,
+                 })
+        {
+            try
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                // Файл перезапишется новой партией.
+            }
+        }
     }
 
     private static string? _activity;
@@ -156,6 +225,8 @@ internal static class ProbeClient
         }
 
         await Task.Run(() => NodeStore.EnsureLoaded(), cancellationToken).ConfigureAwait(false);
+        // Партия идёт по текущей сети: уточняем окно перепроверки перед отбором серверов.
+        NetworkPresets.SyncProfile();
         if (TunnelService.IsBypassMode)
         {
             return new NodeTestSummary(0, 0, 0,
@@ -175,9 +246,10 @@ internal static class ProbeClient
         var workingCutoff = NodeAvailability.RecheckCutoffUtc(nowUtc);
         // После провала рабочий сервер не проверяем снова в следующей же партии:
         // иначе фон набирает три провала за пару минут и отправляет живой сервер
-        // в отсев. Ручная перепроверка (recheckWorking) паузу обходит.
+        // в отсев. Ручная перепроверка (recheckWorking) паузу обходит — но не любое
+        // нажатие «Проверить серверы»: иначе одна кнопка давала 5–6 провалов подряд.
         bool RetryAllowed(ProxyNode node) =>
-            manual || recheckWorking || NodeAvailability.RetryAllowed(node, nowUtc);
+            recheckWorking || NodeAvailability.RetryAllowed(node, nowUtc);
         // Снимок и сортировка тысяч серверов — в фоне: на UI-потоке это давало ANR
         // при нажатии кнопок сервисов и «Универсальный».
         var ordered = await Task.Run(() =>
@@ -582,6 +654,18 @@ internal static class ProbeClient
                 return 0;
             }
 
+            // Файл мог пролежать с прошлого запуска (телефон в фоне, процесс убили):
+            // применять несвежие статусы нельзя — они вернули бы в счётчики серверы,
+            // которых давно нет. Своя отметка записи, для старых файлов — время файла.
+            var savedAtUtc = result.SavedAtUtc ?? File.GetLastWriteTimeUtc(ProbeProtocol.ResultPath);
+            if (DateTime.UtcNow - savedAtUtc > ProbeProtocol.ResultsFreshFor)
+            {
+                File.Delete(ProbeProtocol.ResultPath);
+                AppLog.Write("probe",
+                    $"Оставшиеся результаты проверки устарели ({savedAtUtc.ToLocalTime():dd.MM HH:mm}) — не применяю");
+                return 0;
+            }
+
             NodeStore.EnsureLoaded();
             Apply(result, Array.Empty<ProxyNode>());
             File.Delete(ProbeProtocol.ResultPath);
@@ -725,51 +809,25 @@ internal static class ProbeClient
             AppLog.Write("probe",
                 $"Партия: серверов {toTest.Count}, из них рабочих " +
                 $"{toTest.Count(node => node.Status == NodeStatus.Working)}");
+
+            // Прошлый :probe мог остаться жить после таймаута: сначала гасим его
+            // и ждём выхода, и только потом чистим файлы. Обратный порядок (было)
+            // оставлял окно, в котором старый процесс успевал дописать свой результат
+            // уже после удаления — и новая партия получала чужой итог вместо своего.
+            await StopPreviousProbeAsync(token).ConfigureAwait(false);
+
             await File.WriteAllTextAsync(
                 ProbeProtocol.RequestPath,
                 JsonSerializer.Serialize(request, ProbeProtocol.Json),
                 new UTF8Encoding(false),
                 token).ConfigureAwait(false);
-            try
-            {
-                File.Delete(ProbeProtocol.ResultPath);
-            }
-            catch (IOException)
-            {
-                // Прошлый файл перезапишется.
-            }
-
-            try
-            {
-                File.Delete(ProbeProtocol.ProgressPath);
-            }
-            catch (IOException)
-            {
-                // Прошлый ход проверки перезапишется.
-            }
-
-            try
-            {
-                File.Delete(ProbeProtocol.LivePath);
-            }
-            catch (IOException)
-            {
-                // Прошлые промежуточные результаты не нужны.
-            }
+            DeleteProbeFiles();
 
             // Готовые результаты :probe пишет по ходу партии: применяем каждый сразу,
             // чтобы счётчики в шапке менялись, а не стояли до конца проверки.
-            var liveById = toTest
-                .GroupBy(node => node.Id, StringComparer.OrdinalIgnoreCase)
-                .ToDictionary(group => group.Key, group => group.First(),
-                    StringComparer.OrdinalIgnoreCase);
             var liveApplied = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var liveWriteStamp = DateTime.MinValue;
             var lastLiveCheck = DateTime.MinValue;
-
-            // Прошлый :probe мог остаться жить после таймаута — иначе он писал бы
-            // прогресс и результат параллельно с новой партией.
-            TryKillProbeProcess();
 
             var context = (Android.Content.Context?)TunnelService.Active
                           ?? Android.App.Application.Context;
@@ -797,6 +855,7 @@ internal static class ProbeClient
             ProbeResultFile? result = null;
             var started = DateTime.UtcNow;
             var lastProgressAt = DateTime.MinValue;
+            var progressStamp = DateTime.MinValue;
             ProbeProgressFile? lastProgress = null;
             for (var attempt = 0; attempt < 1200; attempt++)
             {
@@ -821,7 +880,7 @@ internal static class ProbeClient
                     }
                 }
 
-                var state = TryReadProgress();
+                var state = TryReadProgress(ref progressStamp);
                 if (state is not null)
                 {
                     if (lastProgress is null ||
@@ -843,8 +902,12 @@ internal static class ProbeClient
                         ReportActivity(line);
                     }
                 }
-                else if (DateTime.UtcNow - started > TimeSpan.FromSeconds(20))
+                else if (progressStamp == DateTime.MinValue &&
+                         DateTime.UtcNow - started > TimeSpan.FromSeconds(20))
                 {
+                    // Файл хода так и не появился: служба не запустилась. Проверяем именно
+                    // «не было ни одного чтения», а не «файл не менялся»: с троттлингом
+                    // неизменённый файл — норма, а не признак зависания.
                     return new NodeTestSummary(0, 0, 0,
                         "Отдельный процесс проверки не запустился — нажмите «Проверить» ещё раз");
                 }
@@ -856,7 +919,7 @@ internal static class ProbeClient
                 if (DateTime.UtcNow - lastLiveCheck >= TimeSpan.FromMilliseconds(900))
                 {
                     lastLiveCheck = DateTime.UtcNow;
-                    ApplyLiveResults(liveById, liveApplied, ref liveWriteStamp);
+                    ApplyLiveResults(liveApplied, ref liveWriteStamp);
                 }
 
                 if (lastProgress is not null &&
@@ -917,18 +980,24 @@ internal static class ProbeClient
         }
     }
 
-    /// <summary>Читает файл хода проверки. Неполный JSON — норма: процесс пишет его прямо сейчас.</summary>
-    private static ProbeProgressFile? TryReadProgress()
+    /// <summary>
+    /// Читает файл хода проверки, только когда он изменился. Неполный JSON — норма:
+    /// процесс пишет его прямо сейчас. Разбор по времени изменения вместо чтения
+    /// в каждом такте экономит постоянный разбор JSON на телефоне.
+    /// </summary>
+    private static ProbeProgressFile? TryReadProgress(ref DateTime lastWriteUtc)
     {
         try
         {
-            if (!File.Exists(ProbeProtocol.ProgressPath))
+            var info = new FileInfo(ProbeProtocol.ProgressPath);
+            if (!info.Exists || info.LastWriteTimeUtc <= lastWriteUtc)
             {
                 return null;
             }
 
+            lastWriteUtc = info.LastWriteTimeUtc;
             return JsonSerializer.Deserialize<ProbeProgressFile>(
-                File.ReadAllText(ProbeProtocol.ProgressPath), ProbeProtocol.Json);
+                File.ReadAllText(info.FullName), ProbeProtocol.Json);
         }
         catch (Exception exception) when (exception is IOException or JsonException or UnauthorizedAccessException)
         {
@@ -944,7 +1013,6 @@ internal static class ProbeClient
     /// и не грузить главный процесс лишним разбором JSON.
     /// </summary>
     private static void ApplyLiveResults(
-        IReadOnlyDictionary<string, ProxyNode> byId,
         HashSet<string> applied,
         ref DateTime lastWriteUtc)
     {
@@ -971,9 +1039,13 @@ internal static class ProbeClient
             return;
         }
 
+        // Узел ищем в актуальном снимке по Id, а не в объектах, которые ушли
+        // в :probe: за время партии NodeStore.Merge мог пересобрать список
+        // (обновление источников), и запись в старый объект терялась бы.
+        var current = NodeStore.IndexById();
         foreach (var item in live.Nodes)
         {
-            if (!applied.Add(item.Id) || !byId.TryGetValue(item.Id, out var node))
+            if (!applied.Add(item.Id) || !current.TryGetValue(item.Id, out var node))
             {
                 continue;
             }
@@ -1003,9 +1075,16 @@ internal static class ProbeClient
         }
 
         var now = DateTime.UtcNow;
+        var current = NodeStore.IndexById();
         foreach (var node in nodes)
         {
             node.TriedAtUtc = now;
+            // Снимок мог быть пересобран обновлением источников: отметка нужна
+            // актуальному объекту, иначе следующая партия возьмёт те же серверы.
+            if (current.TryGetValue(node.Id, out var live) && !ReferenceEquals(live, node))
+            {
+                live.TriedAtUtc = now;
+            }
         }
 
         NodeStore.SaveNodes();
@@ -1014,8 +1093,9 @@ internal static class ProbeClient
     /// <summary>Переносит результаты из :probe в NodeStore и сохраняет кэш.</summary>
     private static NodeTestSummary Apply(ProbeResultFile result, IReadOnlyList<ProxyNode> requested)
     {
-        var byId = NodeStore.Snapshot()
-            .ToDictionary(node => node.Id, StringComparer.OrdinalIgnoreCase);
+        // Актуальный снимок по Id: за время партии список мог быть пересобран
+        // (Merge/Trim), и результаты обязаны попасть в текущие объекты.
+        var byId = NodeStore.IndexById();
         var working = 0;
         var universal = 0;
         var youtube = 0;

@@ -238,6 +238,53 @@ internal static class NodeSourceStats
         return remove;
     }
 
+    /// <summary>
+    /// Медиана задержки проверенных серверов по источникам. Для колонки «Пинг» и для
+    /// обрезки списка до лимита: у источника с плохой медианой серверы выбрасываются
+    /// первыми. Учитываются только серверы с удачной проверкой (есть задержка), и только
+    /// источники с выборкой не меньше <paramref name="minSamples"/>: по 1–2 замерам
+    /// медиана ничего не значит.
+    /// </summary>
+    public static Dictionary<string, int> MedianDelayBySource(
+        IEnumerable<ProxyNode> nodes,
+        int minSamples = 3)
+    {
+        var delays = new Dictionary<string, List<int>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var node in nodes)
+        {
+            if (node.DelayMs is not { } delay || delay <= 0)
+            {
+                continue;
+            }
+
+            foreach (var source in NodeFailover.SplitSources(node.SourceName))
+            {
+                if (!delays.TryGetValue(source, out var list))
+                {
+                    list = new List<int>();
+                    delays[source] = list;
+                }
+
+                list.Add(delay);
+            }
+        }
+
+        var medians = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var minimum = Math.Max(1, minSamples);
+        foreach (var pair in delays)
+        {
+            if (pair.Value.Count < minimum)
+            {
+                continue;
+            }
+
+            pair.Value.Sort();
+            medians[pair.Key] = pair.Value[pair.Value.Count / 2];
+        }
+
+        return medians;
+    }
+
     /// <summary>Какой из двух источников с одинаковым содержимым оставить.</summary>
     internal static bool IsBetterSource(SourceDefinition candidate, SourceDefinition current)
     {

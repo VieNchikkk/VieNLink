@@ -376,7 +376,10 @@ public sealed class RejectedActivity : BaseActivity
             _disconnect.Enabled = active;
         }
 
-        if (running && showTraffic && _resumed)
+        // Поток трафика слушаем всегда, пока VPN работает: по нему решается,
+        // вернуть ли сервер из отсева. Раньше он включался только вместе с показом
+        // «Трафик» в настройках, и при выключенном показе сервер не возвращался.
+        if (running && _resumed)
         {
             EnsureTrafficMonitor();
         }
@@ -418,10 +421,11 @@ public sealed class RejectedActivity : BaseActivity
             _lastConnState = state;
         }
 
-        // Подключение из отсева удалось: через сервер реально пошёл трафик — это
-        // лучшее доказательство, что он рабочий. Возвращаем его в рабочий список
-        // автоматически, один раз на сервер.
-        if (running && _connectedNode is { } connected &&
+        // Подключение из отсева удалось и через сервер реально пошёл трафик — это
+        // лучшее доказательство, что он рабочий. Одного TunnelState.Running мало:
+        // TUN поднимается и на мёртвом сервере. Возвращаем один раз на сервер.
+        var hasTraffic = _downBytes + _upBytes > 0;
+        if (running && hasTraffic && _connectedNode is { } connected &&
             !string.Equals(_autoReturnedNodeId, connected.Id, StringComparison.OrdinalIgnoreCase))
         {
             _autoReturnedNodeId = connected.Id;

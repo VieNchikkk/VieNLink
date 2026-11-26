@@ -14,7 +14,15 @@ internal sealed class DefaultNetworkCallback : ConnectivityManager.NetworkCallba
 
     public DefaultNetworkCallback(Action onChanged) => _onChanged = onChanged;
 
-    public override void OnAvailable(Network network) => _onChanged();
+    public override void OnAvailable(Network network)
+    {
+        NetworkPresets.SyncProfile();
+        _onChanged();
+    }
 
-    public override void OnLost(Network network) => _onChanged();
+    public override void OnLost(Network network)
+    {
+        NetworkPresets.SyncProfile();
+        _onChanged();
+    }
 }

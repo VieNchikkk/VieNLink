@@ -1,4 +1,4 @@
-namespace VieNLink.Mobile;
+﻿namespace VieNLink.Mobile;
 
 /// <summary>Выбранный сервер переживает перезапуск приложения.</summary>
 internal sealed class SelectedNodeState
@@ -51,6 +51,9 @@ internal static class NodeStore
     /// <summary>Добавляет сервер, введённый вручную, и возвращает его Id.</summary>
     public static string? AddManual(ProxyNode node)
     {
+        // Введённый вручную сервер — «мой»: иначе при включённом «Только мои»
+        // он не попадал бы в конфиг, хотя пользователь добавил его сам.
+        node.IsMine = true;
         Merge(new[] { node });
         return node.Id;
     }
@@ -200,6 +203,35 @@ internal static class NodeStore
     /// <summary>Снимок списка без блокировки: UI не ждёт разбора кэша и обновления источников.</summary>
     public static List<ProxyNode> Snapshot() => _snapshot.ToList();
 
+    private static ProxyNode[]? _indexFor;
+    private static Dictionary<string, ProxyNode>? _indexById;
+
+    /// <summary>
+    /// Индекс «Id → актуальный объект сервера» для опубликованного снимка. :probe
+    /// возвращает результаты по Id, а за время партии список мог быть пересобран
+    /// обновлением источников: писать статус в старый объект бесполезно.
+    /// Индекс строится один раз на снимок и переиспользуется до следующего Merge.
+    /// </summary>
+    public static Dictionary<string, ProxyNode> IndexById()
+    {
+        var snapshot = _snapshot;
+        var index = _indexById;
+        if (index is not null && ReferenceEquals(_indexFor, snapshot))
+        {
+            return index;
+        }
+
+        index = new Dictionary<string, ProxyNode>(snapshot.Length, StringComparer.OrdinalIgnoreCase);
+        foreach (var node in snapshot)
+        {
+            index[node.Id] = node;
+        }
+
+        _indexFor = snapshot;
+        _indexById = index;
+        return index;
+    }
+
     /// <summary>
     /// Сколько серверов лежит в списке рабочих — ровно то, что сохраняется
     /// в <c>nodes-working.json</c>. Значок «рабочих серверов» читает именно это число,
@@ -283,7 +315,7 @@ internal static class NodeStore
     /// (проверка не старше 5 минут).
     /// </remarks>
     public static (int Total, int Working, int Universal, int Youtube, int Telegram, int Discord) Summary(
-        bool requireFresh = true)
+        bool requireFresh = false)
     {
         var snapshot = _snapshot;
         if (!_loaded)
@@ -291,44 +323,35 @@ internal static class NodeStore
             return (0, 0, 0, 0, 0, 0);
         }
 
+        // По умолчанию считаем мягко (как шапка): строгое окно 5/10 минут при партии
+        // проверки в 2–3 минуты давало «рабочих 0» и запускало лишние партии поиска,
+        // которые сами порождали провалы. Свежесть по-прежнему проверяется перед
+        // подключением (IsUsable), а не в квоте.
+
         var now = DateTime.UtcNow;
-        var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
+        var recheckMinutes = NetworkProfile.WorkingRecheckMinutes;
         var onlyMine = Settings.ConnectOnlyMine;
-        var working = 0;
-        var universal = 0;
-        var youtube = 0;
-        var telegram = 0;
-        var discord = 0;
+        var eligible = new List<ProxyNode>();
         foreach (var node in snapshot)
         {
             if (requireFresh
-                    ? !NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now)
-                    : !NodeAvailability.IsCountable(node, onlyMine, now))
+                    ? NodeAvailability.IsUsable(node, recheckMinutes, onlyMine, now)
+                    : NodeAvailability.IsCountable(node, onlyMine, now))
             {
-                continue;
-            }
-
-            working++;
-            if (NodeAvailability.OpenedFor(node, "universal"))
-            {
-                universal++;
-            }
-
-            if (NodeAvailability.OpenedFor(node, "youtube"))
-            {
-                youtube++;
-            }
-
-            if (NodeAvailability.OpenedFor(node, "telegram"))
-            {
-                telegram++;
-            }
-
-            if (NodeAvailability.OpenedFor(node, "discord"))
-            {
-                discord++;
+                eligible.Add(node);
             }
         }
+
+        // Счётчики и квота считают быстрые серверы: задержка выше порога — это «рабочий»
+        // сервер, с которым всё открывается за 3–5 с. Если быстрых меньше квоты, берём
+        // все, чтобы значки не падали в ноль и приложение не искало серверы впустую.
+        var fast = eligible.Where(NodeSpeedPolicy.IsFast).ToList();
+        var shown = fast.Count >= NodeLimits.MinWorkingNodes ? fast : eligible;
+        var working = shown.Count;
+        var universal = shown.Count(node => NodeAvailability.OpenedFor(node, "universal"));
+        var youtube = shown.Count(node => NodeAvailability.OpenedFor(node, "youtube"));
+        var telegram = shown.Count(node => NodeAvailability.OpenedFor(node, "telegram"));
+        var discord = shown.Count(node => NodeAvailability.OpenedFor(node, "discord"));
 
         return (snapshot.Length, working, universal, youtube, telegram, discord);
     }
@@ -352,13 +375,7 @@ internal static class NodeStore
         var now = DateTime.UtcNow;
         var onlyMine = Settings.ConnectOnlyMine;
         var working = 0;
-        var available = 0;
-        var universal = 0;
-        var youtube = 0;
-        var telegram = 0;
-        var discord = 0;
         var mine = 0;
-        var bestDomains = 0;
         DateTime? lastChecked = null;
         foreach (var node in snapshot)
         {
@@ -377,37 +394,22 @@ internal static class NodeStore
             {
                 working++;
             }
-
-            // Те же серверы, что и в счётчиках шапки: последняя удачная проверка прошла,
-            // подтверждённого провала не было. Иначе экран «Серверы» показывал бы
-            // «рабочих 0», пока в шапке висят числа.
-            if (!NodeAvailability.IsCountable(node, onlyMine, now))
-            {
-                continue;
-            }
-
-            available++;
-            bestDomains = Math.Max(bestDomains, node.OpenDomains);
-            if (NodeAvailability.OpenedFor(node, "universal"))
-            {
-                universal++;
-            }
-
-            if (NodeAvailability.OpenedFor(node, "youtube"))
-            {
-                youtube++;
-            }
-
-            if (NodeAvailability.OpenedFor(node, "telegram"))
-            {
-                telegram++;
-            }
-
-            if (NodeAvailability.OpenedFor(node, "discord"))
-            {
-                discord++;
-            }
         }
+
+        // Те же серверы, что и в счётчиках шапки, но без медленных: задержка выше
+        // NodeSpeedPolicy.SlowDelayMs не попадает в значки, пока быстрых хватает.
+        var shown = NodeAvailability.CountableForDisplay(snapshot, onlyMine, now);
+        var available = shown.Count;
+        var bestDomains = 0;
+        foreach (var node in shown)
+        {
+            bestDomains = Math.Max(bestDomains, node.OpenDomains);
+        }
+
+        var universal = shown.Count(node => NodeAvailability.OpenedFor(node, "universal"));
+        var youtube = shown.Count(node => NodeAvailability.OpenedFor(node, "youtube"));
+        var telegram = shown.Count(node => NodeAvailability.OpenedFor(node, "telegram"));
+        var discord = shown.Count(node => NodeAvailability.OpenedFor(node, "discord"));
 
         return new NodeSummary(snapshot.Length, working, available, universal, youtube, telegram, discord,
             mine, bestDomains, lastChecked);
@@ -452,14 +454,77 @@ internal static class NodeStore
         }
     }
 
-    public static void Select(ProxyNode node)
+    public static void Select(ProxyNode node, bool persist = true)
     {
         lock (Gate)
         {
             _selectedId = node.Id;
             _selected = node;
-            JsonFileStore.Write(SelectedPath, new SelectedNodeState { Id = node.Id });
         }
+
+        if (persist && !PersistenceSuppressed)
+        {
+            PersistSelectedInBackground();
+        }
+    }
+
+    /// <summary>
+    /// Пока true, <see cref="Select"/> меняет выбор только в памяти и не пишет
+    /// <c>selected-node.json</c>. Нужно автопроверке отсева: она поднимает туннель
+    /// на пробном сервере и не должна подменять выбор пользователя на диске.
+    /// </summary>
+    public static bool PersistenceSuppressed { get; set; }
+
+    private static int _persistRunning;
+    private static int _persistPending;
+
+    /// <summary>
+    /// Пишет выбранный сервер в фоне: нажатие кнопок не должно ждать диск, а обновление
+    /// шапки — тем более. Пока запись идёт, повторная не планируется; если выбор успел
+    /// смениться, в файл попадёт уже новое значение (флаг pending обрабатывается в цикле).
+    /// </summary>
+    private static void PersistSelectedInBackground()
+    {
+        Interlocked.Exchange(ref _persistPending, 1);
+        if (Interlocked.CompareExchange(ref _persistRunning, 1, 0) != 0)
+        {
+            return;
+        }
+
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                while (Interlocked.Exchange(ref _persistPending, 0) == 1)
+                {
+                    string? id;
+                    lock (Gate)
+                    {
+                        id = _selectedId;
+                    }
+
+                    if (id is null)
+                    {
+                        break;
+                    }
+
+                    JsonFileStore.Write(SelectedPath, new SelectedNodeState { Id = id });
+                }
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write("nodes", "Не удалось сохранить выбранный сервер", exception);
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _persistRunning, 0);
+                // Выбор мог смениться в момент между последним чтением и сбросом флага.
+                if (Volatile.Read(ref _persistPending) == 1)
+                {
+                    PersistSelectedInBackground();
+                }
+            }
+        });
     }
 
     /// <summary>Добавляет источник или одиночную ссылку. Возвращает сообщение для интерфейса.</summary>
@@ -954,6 +1019,9 @@ internal static class NodeStore
         nodes
             .Where(node => node.Status != NodeStatus.Dead && !string.IsNullOrWhiteSpace(node.OutboundJson))
             .OrderByDescending(node => node.IsMine)
+            // Рабочие — выше непроверенных: иначе при лимите конфига высокооценённые,
+            // но непроверенные вытесняют рабочих, и переключиться при сбое некуда.
+            .ThenByDescending(node => node.Status == NodeStatus.Working)
             .ThenByDescending(node => node.RankScore)
             .ThenByDescending(node => node.DelayMs is not null)
             .ThenByDescending(node => node.OpenDomains)
@@ -988,7 +1056,7 @@ internal static class NodeStore
         var ranked = RankedVerified();
         var usable = ranked
             .Where(node => NodeAvailability.IsUsable(
-                node, NodeLimits.WorkingRecheckMinutes, settings.ConnectOnlyMine, now))
+                node, NetworkProfile.WorkingRecheckMinutes, settings.ConnectOnlyMine, now))
             .ToList();
         var quick = usable.FirstOrDefault(
             node => node.DelayMs is not null && node.DelayMs <= settings.MaxDelayMs);
@@ -1042,7 +1110,14 @@ internal static class NodeStore
             if (!string.Equals(_selectedId, best.Id, StringComparison.OrdinalIgnoreCase))
             {
                 _selectedId = best.Id;
-                JsonFileStore.Write(SelectedPath, new SelectedNodeState { Id = best.Id });
+                _selected = best;
+                // Запись — в фоне: автопроверка вызывает это после каждой партии,
+                // и синхронный диск на UI-потоке был лишней задержкой.
+                if (!PersistenceSuppressed)
+                {
+                    PersistSelectedInBackground();
+                }
+
                 AppLog.Write("nodes", "Автоматически выбран лучший сервер: " + best.Name);
             }
 
@@ -1069,7 +1144,7 @@ internal static class NodeStore
     public static ProxyNode? PickForService(QuickService service, string? avoidId = null)
     {
         var now = DateTime.UtcNow;
-        var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
+        var recheckMinutes = NetworkProfile.WorkingRecheckMinutes;
         var onlyMine = Settings.ConnectOnlyMine;
         var candidates = _snapshot
             .Where(node => (avoidId is null || !node.Id.Equals(avoidId, StringComparison.OrdinalIgnoreCase)) &&
@@ -1195,7 +1270,7 @@ internal static class NodeStore
         }
 
         var now = DateTime.UtcNow;
-        var recheckMinutes = NodeLimits.WorkingRecheckMinutes;
+        var recheckMinutes = NetworkProfile.WorkingRecheckMinutes;
         var onlyMine = Settings.ConnectOnlyMine;
         foreach (var node in unique)
         {

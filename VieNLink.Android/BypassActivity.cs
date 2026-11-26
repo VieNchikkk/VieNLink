@@ -504,8 +504,6 @@ public sealed class BypassActivity : BaseActivity
         var cts = new CancellationTokenSource();
         _autotuneCts = cts;
         SetAutotuneRunning(true, mode);
-        AutotuneResult? page = null;
-        AutotuneResult? video = null;
         var cancelled = false;
         var modeLabel = mode == AutotuneMode.Best ? "«Подобрать лучшую»" : "«Первая рабочая»";
         AppLog.Write("tun-bypass",
@@ -551,74 +549,12 @@ public sealed class BypassActivity : BaseActivity
             }
         });
 
+        BypassAutotuneOutcome? outcome = null;
         try
         {
-            // Известный пресет (включая зашитую базу оператора) проверяем первым.
-            var preferredPage = Enum.TryParse<StreamFragmentMode>(
-                NetworkPresets.GetPage(this), out var pageMode)
-                ? pageMode
-                : (StreamFragmentMode?)null;
-            var preferredVideo = Enum.TryParse<StreamFragmentMode>(
-                NetworkPresets.GetVideo(this), out var videoMode)
-                ? videoMode
-                : preferredPage;
-            page = await StrategyAutotune.RunAsync(
-                AutotuneScope.Page, progress, cts.Token, preferredPage, mode);
-
-            // Если страница не проверилась из-за обрыва сети — видео и QUIC не трогаем.
-            if (page.Aborted)
-            {
-                video = null;
-            }
-            else
-            {
-                video = await StrategyAutotune.RunAsync(
-                    AutotuneScope.Video, progress, cts.Token, preferredVideo, mode);
-            }
-
-            if (!page.Aborted)
-            {
-                // QUIC не зависит от TCP-стратегии: проверяем один раз и выставляем автоматически.
-                var quicForwarder = new TlsFragmentForwarder();
-                bool quicOk;
-                try
-                {
-                    await quicForwarder.StartAsync(StreamFragmentMode.None);
-                    quicOk = await StrategyAutotune.ProbeQuicAsync(quicForwarder.Port, cts.Token);
-                }
-                finally
-                {
-                    await quicForwarder.StopAsync();
-                }
-
-                if (quicOk)
-                {
-                    NetworkPresets.SetBlockQuic(this, false);
-                    if (_quicCheck is not null)
-                    {
-                        _quicCheck.Checked = false;
-                    }
-
-                    _lastQuicResult = "проходит (оставляю через релей)";
-                    AppLog.Write("tun-bypass", "QUIC: проба прошла — оставляю через релей");
-                    if (_autotuneStatus is not null)
-                    {
-                        _autotuneStatus.Text = "QUIC проходит — оставляю через релей.";
-                    }
-                }
-                else
-                {
-                    // Синтетическая проба ненадёжна (Google может молча отбросить чужой Initial):
-                    // по ней не блокируем — решение примет реальный QUIC-трафик.
-                    _lastQuicResult = "проба не прошла — решит реальный трафик";
-                    AppLog.Write("tun-bypass",
-                        "QUIC: проба не прошла — настройку не меняю (решит реальный трафик)");
-                    if (_autotuneStatus is not null)
-                    {
-                        _autotuneStatus.Text = "QUIC: проба не прошла, решит реальный трафик.";
-                    }
-                }
-            }
+            // Вся проверка и сохранение результата — в общем BypassAutotune: та же кнопка
+            // работает и на главном экране, и здесь, тексты итога не расходятся.
+            outcome = await BypassAutotune.RunAsync(this, mode, progress, cts.Token);
         }
         catch (System.OperationCanceledException)
         {
@@ -664,7 +600,12 @@ public sealed class BypassActivity : BaseActivity
             return;
         }
 
-        if (page?.Aborted == true)
+        if (outcome is null)
+        {
+            return;
+        }
+
+        if (outcome.Aborted)
         {
             _lastPageResult = modeLabel + ": прерван — сеть пропала";
             _lastVideoResult = null;
@@ -683,58 +624,39 @@ public sealed class BypassActivity : BaseActivity
             return;
         }
 
-        // Применяем после снятия состояния подбора: запуск обхода отменяет активный подбор.
-        if (page?.Strategy is not null)
+        // QUIC проверен: показываем честный итог и приводим галочку к сохранённому пресету.
+        _lastQuicResult = outcome.QuicDetail;
+        if (outcome.QuicProbed)
         {
-            var index = _strategies.IndexOf(page.Strategy);
+            AppLog.Write("tun-bypass", outcome.QuicOk
+                ? "QUIC: проба прошла — оставляю через релей"
+                : "QUIC: проба не прошла — настройку не меняю (решит реальный трафик)");
+            if (_quicCheck is not null)
+            {
+                _quicCheck.Checked = NetworkPresets.GetBlockQuic(this);
+            }
+        }
+
+        // Применяем после снятия состояния подбора: запуск обхода отменяет активный подбор.
+        if (outcome.Page?.Strategy is not null)
+        {
+            var index = _strategies.IndexOf(outcome.Page.Strategy);
             if (index >= 0)
             {
                 _selected = index;
-                NetworkPresets.SetPage(this, page.Strategy.Mode.ToString());
                 RenderStrategies();
             }
         }
 
-        // Видео-пресет меняем только если проба реально скачала поток. Иначе оставляем
-        // прежний: подменять его страничной стратегией — значит врать «видео работает».
-        if (video?.Strategy is not null)
+        if (outcome.Video?.Strategy is not null && _videoSpinner is not null)
         {
-            NetworkPresets.SetVideo(this, video.Strategy.Mode.ToString());
-            if (_videoSpinner is not null)
-            {
-                var index = _strategies.FindIndex(item => item.Mode == video.Strategy.Mode);
-                _videoSpinner.SetSelection(index >= 0 ? index + 1 : 0, false);
-            }
+            var index = _strategies.FindIndex(item => item.Mode == outcome.Video.Strategy.Mode);
+            _videoSpinner.SetSelection(index >= 0 ? index + 1 : 0, false);
         }
 
-        var summary = page?.Strategy is null
-            ? "Ни одна стратегия не открыла страницу YouTube."
-            : $"{NetworkPresets.Label(this)}: " +
-              $"{(mode == AutotuneMode.Best ? "лучшая" : "первая рабочая")} {page.Strategy.Name} " +
-              $"({page.Score}/{page.Total}" +
-              (page.Strong ? ")" : ", превью не прошло)") +
-              (page.SpeedKbps > 0 ? $", {page.SpeedKbps} КБ/с" : string.Empty) +
-              (video?.Strategy is not null
-                  ? video.AudioOnly
-                      ? $", видео не идёт — звук {video.Strategy.Name} ({video.SpeedKbps} КБ/с)"
-                      : video.SniOnly
-                          ? $", видео: медиасервер отвечает ({video.Strategy.Name}), поток не проверялся"
-                          : $", видео {video.Strategy.Name} ({video.Score}/{video.Total}" +
-                            (video.SpeedKbps > 0 ? $", {video.SpeedKbps} КБ/с)" : ")")
-                  : ", видео не проверено (0 байт)");
-
-        _lastPageResult = page?.Strategy is null
-            ? $"{modeLabel}: ничего не найдено"
-            : $"{modeLabel}: {page.Strategy.Name} — {page.Score} из {page.Total}" +
-              (page.Strong ? " (страница и превью)" : " (только страница)") +
-              (page.SpeedKbps > 0 ? $", {page.SpeedKbps} КБ/с" : string.Empty);
-        _lastVideoResult = video?.Strategy is null
-            ? "не проверено — медиасервер не отдал байты"
-            : video.AudioOnly
-                ? $"только звук — {video.Strategy.Name}, {video.SpeedKbps} КБ/с"
-                : video.SniOnly
-                    ? $"медиасервер отвечает — {video.Strategy.Name}, поток не проверялся"
-                    : $"{video.Strategy.Name} — {video.Score} из {video.Total}, {video.SpeedKbps} КБ/с";
+        var summary = outcome.Summary(NetworkPresets.Label(this));
+        _lastPageResult = outcome.PageDetail;
+        _lastVideoResult = outcome.VideoDetail;
         if (_autotunePhase is not null)
         {
             _autotunePhase.Text = "Готово";
@@ -750,19 +672,8 @@ public sealed class BypassActivity : BaseActivity
         PersistAutotuneResult();
 
         // Автоматически включаем только подтверждённую страницу (с превью).
-        if (page?.Strategy is not null && page.Strong)
+        if (outcome.Strong)
         {
-            NetworkPresets.RememberSuccess(
-                this,
-                page.Strategy.Mode.ToString(),
-                video?.Strategy?.Mode.ToString() ?? NetworkPresets.GetVideo(this),
-                NetworkPresets.GetBlockQuic(this),
-                transport: video?.Strategy is not null && !video.SniOnly && !video.AudioOnly
-                    ? "tcp"
-                    : string.Empty,
-                videoKbps: video?.Strategy is not null && !video.SniOnly && !video.AudioOnly
-                    ? video.SpeedKbps
-                    : 0);
             StartBypass();
         }
     }

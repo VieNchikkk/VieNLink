@@ -486,6 +486,12 @@ public partial class MainWindow
         var working = 0;
         var countable = 0;
         var fresh = 0;
+        var fastFresh = 0;
+        var fastCountable = 0;
+        var fastUniversal = 0;
+        var fastYoutube = 0;
+        var fastTelegram = 0;
+        var fastDiscord = 0;
         var universal = 0;
         var youtube = 0;
         var telegram = 0;
@@ -501,12 +507,6 @@ public partial class MainWindow
             if (node.Status == NodeStatus.Working)
             {
                 working++;
-                if (NodeAvailability.IsFresh(node, recheckMinutes, now) &&
-                    NodeAvailability.HasSuccess(node) &&
-                    (!onlyMine || node.IsMine))
-                {
-                    fresh++;
-                }
             }
 
             // Значки сервисов и щит считают по одному мягкому правилу
@@ -521,6 +521,24 @@ public partial class MainWindow
             }
 
             countable++;
+            var fast = NodeSpeedPolicy.IsFast(node);
+            if (fast)
+            {
+                fastCountable++;
+            }
+
+            // «Свежие» считаем среди доступных же серверов: иначе строка «доступных 52,
+            // свежих 60» выглядела как ошибка (в свежие попадали медленные и ждущие
+            // повтора после провала).
+            if (NodeAvailability.IsFresh(node, recheckMinutes, now))
+            {
+                fresh++;
+                if (fast)
+                {
+                    fastFresh++;
+                }
+            }
+
             if (node.OpenDomains > bestDomains)
             {
                 bestDomains = node.OpenDomains;
@@ -529,22 +547,51 @@ public partial class MainWindow
             if (NodeAvailability.OpenedFor(node, "universal"))
             {
                 universal++;
+                if (fast)
+                {
+                    fastUniversal++;
+                }
             }
 
             if (NodeAvailability.OpenedFor(node, "youtube"))
             {
                 youtube++;
+                if (fast)
+                {
+                    fastYoutube++;
+                }
             }
 
             if (NodeAvailability.OpenedFor(node, "telegram"))
             {
                 telegram++;
+                if (fast)
+                {
+                    fastTelegram++;
+                }
             }
 
             if (NodeAvailability.OpenedFor(node, "discord"))
             {
                 discord++;
+                if (fast)
+                {
+                    fastDiscord++;
+                }
             }
+        }
+
+        // Медленные серверы (задержка выше порога) в значки не берём, пока быстрых
+        // хватает квоты: иначе значок обещает сервер, с которым всё открывается
+        // за 3–5 секунд. Сами серверы остаются в списке и участвуют в подключении.
+        if (fastCountable >= NodeLimits.MinWorkingNodes)
+        {
+            countable = fastCountable;
+            fresh = fastFresh;
+            universal = fastUniversal;
+            youtube = fastYoutube;
+            telegram = fastTelegram;
+            discord = fastDiscord;
         }
 
         UniversalNodeCount = universal;
@@ -553,7 +600,7 @@ public partial class MainWindow
         DiscordNodeCount = discord;
 
         NodesSummaryText.Text = $"В списке: {total} серверов · рабочих: {working} · " +
-                                $"доступных: {countable} · свежих: {fresh} " +
+                                $"доступных: {countable} · из них свежих: {fresh} " +
                                 $"(проверены за {recheckMinutes} мин)";
         if (NodesAccessText is not null)
         {

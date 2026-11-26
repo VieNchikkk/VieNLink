@@ -20,6 +20,7 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
@@ -75,7 +76,7 @@
                                 <Border Background="{DynamicResource AccentSurfaceBrush}"
                                         BorderBrush="{DynamicResource AccentBorderBrush}" BorderThickness="1"
                                         CornerRadius="7" Padding="5,2" Margin="0,0,5,0"
-                                        ToolTip="Доступные серверы: рабочие, чья последняя удачная проверка прошла не позже часа назад и по которым нет подтверждённого провала. По этому числу считаются значки сервисов; если свежих нет, эти же серверы проверяются для подключения">
+                                        ToolTip="Доступные серверы: рабочие, чья последняя удачная проверка прошла не позже часа назад и по которым нет подтверждённого провала. Пока быстрых (до 2000 мс) хватает квоты, медленные сюда и в значки сервисов не входят. По этому числу считаются значки сервисов; если свежих нет, эти же серверы проверяются для подключения">
                                     <StackPanel Orientation="Horizontal">
                                         <Viewbox Width="12" Height="12" Margin="0,0,3,0" VerticalAlignment="Center">
                                             <Path Width="24" Height="24" Stretch="Uniform"
@@ -188,51 +189,57 @@
                             </Grid>
                         </DockPanel>
                     </Border>
-                    <Button x:Name="CancelButton" Style="{StaticResource WarningButton}"
-                            Margin="0,0,8,0" Visibility="Collapsed" Click="OnCancelClick"
-                            ToolTip="Прервать текущую операцию">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Width="15" Height="15" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,7,0"
-                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                  Data="M12,2C17.5,2 22,6.5 22,12C22,17.5 17.5,22 12,22C6.5,22 2,17.5 2,12C2,6.5 6.5,2 12,2M12,4C7.58,4 4,7.58 4,12C4,16.42 7.58,20 12,20C16.42,20 20,16.42 20,12C20,7.58 16.42,4 12,4M16.24,7.76L17.66,9.17L13.41,13.41L17.66,17.66L16.24,19.07L12,14.83L7.76,19.07L6.34,17.66L10.59,13.41L6.34,9.17L7.76,7.76L12,12L16.24,7.76Z" />
-                            <TextBlock Text="Отменить" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
-                    <Button x:Name="HeaderNextNodeButton" Style="{StaticResource AccentSmallButton}"
-                            Margin="0,0,8,0" Visibility="Collapsed" Click="OnNextNodeClick"
-                            ToolTip="Переключиться на следующий проверенный сервер">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Width="15" Height="15" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,7,0"
-                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                  Data="M4,11H15.17L10.58,6.41L12,5L19,12L12,19L10.58,17.59L15.17,13H4V11Z" />
-                            <TextBlock Text="Сменить сервер" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
-                    <Button x:Name="HeaderShareNodeButton" Style="{StaticResource AccentSmallButton}"
-                            Margin="0,0,8,0" Visibility="Collapsed" Click="OnShareNodeClick"
-                            ToolTip="Скопировать адрес подключённого сервера (IP:порт), чтобы передать его в мессенджер">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Width="15" Height="15" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,7,0"
-                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                  Data="M18,16.08C17.24,16.08 16.56,16.38 16.04,16.85L8.91,12.7C8.96,12.47 9,12.24 9,12C9,11.76 8.96,11.53 8.91,11.3L15.96,7.19C16.5,7.69 17.21,8 18,8A3,3 0 0,0 21,5A3,3 0 0,0 18,2A3,3 0 0,0 15,5C15,5.24 15.04,5.47 15.09,5.7L8.04,9.81C7.5,9.31 6.79,9 6,9A3,3 0 0,0 3,12A3,3 0 0,0 6,15C6.79,15 7.5,14.69 8.04,14.19L15.16,18.34C15.11,18.55 15.08,18.77 15.08,19C15.08,20.61 16.39,21.91 18,21.91C19.61,21.91 20.92,20.61 20.92,19A2.92,2.92 0 0,0 18,16.08Z" />
-                            <TextBlock Text="Поделиться" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
-                    <Button x:Name="HeaderDisconnectButton" Style="{StaticResource DangerButton}"
-                            Visibility="Collapsed" Click="OnDisconnectClick"
-                            ToolTip="Отключить все активные подключения">
-                        <StackPanel Orientation="Horizontal">
-                            <Path Width="15" Height="15" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,7,0"
-                                  Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
-                                  Data="M16.56,5.44L15.11,6.89C16.84,7.94 18,9.83 18,12A6,6 0 0,1 12,18A6,6 0 0,1 6,12C6,9.83 7.16,7.94 8.88,6.88L7.44,5.44C5.36,6.88 4,9.28 4,12A8,8 0 0,0 12,20A8,8 0 0,0 20,12C20,9.28 18.64,6.88 16.56,5.44M13,3H11V13H13V3Z" />
-                            <TextBlock Text="Отключить" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
                 </StackPanel>
             </Grid>
         </Border>
 
-        <TabControl x:Name="MainTabs" Grid.Row="1" SelectionChanged="OnMainTabsSelectionChanged">
+        <!-- Действия подключения — компактной полосой под шапкой, а не внутри неё:
+             в шапке они были крупными и спорили с состоянием подключения. -->
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right"
+                    VerticalAlignment="Center" Margin="20,6,20,2">
+            <Button x:Name="CancelButton" Style="{StaticResource HeaderActionWarningButton}"
+                    Margin="0,0,6,0" Visibility="Collapsed" Click="OnCancelClick"
+                    ToolTip="Прервать текущую операцию">
+                <StackPanel Orientation="Horizontal">
+                    <Path Width="13" Height="13" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,5,0"
+                          Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          Data="M12,2C17.5,2 22,6.5 22,12C22,17.5 17.5,22 12,22C6.5,22 2,17.5 2,12C2,6.5 6.5,2 12,2M12,4C7.58,4 4,7.58 4,12C4,16.42 7.58,20 12,20C16.42,20 20,16.42 20,12C20,7.58 16.42,4 12,4M16.24,7.76L17.66,9.17L13.41,13.41L17.66,17.66L16.24,19.07L12,14.83L7.76,19.07L6.34,17.66L10.59,13.41L6.34,9.17L7.76,7.76L12,12L16.24,7.76Z" />
+                    <TextBlock Text="Отменить" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+            <Button x:Name="HeaderNextNodeButton" Style="{StaticResource HeaderActionButton}"
+                    Margin="0,0,6,0" Visibility="Collapsed" Click="OnNextNodeClick"
+                    ToolTip="Переключиться на следующий проверенный сервер">
+                <StackPanel Orientation="Horizontal">
+                    <Path Width="13" Height="13" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,5,0"
+                          Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          Data="M4,11H15.17L10.58,6.41L12,5L19,12L12,19L10.58,17.59L15.17,13H4V11Z" />
+                    <TextBlock Text="Сменить сервер" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+            <Button x:Name="HeaderShareNodeButton" Style="{StaticResource HeaderActionButton}"
+                    Margin="0,0,6,0" Visibility="Collapsed" Click="OnShareNodeClick"
+                    ToolTip="Скопировать адрес подключённого сервера (IP:порт), чтобы передать его в мессенджер">
+                <StackPanel Orientation="Horizontal">
+                    <Path Width="13" Height="13" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,5,0"
+                          Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          Data="M18,16.08C17.24,16.08 16.56,16.38 16.04,16.85L8.91,12.7C8.96,12.47 9,12.24 9,12C9,11.76 8.96,11.53 8.91,11.3L15.96,7.19C16.5,7.69 17.21,8 18,8A3,3 0 0,0 21,5A3,3 0 0,0 18,2A3,3 0 0,0 15,5C15,5.24 15.04,5.47 15.09,5.7L8.04,9.81C7.5,9.31 6.79,9 6,9A3,3 0 0,0 3,12A3,3 0 0,0 6,15C6.79,15 7.5,14.69 8.04,14.19L15.16,18.34C15.11,18.55 15.08,18.77 15.08,19C15.08,20.61 16.39,21.91 18,21.91C19.61,21.91 20.92,20.61 20.92,19A2.92,2.92 0 0,0 18,16.08Z" />
+                    <TextBlock Text="Поделиться" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+            <Button x:Name="HeaderDisconnectButton" Style="{StaticResource HeaderActionDangerButton}"
+                    Visibility="Collapsed" Click="OnDisconnectClick"
+                    ToolTip="Отключить все активные подключения">
+                <StackPanel Orientation="Horizontal">
+                    <Path Width="13" Height="13" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,5,0"
+                          Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                          Data="M16.56,5.44L15.11,6.89C16.84,7.94 18,9.83 18,12A6,6 0 0,1 12,18A6,6 0 0,1 6,12C6,9.83 7.16,7.94 8.88,6.88L7.44,5.44C5.36,6.88 4,9.28 4,12A8,8 0 0,0 12,20A8,8 0 0,0 20,12C20,9.28 18.64,6.88 16.56,5.44M13,3H11V13H13V3Z" />
+                    <TextBlock Text="Отключить" VerticalAlignment="Center" />
+                </StackPanel>
+            </Button>
+        </StackPanel>
+
+        <TabControl x:Name="MainTabs" Grid.Row="2" SelectionChanged="OnMainTabsSelectionChanged">
 
             <!-- ПОДКЛЮЧЕНИЕ: быстрое подключение и Telegram -->
             <TabItem x:Name="ConnectionTab" Style="{StaticResource AppTabItem}" Tag="{DynamicResource AccentBrush}">
@@ -902,6 +909,14 @@
                                         </DataTemplate>
                                     </GridViewColumn.CellTemplate>
                                 </GridViewColumn>
+                                <GridViewColumn Header="Пинг" Width="66">
+                                    <GridViewColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding PingLabel}" VerticalAlignment="Center"
+                                                       ToolTip="Медиана задержки проверенных серверов источника. Серверы источников с плохой медианой выбрасываются первыми, когда список упирается в лимит" />
+                                        </DataTemplate>
+                                    </GridViewColumn.CellTemplate>
+                                </GridViewColumn>
                                 <GridViewColumn Header="Отсеяно" Width="76">
                                     <GridViewColumn.CellTemplate>
                                         <DataTemplate>
@@ -1392,7 +1407,7 @@
                             <Button x:Name="RejectedAutoButton" Content="● Авто-перепроверка: вкл"
                                     Style="{StaticResource AccentSmallButton}"
                                     Click="OnToggleRejectedAutoClick"
-                                    ToolTip="Автоматически перепроверять отсев раз в минуту" />
+                                    ToolTip="Автоматически перепроверять отсев раз в 6 часов: только записи, не проверявшиеся дольше 6 часов" />
                         </WrapPanel>
                     </StackPanel>
                     <DataGrid x:Name="RejectedGrid" Style="{StaticResource AppDataGrid}"
@@ -1467,7 +1482,7 @@
         </TabControl>
 
         <!-- Нижняя строка -->
-        <Border Grid.Row="2" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource TableGridLineBrush}" BorderThickness="0,1,0,0" Padding="20,8">
+        <Border Grid.Row="3" Background="{DynamicResource PanelBrush}" BorderBrush="{DynamicResource TableGridLineBrush}" BorderThickness="0,1,0,0" Padding="20,8">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />

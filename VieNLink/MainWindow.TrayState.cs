@@ -105,7 +105,9 @@ public partial class MainWindow
         TunBypassProbeButton.IsEnabled = !busy;
         BlockDiagnoseButton.IsEnabled = !busy;
         CancelButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
-        Cursor = busy ? System.Windows.Input.Cursors.Wait : System.Windows.Input.Cursors.Arrow;
+        // Курсор на всё окно не трогаем: он наследовался шапкой и всплывающими подсказками,
+        // и при перекрытии операций «ожидание» залипало навсегда — по шапке бегала
+        // анимация загрузки. Признак работы — кнопка «Отменить» и строка статуса.
         UpdateHeaderState();
         ZapretStateChanged?.Invoke();
     }

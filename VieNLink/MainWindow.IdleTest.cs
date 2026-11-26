@@ -16,7 +16,7 @@ public partial class MainWindow
 
     private readonly HiddenProbeService _probe = new();
 
-    /// <summary>Автоперепроверка отсева раз в минуту — тем же путём, что и кнопка.</summary>
+    /// <summary>Автоперепроверка отсева раз в 6 часов — тем же путём, что и кнопка.</summary>
     private DateTime _lastRejectedAutoCheckUtc = DateTime.MinValue;
 
     /// <summary>
@@ -38,7 +38,7 @@ public partial class MainWindow
             await AutoCheckMtProtoAsync();
             await AutoCollectMtProtoAsync();
 
-            // Отсев — тем же путём, что и кнопка «Перепроверить всё», раз в минуту.
+            // Отсев — тем же путём, что и кнопка «Перепроверить всё», раз в 6 часов.
             if (!_idleTesting)
             {
                 await AutoRecheckRejectedAsync();
@@ -99,7 +99,7 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Автоперепроверка отсева: раз в минуту берём все записи и прогоняем тем же
+    /// Автоперепроверка отсева: раз в 6 часов берём просроченные записи и прогоняем тем же
     /// RecheckRejectedAsync, что и кнопка «Перепроверить всё». Успешные возвращаются
     /// в рабочие, остальные остаются. При выключенной автоматике/занятости — пропуск.
     /// </summary>
@@ -112,7 +112,9 @@ public partial class MainWindow
             return;
         }
 
-        if (DateTime.UtcNow - _lastRejectedAutoCheckUtc < TimeSpan.FromMinutes(1))
+        // Отсев перепроверяем раз в 6 часов: раньше это было раз в минуту, и каждую
+        // минуту поднималось скрытое ядро ради тысяч записей — нагрузка без пользы.
+        if (DateTime.UtcNow - _lastRejectedAutoCheckUtc < TimeSpan.FromMinutes(360))
         {
             return;
         }
@@ -129,7 +131,18 @@ public partial class MainWindow
             return;
         }
 
-        var rows = items.Select(item => new RejectedNodeRow(item)).ToList();
+        // Проверяем только просроченные и партией: полный отсев — по кнопке.
+        var cutoff = DateTime.UtcNow.AddHours(-6);
+        var due = items
+            .Where(item => (item.Node.TriedAtUtc ?? item.RejectedAtUtc) < cutoff)
+            .Take(40)
+            .ToList();
+        if (due.Count == 0)
+        {
+            return;
+        }
+
+        var rows = due.Select(item => new RejectedNodeRow(item)).ToList();
         await RecheckRejectedAsync(rows);
     }
 
@@ -354,8 +367,11 @@ public partial class MainWindow
                 await RepartitionAndSaveAsync();
                 AppendLog($"Фон: серверов проверено {summary.Total}, рабочих {summary.Working}, " +
                           $"лучший открывает доменов {summary.BestDomains}");
-                ShowBackgroundDetail($"Фон: проверено {summary.Total} серверов, свежих рабочих " +
-                                     $"{summary.Working} (всего {FreshWorkingCount()})");
+                // Те же числа, что в шапке: партия отдельно, доступные серверы — по правилу
+                // щита. Раньше здесь было «свежих рабочих 13 (всего 52)»: 13 из партии
+                // читалось как общий итог и не сходилось со щитом.
+                ShowBackgroundDetail($"Фон: партия {summary.Total} · открыли адрес {summary.Working} " +
+                                     $"· доступных в шапке {HeaderWorkingCount()}");
 
                 missing = MissingServiceQuota();
                 if (FreshWorkingCount() >= NodeLimits.MinWorkingNodes && missing.Count == 0)
@@ -591,6 +607,19 @@ public partial class MainWindow
         }
 
         StatusDetail.Text = text;
+    }
+
+    /// <summary>
+    /// Сколько серверов показывает щит в шапке — по тому же правилу, что
+    /// <see cref="UpdateNodesSummary"/> (мягкое IsCountable + быстрые, пока их хватает).
+    /// Нужно, чтобы строка фоновой проверки не спорила со счётчиками шапки.
+    /// </summary>
+    private int HeaderWorkingCount()
+    {
+        return NodeAvailability.CountableForDisplay(
+            AllRows.Select(row => row.Node),
+            _settings.ConnectOnlyMine,
+            DateTime.UtcNow).Count;
     }
 
     private static bool ServiceOpened(ProxyNode node, string service) => service switch

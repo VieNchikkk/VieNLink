@@ -3605,7 +3605,8 @@ internal static class Program
         Check(summary.YoutubeOk == 1 && summary.TelegramOk == 1, "сводка считает оба сервиса");
 
         // 2. Узел, который ничего не открывает (block-аутбаунд отбрасывает всё, включая
-        // Cloudflare) → помечается нерабочим и удаляется после первой неудачной проверки.
+        // Cloudflare) → помечается нерабочим и удаляется после второй неудачной проверки
+        // (первый провал непроверенному списывается как осечка канала).
         var dead = new ProxyNode
         {
             Name = "block",
@@ -3625,8 +3626,11 @@ internal static class Program
             timeoutMs: 3000,
             youtubeUrl: "https://www.youtube.com/",
             telegramUrl: "https://t.me/");
-        Check(dead.Status == NodeStatus.Dead && dead.FailCount == 1,
-            "непроверенный удаляется после первой неудачной проверки");
+        Check(dead.Status != NodeStatus.Dead && dead.FailCount == 1,
+            "непроверенный после первой неудачной проверки получает второй шанс");
+        NodeHealth.RegisterFailure(dead);
+        Check(dead.Status == NodeStatus.Dead && dead.FailCount == NodeHealth.UnverifiedFailures,
+            "непроверенный удаляется после второй неудачной проверки");
         Check(dead.YoutubeOk == false && dead.TelegramOk == false, "обе отметки — отказ");
 
         // 3. Узел, который уже был рабочим, получает несколько попыток, затем удаляется.
@@ -3818,8 +3822,11 @@ internal static class Program
             "провал: после часа без успеха сервер помечается мёртвым");
         var unproven = new ProxyNode { Status = NodeStatus.Unknown };
         NodeHealth.RegisterFailure(unproven);
+        Check(unproven.Status != NodeStatus.Dead,
+            "провал: непроверенный переживает первый провал");
+        NodeHealth.RegisterFailure(unproven);
         Check(unproven.Status == NodeStatus.Dead,
-            "провал: непроверенный удаляется после первой неудачной проверки");
+            "провал: непроверенный удаляется после второй неудачной проверки");
 
         // 9. Кэш можно писать и читать по отдельному пути: так рабочие серверы
         // живут в своём маленьком файле, отдельно от кучи непроверенных.
@@ -3858,6 +3865,51 @@ internal static class Program
                 // Временный файл удалится позже.
             }
         }
+
+        // 9б. Медиана задержки источника и обрезка списка до лимита: серверы
+        // источников с плохой медианой уходят первыми и не вытесняют живые.
+        var trimNow = DateTime.UtcNow;
+        ProxyNode TrimNode(string source, int index, int delay) => new()
+        {
+            Identity = source + "-" + index,
+            Tag = source + "-" + index,
+            Name = source + "-" + index,
+            Server = "example.com",
+            Port = 443,
+            SourceName = source,
+            OutboundJson = "{\"type\":\"direct\"}",
+            Status = NodeStatus.Working,
+            DelayMs = delay,
+            CheckedAtUtc = trimNow,
+            LastSeenUtc = trimNow,
+        };
+
+        var fastSample = new[]
+        {
+            TrimNode("быстрый", 1, 90), TrimNode("быстрый", 2, 100), TrimNode("быстрый", 3, 110),
+            TrimNode("медленный", 1, 1800), TrimNode("медленный", 2, 1900), TrimNode("медленный", 3, 2000),
+        };
+        var medians = NodeSourceStats.MedianDelayBySource(fastSample);
+        Check(medians.TryGetValue("быстрый", out var fastMedian) && fastMedian == 100 &&
+              medians.TryGetValue("медленный", out var slowMedian) && slowMedian == 1900,
+            "медиана задержки источника считается по проверенным серверам");
+
+        var trimPool = new List<ProxyNode>();
+        for (var index = 0; index < 995; index++)
+        {
+            trimPool.Add(TrimNode("быстрый", index, 100 + index % 20));
+        }
+
+        for (var index = 0; index < 20; index++)
+        {
+            trimPool.Add(TrimNode("медленный", index, 1800 + index));
+        }
+
+        var (trimmed, droppedOverLimit) = NodeLimits.Trim(trimPool, 1000);
+        Check(trimmed.Count == 1000 && droppedOverLimit == 15 &&
+              trimmed.Count(node => node.SourceName == "медленный") == 5 &&
+              trimmed.Count(node => node.SourceName == "быстрый") == 995,
+            "обрезка до лимита выбрасывает первыми серверы источника с плохой медианой");
 
         var now = DateTime.UtcNow;
 

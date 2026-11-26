@@ -501,8 +501,23 @@ internal static class NodeTester
                 // Рабочему серверу — больше времени на ответ; остальным хватает базового.
                 var probeTimeout = wasWorking ? Math.Max(timeoutMs, WorkingTimeoutMs) : timeoutMs;
 
+                // Рабочему серверу незачем заново перебирать службы, которых у него и не было:
+                // подтверждаем универсальный доступ и те службы, что у него уже отмечены.
+                // Это в разы ускоряет стартовую перепроверку и не выдумывает новых флагов.
+                var probes = wasWorking
+                    ? ProbeUrls.Where(probe =>
+                        probe.Service == "Cloudflare" ||
+                        (probe.Service == "YouTube" && node.YoutubeOk != false) ||
+                        (probe.Service == "Telegram" && node.TelegramOk != false) ||
+                        (probe.Service == "Discord" && node.DiscordOk != false)).ToArray()
+                    : ProbeUrls;
+                if (probes.Length == 0)
+                {
+                    probes = ProbeUrls;
+                }
+
                 async Task<(string Service, int? delay)[]> ProbeOnceAsync() =>
-                    await Task.WhenAll(ProbeUrls.Select(async probe =>
+                    await Task.WhenAll(probes.Select(async probe =>
                     {
                         var delay = await api.TestDelayAsync(node.Tag, probeTimeout, nodeToken, probe.Url)
                             .ConfigureAwait(false);
@@ -543,13 +558,30 @@ internal static class NodeTester
                     // по скорости YouTube. Если YouTube не открылся, берём Cloudflare.
                     node.DelayMs = BestDelay(results, "YouTube") ?? universalDelay;
                     node.UniversalOk = universalDelay is not null;
-                    node.YoutubeOk = Opened(results, "YouTube");
-                    node.TelegramOk = Opened(results, "Telegram");
-                    node.DiscordOk = Opened(results, "Discord");
+                    // Обновляем только проверенные службы: непроверенную не сбрасываем.
+                    node.YoutubeOk = probes.Any(probe => probe.Service == "YouTube")
+                        ? Opened(results, "YouTube")
+                        : node.YoutubeOk;
+                    node.TelegramOk = probes.Any(probe => probe.Service == "Telegram")
+                        ? Opened(results, "Telegram")
+                        : node.TelegramOk;
+                    node.DiscordOk = probes.Any(probe => probe.Service == "Discord")
+                        ? Opened(results, "Discord")
+                        : node.DiscordOk;
                     if (fullDomains)
                     {
-                        node.OpenDomains = await CountOpenDomainsAsync(api, node.Tag, nodeToken, probeTimeout)
-                            .ConfigureAwait(false);
+                        // Полный перебор 18 доменов — 18 запросов через сервер (до 20 с на узел).
+                        // Для рабочего сервера повторяем его редко: если проверка была меньше
+                        // 30 минут назад и домены уже посчитаны, оставляем прежнее число.
+                        var previousChecked = snapshot[node].CheckedAtUtc;
+                        var recount = !wasWorking || node.OpenDomains <= 0 ||
+                                      previousChecked is null ||
+                                      DateTime.UtcNow - previousChecked.Value > TimeSpan.FromMinutes(30);
+                        if (recount)
+                        {
+                            node.OpenDomains = await CountOpenDomainsAsync(api, node.Tag, nodeToken, probeTimeout)
+                                .ConfigureAwait(false);
+                        }
                     }
 
                     NodeHealth.RegisterSuccess(node);

@@ -119,12 +119,27 @@ internal static class RejectedNodeStore
 {
     public const int MaximumCount = 5000;
 
+    /// <summary>
+    /// Сколько живёт запись отсева. Сутки — по просьбе владельца: сервер, который не
+    /// подтвердил работу за сутки, из отсева удаляется, и файл не растёт годами.
+    /// Повторный провал того же сервера обновляет дату и продлевает срок.
+    /// </summary>
+    public const int RetentionHours = 24;
+
     public static List<RejectedNode> Load()
     {
         var items = JsonFileStore.Read<List<RejectedNode>>(AppPaths.RejectedNodesPath) ?? new();
+        var cutoff = DateTime.UtcNow.AddHours(-RetentionHours);
+        var expired = 0;
         var result = new List<RejectedNode>();
         foreach (var item in items.OrderByDescending(item => item.RejectedAtUtc))
         {
+            if (item.RejectedAtUtc < cutoff)
+            {
+                expired++;
+                continue;
+            }
+
             var node = RejectedNode.FromCached(item.NodeData);
             if (node is null && item.LegacyNode is not null)
             {
@@ -143,6 +158,13 @@ internal static class RejectedNodeStore
             {
                 break;
             }
+        }
+
+        if (expired > 0)
+        {
+            // Переписываем файл один раз, когда что-то действительно истекло.
+            AppLog.Write("nodes", $"Отсев: удалено по сроку {RetentionHours} ч — {expired}, осталось {result.Count}");
+            Save(result);
         }
 
         return result;

@@ -157,6 +157,29 @@
         <Setter Property="FontWeight" Value="SemiBold" />
     </Style>
 
+    <!-- Действия подключения под шапкой: компактнее обычных кнопок, чтобы полоса
+         не занимала пол-экрана и не спорила с состоянием подключения. -->
+    <Style x:Key="HeaderActionButton" TargetType="Button" BasedOn="{StaticResource SmallButton}">
+        <Setter Property="Padding" Value="9,3" />
+        <Setter Property="FontSize" Value="11.5" />
+        <Setter Property="Background" Value="{DynamicResource AccentSurfaceBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource AccentBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource AccentBorderBrush}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+
+    <Style x:Key="HeaderActionWarningButton" TargetType="Button" BasedOn="{StaticResource HeaderActionButton}">
+        <Setter Property="Background" Value="{DynamicResource WarningSurfaceBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource WarningBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource WarningBrush}" />
+    </Style>
+
+    <Style x:Key="HeaderActionDangerButton" TargetType="Button" BasedOn="{StaticResource HeaderActionButton}">
+        <Setter Property="Background" Value="{DynamicResource DangerSurfaceBrush}" />
+        <Setter Property="Foreground" Value="{DynamicResource DangerBrush}" />
+        <Setter Property="BorderBrush" Value="{DynamicResource DangerSurfaceBrush}" />
+    </Style>
+
     <!-- Сервисные кнопки: тонированная плашка и значок в цвете бренда. -->
     <Style x:Key="YouTubeSmallButton" TargetType="Button" BasedOn="{StaticResource SmallButton}">
         <Setter Property="Background" Value="{DynamicResource YouTubeSurfaceBrush}" />

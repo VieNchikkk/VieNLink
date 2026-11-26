@@ -139,6 +139,8 @@ public sealed class TunnelService : VpnService
     private bool _bypassMode;
     private static Timer? _healthTimer;
     private static int _healthFailures;
+    /// <summary>Сервер, к которому относятся накопленные провалы health-check.</summary>
+    private static string? _healthNodeId;
     private CancellationTokenSource? _autoTuneCts;
     private static DateTime _lastAutoTuneUtc;
 
@@ -501,7 +503,7 @@ public sealed class TunnelService : VpnService
 
         _healthFailures = 0;
         _healthTimer = new System.Threading.Timer(_ => _ = HealthTickAsync(), null,
-            TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(20));
+            TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(90));
     }
 
     private void StopHealthMonitor()
@@ -598,6 +600,14 @@ public sealed class TunnelService : VpnService
             if (NodeStore.Selected?.Id != selected.Id)
             {
                 return;
+            }
+
+            // Счётчик провалов принадлежит конкретному серверу: после переключения
+            // на свежий он не должен сразу получить «2/2» от провалов старого.
+            if (!string.Equals(_healthNodeId, NodeStore.Selected?.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                _healthNodeId = NodeStore.Selected?.Id;
+                _healthFailures = 0;
             }
 
             if (delay is not null)

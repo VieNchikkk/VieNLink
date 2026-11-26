@@ -94,6 +94,8 @@ internal static class Maintenance
 
         try
         {
+            // Перед работами уточняем тип сети: от него зависит окно перепроверки.
+            NetworkPresets.SyncProfile(context);
             await Task.Run(NodeStore.EnsureLoaded, cancellationToken).ConfigureAwait(false);
 
             // Журналы и служебные файлы живут не дольше 72 часов: stderr ядра и

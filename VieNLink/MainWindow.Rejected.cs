@@ -230,7 +230,7 @@ public partial class MainWindow
         SaveSettings();
         UpdateRejectedAutoButton();
         SetStatus("Авто-перепроверка отсева",
-            _settings.AutoRecheckRejected ? "включена — раз в минуту" : "выключена");
+            _settings.AutoRecheckRejected ? "включена — раз в 6 часов, только просроченные" : "выключена");
     }
 
     private void UpdateRejectedAutoButton()
@@ -365,6 +365,7 @@ public partial class MainWindow
 
         RejectedNodeStore.Remove(rows.Select(row => row.Node.Id));
         ReloadRejected();
-        SetStatus("Удалено из отсева", rows.Count.ToString());
+        SetStatus("Удалено из отсева",
+            $"удалено {rows.Count}, в отсеве осталось {_rejectedRows.Count}");
     }
 }

@@ -23,8 +23,12 @@ internal static class ProbeProfile
     /// <summary>Партия проверки, которую запускает :probe.</summary>
     public static int ForegroundBatch => Low ? 12 : 10;
 
-    /// <summary>Одновременных проверок в процессе :probe.</summary>
-    public static int ProbeConcurrency => Low ? 8 : 6;
+    /// <summary>
+    /// Одновременных проверок в процессе :probe. 8 на телефоне: рабочему серверу теперь
+    /// подтверждаем 1–3 адреса вместо шести, поэтому полоса и CPU не перегружаются,
+    /// а стартовая перепроверка заканчивается заметно быстрее.
+    /// </summary>
+    public static int ProbeConcurrency => Low ? 10 : 8;
 
     /// <summary>Стартовая партия, пока список пуст.</summary>
     public static int StartupBatch => Low ? 120 : 150;
