@@ -1,7 +1,38 @@
 # Передача контекста (handoff)
 
-Обновлено: 26.11.2026. Читать в порядке: `AGENTS.md` → этот файл → `docs/plan-2026.md`
+Обновлено: 27.11.2026. Читать в порядке: `AGENTS.md` → этот файл → `docs/plan-2026.md`
 (журнал и архив решений). Перед передачей сессии — обновить этот файл.
+
+## «Сервер рабочий, а сервисы не работают» (27.11.2026)
+
+- **Android.** На телефоне (1.3.58, Android 16, строгий Private DNS `dns.google`) сервер
+  был живой (Clash API: Cloudflare 2,3 с, YouTube 1,3 с), но в VPN не резолвились имена:
+  `ping cp.cloudflare.com` → `unknown host`, YouTube не открывал соединений, VPN-сеть
+  висела с `PrivateDnsBroken`. Выключение Private DNS сразу восстановило резолв, YouTube
+  загрузился; включение обратно — Android перепроверил DoT через туннель, и всё работало.
+  Причина: Android проверяет частный DNS один раз при создании VPN-сети; проверка VieNLink
+  идёт в `:probe` вне VPN и сломанный DNS не видит.
+- **Что сделано:** `TunnelService.StartPrivateDnsMonitor` — раз в 90 с смотрит
+  `IsPrivateDnsActive` + `ValidatedPrivateDnsAddresses` (строка `LinkProperties`,
+  Android 14+), при неподтверждённом строгом DNS и живом выбранном сервере перезапускает
+  службу (новая VPN-сеть → новая проверка DoT). Не чаще 2 раз за сессию и раза в 10 минут;
+  `_privateDnsSelfRestart` не сбрасывает счётчик при своём же перезапуске.
+- **ПК.** Сервер был живой (`t.me` через узел 436 мс, YouTube 243 мс), но включён режим
+  «только сайты из списка», а в списке были лишь `www.youtube.com` и `discord.com`:
+  Telegram и видео-CDН YouTube шли `direct` и не открывались. Кнопки сервисов теперь
+  добавляют полный набор доменов сервиса в список (YouTube — `YouTubeProxyDomains`,
+  Telegram — t.me/telegram.org/CDN, Discord — discordapp/CDN); `ProbeUrlsForService`
+  для YouTube проверяет ещё `redirector.googlevideo.com`.
+- **Сборка:** `dotnet build VieNLink.slnx` (Android — через локальный SDK) — 0 ошибок;
+  `SelfTest parsers`, `checkconfigs`, `statuslogic` — в порядке. Собраны
+  `VieNLink-1.3.59-setup.exe` (97 934 968 байт), `VieNLink-1.3.59-win-x64.zip`
+  (106 507 680) и `VieNLink-1.3.59-phone.apk` (45 254 305, versionCode 10359).
+  ТВ не пересобирали (ритм — раз в ~5 патчей), магазинные сборки не собираются (заморозка).
+- **Дальше:** если тема повторится — проверить на телефоне `dumpsys connectivity`
+  (`InterfaceName: tun0`, `ValidatedPrivateDnsAddresses`), а на ПК —
+  `runtime\sing-box-config.json` (`route.rules`: какие домены идут в `proxy`, а какие
+  в `direct`). Telegram Desktop на ПК системный прокси не использует: нужен TUN-режим
+  или собственный прокси `127.0.0.1:20800`.
 
 ## 1.3.58 — правки по списку владельца, замеры и релиз (26.11.2026)
 

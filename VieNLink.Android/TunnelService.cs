@@ -144,6 +144,18 @@ public sealed class TunnelService : VpnService
     private CancellationTokenSource? _autoTuneCts;
     private static DateTime _lastAutoTuneUtc;
 
+    /// <summary>
+    /// Последний конфиг ядра: по нему пересоздаётся VPN-сеть, если Android
+    /// пометил частный DNS сломанным и приложения остались без резолва.
+    /// </summary>
+    private string? _lastConfigJson;
+    private static Timer? _privateDnsTimer;
+    private static int _privateDnsRestarts;
+    private static DateTime _lastPrivateDnsRestartUtc = DateTime.MinValue;
+    private static DateTime _lastPrivateDnsHintUtc = DateTime.MinValue;
+    /// <summary>Текущая остановка вызвана нашей же проверкой DNS, а не пользователем.</summary>
+    private static bool _privateDnsSelfRestart;
+
     /// <summary>Служба поднимает TUN-обход: проверка серверов в отдельном процессе недоступна.</summary>
     public static bool IsBypassMode { get; private set; }
 
@@ -511,6 +523,215 @@ public sealed class TunnelService : VpnService
         _healthTimer?.Dispose();
         _healthTimer = null;
         _healthFailures = 0;
+    }
+
+    /// <summary>
+    /// Наблюдение за частным DNS (Private DNS, DoT). Android проверяет его один раз
+    /// при создании VPN-сети; если проверка не прошла при холодном старте или на мёртвом
+    /// сервере, в строгом режиме (например, <c>dns.google</c>) все имена перестают
+    /// резолвиться до смены сети или настройки. Проверки VieNLink идут в процессе
+    /// <c>:probe</c> вне VPN и этого не видят: сервер «рабочий», а приложения не работают.
+    /// </summary>
+    private void StartPrivateDnsMonitor()
+    {
+        StopPrivateDnsMonitor();
+        _privateDnsTimer = new System.Threading.Timer(
+            _ => _ = CheckPrivateDnsAsync(), null,
+            TimeSpan.FromSeconds(20), TimeSpan.FromSeconds(90));
+    }
+
+    private void StopPrivateDnsMonitor()
+    {
+        _privateDnsTimer?.Dispose();
+        _privateDnsTimer = null;
+    }
+
+    private async Task CheckPrivateDnsAsync()
+    {
+        try
+        {
+            if (_bypassMode || State != TunnelState.Running || !CoreRuntime.IsRunning)
+            {
+                return;
+            }
+
+            // Отметка о подтверждённых адресах DoT есть только с Android 14.
+            if (Build.VERSION.SdkInt < BuildVersionCodes.UpsideDownCake)
+            {
+                return;
+            }
+
+            var privateDns = FindStrictPrivateDns();
+            if (privateDns is null)
+            {
+                // Частный DNS выключен или в мягком режиме — ему VPN не мешает.
+                return;
+            }
+
+            if (privateDns.Value.Validated)
+            {
+                if (_privateDnsRestarts > 0)
+                {
+                    AppLog.Write("health",
+                        $"Частный DNS {privateDns.Value.Name}: после переподключения проверка прошла");
+                    _privateDnsRestarts = 0;
+                }
+
+                return;
+            }
+
+            if (DateTime.UtcNow - _lastPrivateDnsHintUtc > TimeSpan.FromMinutes(10))
+            {
+                _lastPrivateDnsHintUtc = DateTime.UtcNow;
+                AppLog.Write("health",
+                    $"Частный DNS {privateDns.Value.Name}: Android не подтвердил DoT через VPN — " +
+                    "приложения остаются без имён");
+            }
+
+            // Пересоздаём VPN-сеть только на заведомо рабочем сервере: иначе повторная
+            // проверка DoT снова упадёт, и мы лишь оборвём соединение.
+            var selected = NodeStore.Selected;
+            if (selected is null || !CoreRuntime.LoadedTags.Contains(selected.Tag))
+            {
+                return;
+            }
+
+            int? delay;
+            using (var api = new ClashApiClient(CoreRuntime.ApiPort, CoreRuntime.ApiSecret))
+            {
+                delay = await api.TestDelayAsync(
+                        selected.Tag, 5000, CancellationToken.None,
+                        "https://cp.cloudflare.com/generate_204")
+                    .ConfigureAwait(false);
+            }
+
+            if (delay is null)
+            {
+                // Сервер не отвечает: health-check переключит его, после этого проверим снова.
+                return;
+            }
+
+            var now = DateTime.UtcNow;
+            if (_privateDnsRestarts >= 2 || now - _lastPrivateDnsRestartUtc < TimeSpan.FromMinutes(10))
+            {
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(_lastConfigJson))
+            {
+                return;
+            }
+
+            _privateDnsRestarts++;
+            _lastPrivateDnsRestartUtc = now;
+            Android.Util.Log.Info("VieNLink", $"private dns {privateDns.Value.Name}: пересоздаю VPN-сеть");
+            AppLog.Write("health",
+                "Пересоздаю VPN-сеть, чтобы Android заново проверил частный DNS");
+
+            // Новую VPN-сеть создаёт только новый экземпляр VpnService: простого
+            // перечитывания конфига недостаточно, сеть остаётся прежней.
+            var context = Application.Context;
+            var config = _lastConfigJson;
+            _privateDnsSelfRestart = true;
+            try
+            {
+                VpnStarter.Stop(context);
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write("health", "Не удалось остановить VPN для проверки частного DNS", exception);
+                return;
+            }
+
+            await Task.Delay(TimeSpan.FromSeconds(3)).ConfigureAwait(false);
+            try
+            {
+                VpnStarter.Start(context, config);
+                AppLog.Write("health", "VPN перезапущен для повторной проверки частного DNS");
+            }
+            catch (Exception exception)
+            {
+                AppLog.Write("health",
+                    "Не удалось перезапустить VPN в фоне — переподключите VPN вручную", exception);
+            }
+        }
+        catch (Exception exception)
+        {
+            AppLog.Write("health", "Проверка частного DNS не удалась", exception);
+        }
+    }
+
+    /// <summary>
+    /// Строгий частный DNS включён, но подтверждённых адресов DoT нет. Возвращает null,
+    /// если частный DNS выключен или в мягком режиме. Строка LinkProperties содержит
+    /// <c>ValidatedPrivateDnsAddresses</c> начиная с Android 14; capability VALIDATED —
+    /// вторая страховка, по ней сеть считается проверенной и при нестандартном формате.
+    /// </summary>
+    private static (bool Validated, string Name)? FindStrictPrivateDns()
+    {
+        try
+        {
+            if (Android.App.Application.Context.GetSystemService(Context.ConnectivityService)
+                is not ConnectivityManager manager)
+            {
+                return null;
+            }
+
+            foreach (var network in manager.GetAllNetworks())
+            {
+                NetworkCapabilities? capabilities;
+                try
+                {
+                    capabilities = manager.GetNetworkCapabilities(network);
+                }
+                catch (Exception)
+                {
+                    continue;
+                }
+
+                if (capabilities is null || !capabilities.HasTransport(TransportType.Vpn))
+                {
+                    continue;
+                }
+
+                LinkProperties? link;
+                try
+                {
+                    link = manager.GetLinkProperties(network);
+                }
+                catch (Exception)
+                {
+                    continue;
+                }
+
+                if (link is null || !link.IsPrivateDnsActive)
+                {
+                    continue;
+                }
+
+                var name = link.PrivateDnsServerName;
+                if (string.IsNullOrEmpty(name))
+                {
+                    // Мягкий режим: DoT не обязателен, резолв идёт обычным DNS.
+                    continue;
+                }
+
+                var text = link.ToString() ?? string.Empty;
+                const string marker = "ValidatedPrivateDnsAddresses: [";
+                var index = text.IndexOf(marker, StringComparison.Ordinal);
+                var validatedByAddresses = index >= 0 &&
+                                           text.IndexOf(']', index) > index + marker.Length;
+                var validated = validatedByAddresses ||
+                                capabilities.HasCapability(NetCapability.Validated);
+                return (validated, name);
+            }
+        }
+        catch (Exception)
+        {
+            // Нет разрешения/сеть исчезла — просто не трогаем туннель.
+        }
+
+        return null;
     }
 
     private static int _healthBusy;
@@ -882,6 +1103,8 @@ public sealed class TunnelService : VpnService
     {
         try
         {
+            _lastConfigJson = configJson;
+
             // TUN-обход и прокси-сервер взаимоисключающие: при обычном подключении форвардер
             // должен остановиться, иначе его сокет остаётся занятым до следующего отключения.
             if (!_bypassMode)
@@ -941,6 +1164,7 @@ public sealed class TunnelService : VpnService
                 _nodeLabel = selected is null ? null : selected.DisplayDelay;
                 RefreshNotification();
                 StartHealthMonitor();
+                StartPrivateDnsMonitor();
                 TunnelWidget.Update(this);
             }
 
@@ -1532,6 +1756,18 @@ public sealed class TunnelService : VpnService
         _bypassMode = false; IsBypassMode = false;
         ActiveService = null;
         StopHealthMonitor();
+        StopPrivateDnsMonitor();
+
+        // Перезапуск по нашей инициативе не должен сбрасывать счётчик попыток:
+        // иначе сломанный частный DNS вызывал бы бесконечные переподключения.
+        if (!_privateDnsSelfRestart)
+        {
+            _privateDnsRestarts = 0;
+            _lastPrivateDnsRestartUtc = DateTime.MinValue;
+            _lastPrivateDnsHintUtc = DateTime.MinValue;
+        }
+
+        _privateDnsSelfRestart = false;
 
         // Ядро закрываем через CoreRuntime: у процесса один CommandServer.
         CoreRuntime.Stop();

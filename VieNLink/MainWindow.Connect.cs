@@ -116,6 +116,7 @@ public partial class MainWindow
         }
 
         ApplyRoutingSettingsFromUi();
+        EnsureServiceRouting(service);
         SaveSettings();
 
         if (_settings.TunnelMode == TunnelMode.Tun && !IsAdministrator())
@@ -160,10 +161,73 @@ public partial class MainWindow
     /// <summary>Проверочные адреса кнопки сервиса — те же, по которым ставится отметка доступа.</summary>
     private static IReadOnlyList<string> ProbeUrlsForService(string service) => service switch
     {
-        "youtube" => new[] { ProxyManager.YoutubeTestUrl },
+        // YouTube проверяем не только страницей: видео-CDН (googlevideo) — отдельный
+        // домен, и сервер, открывающий только www.youtube.com, для видео не годится.
+        "youtube" => new[] { ProxyManager.YoutubeTestUrl, "https://redirector.googlevideo.com/generate_204" },
         "telegram" => ProxyManager.TelegramTestUrls,
         "discord" => new[] { ProxyManager.DiscordTestUrl },
         _ => new[] { ProxyManager.UniversalTestUrl },
+    };
+
+    /// <summary>
+    /// Кнопка сервиса должна заворачивать в туннель сам сервис, а не только страницу:
+    /// в режиме «только сайты из списка» добавляем его домены. Иначе проверка проходит
+    /// (сервер открывает сайт), а Telegram и видео-CDН YouTube идут напрямую и не работают.
+    /// </summary>
+    private void EnsureServiceRouting(string service)
+    {
+        ApplyRoutingSettingsFromUi();
+        var domains = ServiceRoutingDomains(service);
+        if (_settings.SiteRouteMode != SiteRouteMode.OnlyListed || domains.Count == 0)
+        {
+            return;
+        }
+
+        var list = SiteListBox.Text
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        var added = new List<string>();
+        foreach (var domain in domains)
+        {
+            if (!list.Contains(domain, StringComparer.OrdinalIgnoreCase))
+            {
+                list.Add(domain);
+                added.Add(domain);
+            }
+        }
+
+        if (added.Count == 0)
+        {
+            return;
+        }
+
+        // Сначала список в поле, затем перечитываем настройки: конфиг собирается из них.
+        SiteListBox.Text = string.Join(Environment.NewLine, list);
+        RefreshSiteChips();
+        ApplyRoutingSettingsFromUi();
+        FooterText.Text = $"«{ServiceDisplayName(service)}» добавлен в туннель: {added.Count} домен(ов)";
+        AppendLog($"Кнопка «{ServiceDisplayName(service)}»: в список туннеля добавлены домены {string.Join(", ", added)}");
+    }
+
+    /// <summary>
+    /// Домены, без которых сервис не работает: у YouTube это видео-CDН и API,
+    /// у Telegram — сам мессенджер и CDN, у Discord — CDN и шлюз.
+    /// </summary>
+    private static List<string> ServiceRoutingDomains(string service) => service switch
+    {
+        // Тот же набор, что у «Видео YouTube через сервер» в TUN-обходе.
+        "youtube" => SplitDomains(YouTubeProxyDomains),
+        "telegram" => new List<string>
+        {
+            "t.me", "telegram.org", "telegram.me", "telegram.dog",
+            "tdesktop.com", "telegra.ph", "telegram-cdn.org", "cdn-telegram.org",
+        },
+        "discord" => new List<string>
+        {
+            "discord.com", "discordapp.com", "discordapp.net", "discord.gg",
+            "discord.media", "discordstatus.com",
+        },
+        _ => new List<string>(),
     };
 
     private void OnTelegramTabChecked(object sender, RoutedEventArgs e)
