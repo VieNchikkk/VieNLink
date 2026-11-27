@@ -24,9 +24,11 @@
   Telegram — t.me/telegram.org/CDN, Discord — discordapp/CDN); `ProbeUrlsForService`
   для YouTube проверяет ещё `redirector.googlevideo.com`.
 - **Сборка:** `dotnet build VieNLink.slnx` (Android — через локальный SDK) — 0 ошибок;
-  `SelfTest parsers`, `checkconfigs`, `statuslogic` — в порядке. Собраны
-  `VieNLink-1.3.59-setup.exe` (97 934 968 байт), `VieNLink-1.3.59-win-x64.zip`
-  (106 507 680) и `VieNLink-1.3.59-phone.apk` (45 254 305, versionCode 10359).
+  `SelfTest parsers`, `checkconfigs`, `statuslogic` — в порядке.
+- **Опубликовано 27.11.2026:** `v1.3.59-beta` (Windows: `setup.exe` 97 934 968 байт,
+  SHA-256 `1F6E3590…`; ZIP 106 507 680, SHA-256 `535410C8…`; `SHA256SUMS.txt`) и
+  `v1.3.59-android` (`VieNLink-1.3.59-phone.apk` 45 254 305, versionCode 10359,
+  SHA-256 `1126BF5A…`, + `.apk.sha256`), оба pre-release, теги на коммите `bd90729`.
   ТВ не пересобирали (ритм — раз в ~5 патчей), магазинные сборки не собираются (заморозка).
 - **Дальше:** если тема повторится — проверить на телефоне `dumpsys connectivity`
   (`InterfaceName: tun0`, `ValidatedPrivateDnsAddresses`), а на ПК —
